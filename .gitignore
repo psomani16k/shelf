@@ -1,0 +1,4 @@
+/target
+
+# Generated protobuf code (rebuilt by `pnpm gen:proto`; Rust output lives in target/)
+/frontend/src/gen/
