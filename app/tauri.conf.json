@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm --dir ../frontend dev",
-    "beforeBuildCommand": "pnpm --dir ../frontend build"
+    "beforeDevCommand": { "script": "pnpm dev", "cwd": "../frontend" },
+    "beforeBuildCommand": { "script": "pnpm build", "cwd": "../frontend" }
   },
   "app": {
     "windows": [
