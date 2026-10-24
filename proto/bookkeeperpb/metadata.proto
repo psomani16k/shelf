@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package bookkeeperpb;
+
+message BookMetadata {
+  string path = 1;
+  optional string title = 2;
+  repeated string authors = 3;
+  BookFileType.Value file_type = 4;
+}
+
+message BookFileType {
+  enum Value {
+    UNKNOWN = 0;
+    EPUB = 1;
+  }
+}

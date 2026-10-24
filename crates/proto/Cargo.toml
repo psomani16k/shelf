@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+prost = "0.14"
+pbjson = "0.9"
+serde = "1"
+
+[build-dependencies]
+prost = "0.14"
+prost-build = "0.14"
+protox = "0.10"
+pbjson-build = "0.9"

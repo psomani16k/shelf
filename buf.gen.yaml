@@ -5,4 +5,4 @@ inputs:
 plugins:
   - local: frontend/node_modules/.bin/protoc-gen-es
     out: frontend/src/gen
-    opt: target=ts
+    opt: target=js+dts

@@ -18,9 +18,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-log = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+
+shelf-core = { path = "../crates/core" }
+shelf-proto = { path = "../crates/proto" }
+
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-store = "2"

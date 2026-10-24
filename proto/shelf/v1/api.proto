@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package shelf.v1;
-
-message LibraryInfo {
-  string name = 1;
-  uint32 book_count = 2;
-}

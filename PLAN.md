@@ -66,15 +66,24 @@ All three read and write **the same on-disk format**, so they can be mixed. For 
 | EPUB rendering | **foliate-js**, vendored as a git submodule pinned to a commit | Battle-tested engine from Foliate: pagination, themes, TOC, CFI positions. |
 | Rust EPUB metadata | `epub` crate; fallback to `zip` + `quick-xml` if needed | Only titles, authors, cover and identifier are needed on the Rust side. |
 | Server | **axum** + **tower-http**, single binary with the frontend embedded via **rust-embed** | Simple to deploy. |
-| API types | **Protocol Buffers** schema in `proto/`. Rust code via **prost** + **pbjson**, compiled with **protox** (pure Rust, no `protoc` install). TypeScript via **protobuf-es** (`buf generate`). | One language-neutral schema with explicit field numbers for safe evolution; ready for clients in other languages later. |
-| Wire format | **Binary protobuf** over Tauri IPC and HTTP. The server also speaks proto3 JSON when asked (`Accept: application/json`) for debugging. | Compact and strictly typed; JSON keeps `curl` debugging easy. |
+| API types | **Protocol Buffers** schema in `proto/`, used **only as a language-neutral schema**. Rust code via **prost** + **pbjson** (serde impls), compiled with **protox** (pure Rust, no `protoc` install). TypeScript via **protobuf-es** (`buf generate`). | One schema that Rust, TypeScript and any future language generate types from; no hand-kept duplicate type definitions. |
+| Wire format | **JSON everywhere**, over both Tauri IPC and HTTP, using the **proto3 JSON mapping with proto (snake_case) field names**. Rust: pbjson's serde impls. TS: protobuf-es `toJson` / `fromJson`. No binary protobuf on the wire. Exception: EPUB files and cover images are sent as raw bytes. | Readable in devtools and `curl`; any language can talk to it. A standard mapping keeps every generated client in agreement (see the conventions note below). |
 | On-disk format | Stays **hand-written JSON** (serde), **not** protobuf | Library files must stay human-readable, hand-editable, and preserve unknown fields (see 4.3). |
-| RPC framework | **None.** Plain REST routes and Tauri commands carrying protobuf messages; no gRPC or Connect. | Keeps the server and Tauri wiring simple. |
+| RPC framework | **None.** Plain REST routes and Tauri commands carrying JSON-encoded proto messages; no gRPC or Connect. | Keeps the server and Tauri wiring simple. |
 | Positions | **EPUB CFI** strings | Stable across screen sizes, fonts and devices. |
 | Progress storage | **One file per book**, overwritten by whichever device last read it | Conflicts are out of scope (see Non-goals). |
 | Auth (server) | Username + argon2 password hash in server config; opaque session tokens | Personal app; keep it simple but real. |
 | App to server HTTP | **tauri-plugin-http** (requests made from Rust) | Avoids CORS and cookie issues in the webview. |
 | Android storage | **"All files access"** (`MANAGE_EXTERNAL_STORAGE`) for Local mode | Simplest way to read a synced folder; fine for a sideloaded personal app. |
+
+**Naming and JSON conventions.** These rules apply to the schema and to every API body:
+- **Messages** are CapitalCamelCase (`BookSummary`).
+- **Fields** are snake_case (`book_count`), in the schema **and on the wire**. The proto3 default would be lowerCamelCase in JSON, so turn that off: pbjson-build `.preserve_proto_field_names()`, protobuf-es `toJson(..., { useProtoFieldName: true })` **(verify)**.
+- **Enum values** are CAPITAL_SNAKE_CASE with the enum's name as a prefix (`ERROR_CODE_NOT_FOUND`) and are sent by name. `buf lint` enforces the prefix and the naming above.
+- **Avoid 64-bit integers** (`int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`) unless absolutely necessary. Use `int32` / `uint32`, or `double` for fractions. proto3 JSON encodes 64-bit integers as strings, because JavaScript numbers lose precision above 2^53. Timestamps are RFC 3339 strings.
+- **Fields holding their default value** (0, `""`, `false`, empty list) are left out. Always decode with the generated code (`fromJson` in TS, serde in Rust). Never treat raw `JSON.parse` output as a typed message.
+- **Unknown fields are ignored when decoding**, so an older client keeps working against a newer server. Enable this with pbjson-build `.ignore_unknown_fields()` and protobuf-es `ignoreUnknownFields: true` **(verify)**.
+- **JSON field names are part of the contract.** Renaming a field breaks clients even if its number stays the same. `buf breaking` (FILE rules) catches this.
 
 ### Core principle: the frontend never sees file paths
 
@@ -246,7 +255,9 @@ pub trait LibraryFs: Send + Sync {
 
 Only `StdFs` (plain `std::fs`) is implemented in v1.
 
-### 5.3 Shared types (`types.rs`, exported with ts-rs)
+### 5.3 Domain types (`types.rs`)
+
+Plain Rust structs with no wire format of their own. Each has a matching message in `proto/shelf/v1/api.proto`. `shelf-proto/src/conv.rs` converts between the two, so `core` never depends on prost. serde is used in `core` only for on-disk files (4.3).
 
 ```rust
 LibraryInfo   { name: String, book_count: u32 }
@@ -256,12 +267,13 @@ ProgressSummary { fraction: f64, chapter: Option<String>, updated: String, devic
 BookDetail    { summary fields + language, description, publisher, published: Option<String> }
 Progress      { cfi: String, fraction: f64, chapter: Option<String>, updated: String, device: String }
 ProgressInput { cfi: String, fraction: f64, chapter: Option<String>, device: String }
-ApiError      { code: ErrorCode, message: String }  // NotFound, BadRequest, Unauthorized, Io, Internal
 ```
 
 `rel_path` is for display and grouping by folder only. The frontend never uses it for I/O.
 
-Export the TS types to `frontend/src/generated/` and commit them. Add a CI or test check that regenerating them produces no diff.
+Errors: `core` has its own error enum (`error.rs`). The wire type is the proto message `ApiError { code: ErrorCode, message }` with `ErrorCode` = NotFound, BadRequest, Unauthorized, Io, Internal. `shelf-proto` maps core errors to it.
+
+TypeScript types come from the same `.proto` via `buf generate` into `frontend/src/gen/` (git-ignored; regenerated by `pnpm dev` / `build` / `test`). Rust types are generated into `target/` by `shelf-proto`'s `build.rs`. Field numbers are permanent: never renumber or reuse one (`buf breaking` checks this).
 
 ### 5.4 Public API (sketch)
 
@@ -463,7 +475,7 @@ Each milestone ends with its acceptance criteria passing and the checklist ticke
 - [ ] Scan, index, book ID (4.2), metadata and cover extraction, metadata cache.
 - [ ] Progress read and write per 4.3–4.4, including atomic writes, preservation of unknown fields, and ignoring unrecognised files.
 - [ ] Watcher producing debounced `LibraryEvent`s.
-- [ ] ts-rs type export into `frontend/src/generated/`.
+- [ ] `shelf-proto`: messages in `api.proto` mirroring 5.3, `build.rs` (protox → prost + pbjson), and `conv.rs` conversions with round-trip tests. `buf lint` passes.
 - [ ] Tests with 2–3 small public-domain EPUBs (one without a unique identifier, one without a cover), covering progress round-trips, conflict-copy files being ignored, and rename stability of IDs.
 
 ### M2 — Frontend skeleton + Tauri Local mode (Linux)

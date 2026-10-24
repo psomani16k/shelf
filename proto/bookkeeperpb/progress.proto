@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package bookkeeperpb;
+
+import "bookkeeperpb/metadata.proto";
+
+message BookProgress {
+  BookFileType.Value file_type = 1;
+  optional EpubProgress epub_progress = 2;
+}
+
+message EpubProgress {}
