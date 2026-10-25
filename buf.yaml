@@ -6,6 +6,9 @@ lint:
     - STANDARD
   except:
     - PACKAGE_VERSION_SUFFIX
+    # Enums sit in a wrapper message (`BookFileType.Value`) so JSON values stay plain, e.g. "LIGHT".
+    - ENUM_VALUE_PREFIX
+    - ENUM_ZERO_VALUE_SUFFIX
 breaking:
   use:
     - FILE

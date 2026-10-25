@@ -7,6 +7,12 @@ message BookMetadata {
   optional string title = 2;
   repeated string authors = 3;
   BookFileType.Value file_type = 4;
+  string id = 5;
+}
+
+message FolderListing {
+  repeated string folders = 1;
+  repeated BookMetadata books = 2;
 }
 
 message BookFileType {

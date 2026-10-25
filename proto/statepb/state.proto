@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package statepb;
+
+message State {
+  optional string last_book_id = 1;
+}

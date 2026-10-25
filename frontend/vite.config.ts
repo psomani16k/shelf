@@ -12,6 +12,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // A bare name, so `src/foliate-js.d.ts` can type this plain-JS submodule.
+      'foliate-js': fileURLToPath(new URL('./vendor/foliate-js', import.meta.url)),
     },
   },
   // Tauri expects a fixed port and its own error output.
@@ -21,5 +23,7 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
+    // `pnpm dev` in a browser talks to a locally running shelf-server.
+    proxy: { '/api': 'http://localhost:8080' },
   },
 })

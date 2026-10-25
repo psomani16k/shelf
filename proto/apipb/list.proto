@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package apipb;
+
+message ListBooksRequest {
+  string directory_path = 1;
+}
+
+message ListBooksResponse {
+  string current_directory = 1;
+  repeated ListBooksResponseItem books = 2;
+}
+
+message ListBooksResponseItem {
+  string id = 1;
+  string file_name = 2;
+  optional string title = 3;
+  repeated string authors = 4;
+}
+
+message ListDirectoriesRequest {
+  string directory_path = 1;
+}
+
+message ListDirectoriesResponse {
+  string current_directory = 1;
+  repeated string sub_directories = 2;
+}

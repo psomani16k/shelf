@@ -9,7 +9,8 @@ Cross-platform EPUB reader. The library is a plain folder of `.epub` files, with
 ## Core assumptions (these override PLAN.md where they conflict)
 
 - **One user, one device at a time.** The app only has to make switching devices smooth. There's no live syncing between devices running at once: no `ProgressChanged` events and no "jump to newer position" prompt while reading. Progress is read when a book is opened.
-- **Extracted book metadata is stored in `.shelf/`**, so it syncs with the library and each book is extracted once, not on every device. (This replaces PLAN §4.5, which kept the metadata cache outside the library.) The exact layout under `.shelf/` is still to be decided.
+- **Extracted book metadata is stored in `.shelf/`**, so it syncs with the library and each book is extracted once, not on every device. (This replaces PLAN §4.5, which kept the metadata cache outside the library.) Layout: `.shelf/books/<sha1-of-file>/{metadata.json,thumbnail.jpeg,progress.json}`, `.shelf/state.json` (the last book opened) and `.shelf/config.json` (library settings that sync with it, partially updated by `set_config`); see PLAN §4.1.
+- **Browsing never hashes.** After the startup sync, every `metadata.json` is loaded into an in-memory `LibraryIndex` (`core/src/index.rs`). Folder listings filter it by `path`, and the watcher's extractor keeps it up to date. `core` owns the types and logic; the app (and later the server) creates and holds them.
 - **Keeping `.shelf/` in sync with the library:**
   - **On startup:** a full diff of the library against `.shelf/` brings the metadata up to date. Books are matched by `rel_path`, `size` and `mtime` recorded in their metadata.
   - **While running:** a watcher keeps them in sync.
@@ -108,7 +109,7 @@ cd app && cargo tauri android dev   # Android, phone over USB (check `adb device
 - **Log files live only in the app's private log dir** (`app_log_dir()`):
   - Linux: `~/.local/share/com.psomani16k.shelf/logs/`
   - Android: inside the app's private internal storage
-  - **Never write logs, caches or config into the library folder.** Only `.shelf/` data from PLAN §4 goes there.
+  - **Never write logs, caches or device/app config into the library folder.** Only `.shelf/` data from PLAN §4 and the library's own settings (`.shelf/config.json`) go there.
 - **Settings → Logs** has two buttons:
   - **Copy logs:** the recent tail of the log, copied with `tauri-plugin-clipboard-manager`.
   - **Save logs…:** the dialog plugin's save picker, then a Rust command copies the log file there. Check that this works on Android **(verify)**.
@@ -129,5 +130,5 @@ cd app && cargo tauri android dev   # Android, phone over USB (check `adb device
 
 They're a backend engineer, mostly Go, and know Rust outside web work. They're using this project to learn **frontend/app development** and **writing servers in Rust**.
 
-- **Teaching:** in those areas, explain the *why*, and compare to Go (net/http, goroutines, context, middleware) where it helps. Let them write the interesting code: give the design, signatures and hints, then review what they write. Write it yourself only if they ask.
+- **Writing code:** Claude writes the code, to keep development moving. In those areas, still explain the *why* briefly, comparing to Go (net/http, goroutines, context, middleware) where it helps.
 - **Chores:** do config, docs and mechanical fixes directly. Don't turn basics into exercises.

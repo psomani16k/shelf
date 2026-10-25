@@ -1,0 +1,7 @@
+.git
+.claude
+target
+**/node_modules
+frontend/dist
+frontend/src/gen
+app/gen

@@ -5,10 +5,11 @@ use std::{
 
 use anyhow::Ok;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use serde::{Deserialize, Serialize};
 use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
 use std::fs::{self};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookKeeper {
     root: PathBuf,
 }
@@ -19,8 +20,8 @@ impl BookKeeper {
         Ok(Self { root })
     }
 
-    pub fn root(&self) -> PathBuf {
-        self.root.clone()
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn books(&self) -> PathBuf {
@@ -33,6 +34,9 @@ impl BookKeeper {
 
     pub fn all_book_hashes(&self) -> anyhow::Result<HashSet<String>> {
         let book_dir = self.books();
+        if !book_dir.exists() {
+            return Ok(HashSet::new());
+        }
         let contents = fs::read_dir(book_dir)?;
         let mut res = HashSet::new();
         for entry in contents {
@@ -46,7 +50,7 @@ impl BookKeeper {
         Self::all_book_file_paths_internal(&self.root)
     }
 
-    pub fn all_book_file_paths_internal(dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
+    fn all_book_file_paths_internal(dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
         let mut res = HashSet::new();
         let content = std::fs::read_dir(dir)?;
         for p in content {
@@ -81,10 +85,10 @@ impl BookKeeper {
         Ok(None)
     }
 
-    pub fn set_book_metadata(&self, hash: &str, metadata: BookMetadata) -> anyhow::Result<()> {
+    pub fn set_book_metadata(&self, hash: &str, metadata: &BookMetadata) -> anyhow::Result<()> {
         let book_dir = self.book_dir(hash);
         let meta_file = book_dir.join("metadata.json");
-        fs::write(meta_file, serde_json::to_string_pretty(&metadata)?)?;
+        fs::write(meta_file, serde_json::to_string_pretty(metadata)?)?;
         Ok(())
     }
 
@@ -101,19 +105,13 @@ impl BookKeeper {
 
     pub fn set_book_progress(&self, hash: &str, progress: BookProgress) -> anyhow::Result<()> {
         let book_dir = self.book_dir(hash);
-        let progress_file = book_dir.join("metadata.json");
+        let progress_file = book_dir.join("progress.json");
         fs::write(progress_file, serde_json::to_string_pretty(&progress)?)?;
         Ok(())
     }
 
-    pub fn book_thumbnail(&self, hash: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        let book_dir = self.book_dir(hash);
-        let thumbnail_file = book_dir.join("thumbnail.jpeg");
-        if thumbnail_file.exists() {
-            let t = fs::read(&thumbnail_file)?;
-            return Ok(Some(t));
-        }
-        Ok(None)
+    pub fn book_thumbnail_path(&self, hash: &str) -> PathBuf {
+        self.book_dir(hash).join("thumbnail.jpeg")
     }
 
     pub fn set_book_thumbnail(&self, hash: &str, thumbnail: &[u8]) -> anyhow::Result<()> {
@@ -134,7 +132,7 @@ impl BookKeeper {
     pub fn clean_up_hashes(&self, hashes: HashSet<String>) -> anyhow::Result<()> {
         let paths: Vec<_> = hashes.iter().map(|h| self.book_dir(&h)).collect();
         paths.par_iter().for_each(|p| {
-            let _ = fs::remove_dir(p);
+            let _ = fs::remove_dir_all(p);
         });
         Ok(())
     }

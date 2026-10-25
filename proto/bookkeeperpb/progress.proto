@@ -9,4 +9,6 @@ message BookProgress {
   optional EpubProgress epub_progress = 2;
 }
 
-message EpubProgress {}
+message EpubProgress {
+  string cfi = 1;
+}

@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package apipb;
+
+message ApiError {
+  string message = 1;
+}

@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package configpb;
+
+// Scalar and enum fields must be `optional`, so a partial `set_config` can tell "not sent" from the zero value.
+message Config {
+  ReaderConfig reader = 1;
+  UiConfig ui = 2;
+}
+
+message ReaderConfig {
+  optional ReaderFlow.Value flow = 1;
+  optional ReaderTheme.Value theme = 2;
+  optional ReaderMargins margins = 3;
+}
+
+message ReaderFlow {
+  enum Value {
+    SCROLLED = 0;
+    PAGINATED = 1;
+  }
+}
+
+message ReaderTheme {
+  enum Value {
+    MATCH_UI = 0;
+    LIGHT = 1;
+    DARK = 2;
+  }
+}
+
+message ReaderMargins {
+  optional ReaderMargin.Value top = 1;
+  optional ReaderMargin.Value bottom = 2;
+  optional ReaderMargin.Value side = 3;
+  optional ReaderMargin.Value between_pages = 4;
+}
+
+message ReaderMargin {
+  enum Value {
+    // The default, so it's the zero value.
+    MEDIUM = 0;
+    NONE = 1;
+    SMALL = 2;
+    LARGE = 3;
+  }
+}
+
+message UiConfig {
+  optional UiTheme.Value theme = 1;
+}
+
+message UiTheme {
+  enum Value {
+    SYSTEM = 0;
+    LIGHT = 1;
+    DARK = 2;
+  }
+}

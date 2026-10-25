@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Ok;
-use fast_image_resize::{ResizeOptions, Resizer};
+use fast_image_resize::Resizer;
 use image::{DynamicImage, codecs::jpeg::JpegEncoder};
 use rbook::Epub;
 use sha1::{Digest, Sha1};
@@ -16,9 +16,9 @@ pub struct EbookExtractor {
 }
 
 impl EbookExtractor {
-    // Standard EPUB cover ratio is 1:1.6.
+    // The largest a thumbnail gets; it keeps the cover's own shape inside this box.
     const THUMBNAIL_WIDTH: u32 = 400;
-    const THUMBNAIL_HEIGHT: u32 = 640;
+    const THUMBNAIL_HEIGHT: u32 = 600;
     const THUMBNAIL_JPEG_QUALITY: u8 = 85;
 
     pub fn new(root: &Path, book: &Path) -> anyhow::Result<Self> {
@@ -56,9 +56,11 @@ impl EbookExtractor {
                             self.relative_path
                         )
                     })?;
-            if meta.path != self.relative_path.to_string_lossy().to_string() {
-                meta.path = self.relative_path.to_string_lossy().to_string();
-                self.book_keeper.set_book_metadata(hash, meta)?;
+            let path = self.relative_path.to_string_lossy();
+            if meta.path != path || meta.id.is_empty() {
+                meta.path = path.into_owned();
+                meta.id = hash.to_string();
+                self.book_keeper.set_book_metadata(hash, &meta)?;
             }
             return Ok(());
         }
@@ -80,8 +82,9 @@ impl EbookExtractor {
             title: title,
             path: self.relative_path.to_string_lossy().to_string(),
             file_type: book_file_type::Value::Epub as i32,
+            id: hash.to_string(),
         };
-        self.book_keeper.set_book_metadata(hash, metadata)?;
+        self.book_keeper.set_book_metadata(hash, &metadata)?;
 
         // TODO: write a zero progress file for the book
 
@@ -96,12 +99,17 @@ impl EbookExtractor {
         Ok(())
     }
 
-    /// Center-crops to the cover ratio, then scales. CPU-heavy: call it inside `spawn_blocking`.
+    /// Scales the whole cover down to fit the thumbnail box, never cropping or enlarging it.
+    /// CPU-heavy: call it inside `spawn_blocking`.
     fn resize_image_to_thumbnail(&self, image: &[u8]) -> anyhow::Result<Vec<u8>> {
         let src = DynamicImage::ImageRgb8(image::load_from_memory(image)?.into_rgb8());
-        let mut dst = DynamicImage::new_rgb8(Self::THUMBNAIL_WIDTH, Self::THUMBNAIL_HEIGHT);
-        let options = ResizeOptions::new().fit_into_destination(Some((0.5, 0.5)));
-        Resizer::new().resize(&src, &mut dst, &options)?;
+        let (width, height) = (src.width() as f64, src.height() as f64);
+        let scale = (Self::THUMBNAIL_WIDTH as f64 / width)
+            .min(Self::THUMBNAIL_HEIGHT as f64 / height)
+            .min(1.0);
+        let size = |side: f64| ((side * scale).round() as u32).max(1);
+        let mut dst = DynamicImage::new_rgb8(size(width), size(height));
+        Resizer::new().resize(&src, &mut dst, None)?;
 
         let mut jpeg = Vec::new();
         dst.write_with_encoder(JpegEncoder::new_with_quality(

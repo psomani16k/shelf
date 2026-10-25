@@ -25,7 +25,10 @@ impl LibraryWatcher {
             }
             // TODO: add granular controls to the modification kind here
             let paths = res.paths;
-            let paths: Vec<PathBuf> = paths.into_iter().filter(|p| Self::is_relevant(p, root_len)).collect();
+            let paths: Vec<PathBuf> = paths
+                .into_iter()
+                .filter(|p| Self::is_relevant(p, root_len))
+                .collect();
             for path in paths {
                 let _ = sender.send(path);
             }

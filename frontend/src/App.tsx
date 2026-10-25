@@ -1,122 +1,67 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { LoaderCircle } from "lucide-react"
+import { useEffect } from "react"
+import { BrowserRouter, MemoryRouter } from "react-router"
+import { onLibraryChanged, openLibrary } from "@/api/app"
+import { CenteredScreen } from "@/components/CenteredScreen"
+import { IS_TAURI } from "@/lib/platform"
+import { useLibraries } from "@/lib/useAppLibrary"
+import { Home } from "@/screens/Home"
+import { OpenFailed } from "@/screens/OpenFailed"
+import { PickLibrary } from "@/screens/PickLibrary"
+import { Syncing } from "@/screens/Syncing"
 
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+export default function App() {
+  return IS_TAURI ? (
+    <AppFlow />
+  ) : (
+    <BrowserRouter>
+      <Home />
+    </BrowserRouter>
   )
 }
 
-export default App
+/** The app has to open a library before it can show the same UI as the web. */
+function AppFlow() {
+  const queryClient = useQueryClient()
+  // The watcher added, changed or removed a book.
+  useEffect(
+    () =>
+      onLibraryChanged(() => {
+        void queryClient.invalidateQueries({ queryKey: ["dirs"] })
+        void queryClient.invalidateQueries({ queryKey: ["books"] })
+      }),
+    [queryClient],
+  )
+
+  const libraries = useLibraries()
+  // One library for now; the Rust side already stores a list.
+  const current = libraries.data?.[0]
+  const open = useQuery({
+    queryKey: ["open-library", current?.kind, current?.location],
+    queryFn: () => openLibrary(0),
+    enabled: !!current,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+
+  if (libraries.isPending) {
+    return (
+      <CenteredScreen>
+        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      </CenteredScreen>
+    )
+  }
+  if (libraries.isError) return <OpenFailed error={libraries.error} />
+  if (!current) return <PickLibrary />
+  if (open.isPending) return <Syncing />
+  if (open.isError) return <OpenFailed error={open.error} />
+  return (
+    // In memory, so each library starts at "/" and no URL survives a change of library.
+    <MemoryRouter>
+      <Home />
+    </MemoryRouter>
+  )
+}

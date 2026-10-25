@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package apipb;
+
+message GetStateRequest {}
+
+message GetStateResponse {
+  optional string last_book_id = 1;
+}
+
+message SetStateRequest {
+  optional string last_book_id = 1;
+}

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package apipb;
+
+message GetProgressRequest {
+  string id = 1;
+}
+
+message GetProgressResponse {
+  string id = 1;
+  optional string epub_progress = 2;
+}
+
+message SetProgressRequest {
+  string id = 1;
+  optional string epub_progress = 2;
+}
