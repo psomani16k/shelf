@@ -75,21 +75,15 @@ fn console_layer<S>() -> Option<impl Layer<S>>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    use tracing_logcat::{LogcatMakeWriter, LogcatTag};
+    use paranoid_android::AndroidLogMakeWriter;
 
-    match LogcatMakeWriter::new(LogcatTag::Fixed("Shelf".to_owned())) {
-        // Logcat records the time and level itself.
-        Ok(writer) => Some(
-            fmt::layer()
-                .event_format(fmt::format().with_level(false).without_time())
-                .with_ansi(false)
-                .with_writer(writer),
-        ),
-        Err(e) => {
-            eprintln!("logcat unavailable: {e}");
-            None
-        }
-    }
+    // Logcat records the time and level itself.
+    Some(
+        fmt::layer()
+            .event_format(fmt::format().with_level(false).without_time())
+            .with_ansi(false)
+            .with_writer(AndroidLogMakeWriter::new("Shelf".to_owned())),
+    )
 }
 
 /// Logs a panic before the default hook runs, so it ends up in exported logs.

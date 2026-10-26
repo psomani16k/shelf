@@ -92,7 +92,7 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 
 - **Levels:** release `info`; debug `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` at `info`. `RUST_LOG` overrides either, as on the server.
 - **File layer:** JSON lines with the same flags as the server (`flatten_event`, `with_current_span`, no span list), so keys match: `timestamp`, `level`, `target`, `message`, and event fields at the top level. Written to `app_log_dir()` (Linux: `~/.local/share/com.psomani16k.shelf/logs/`).
-- **Console layer:** plain text to stdout on desktop. On Android it goes to logcat through `tracing-logcat`, tag `Shelf`, without time or level, since logcat adds both: `adb logcat -s Shelf`. Errors from the Kotlin plugin show under the `Tauri` tag.
+- **Console layer:** plain text to stdout on desktop. On Android it goes to logcat through `paranoid-android`'s `AndroidLogMakeWriter` (liblog), tag `Shelf`, without time or level, since logcat adds both: `adb logcat -s Shelf`. Errors from the Kotlin plugin show under the `Tauri` tag.
 - **`log` records** (tauri, wry, and the frontend through `tauri-plugin-log`'s command) become `tracing` events through the `LogTracer` that `try_init` installs. Frontend lines have targets starting with `webview`, and their fields are part of the message text (`tracing-log` drops `log` key-values).
 - **Panics** are logged at `error` by a panic hook before the default one runs.
 

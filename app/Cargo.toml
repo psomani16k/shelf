@@ -37,7 +37,8 @@ tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
-tracing-logcat = "0.1"
+# tracing-logcat 0.1.0 fails to compile once serde_json is in the build (tracing-subscriber's json).
+paranoid-android = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
