@@ -113,10 +113,12 @@ cd app && cargo tauri android build --apk --target aarch64   # signed release AP
 
 ### App (Linux and Android)
 
-- **`tauri-plugin-log` is registered only in debug builds** (`app/src/lib.rs`): level `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` at `info`; default targets (stdout and a file in the app log dir), default plain-text format. Release builds don't log.
-- `tracing`'s `log` feature is on in `app`, so `core`'s `tracing` events reach the plugin.
-- On Android, read logs with `adb logcat`; Kotlin plugin errors show under the `Tauri` tag.
-- Not built yet: logging in release, JSON lines with the server's keys (a `Builder::format(...)` formatter), file size limits, *Settings → Logs* (copy/save), and a frontend `src/lib/log.ts` with `error`/`unhandledrejection` handlers. The frontend uses `console.*` today.
+- **`app/src/logging/`** installs a `tracing-subscriber` registry in `setup`, right after loading `AppData`, in debug and release. Level: release `info`; debug `debug` with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` at `info`; `RUST_LOG` overrides.
+- **File:** JSON lines with the server's flags and keys, one file per app start named by the start time (`shelf-<Time>.log`, never renamed, no size cap), in the app log dir, by Shelf's own `LogFiles` (blocking `std::fs`, since `tracing` writers are sync). On open, the oldest files are deleted until N are left; the current file is never deleted. N (default 5, any whole number 1–50) is the `log_files` field of `AppData`, which `setup` loads before starting logging; changed in *Settings → Developer options*, applied at once. Problems `AppData::load` hits are logged after logging starts (`take_load_problems`).
+- **Console:** stdout on desktop; logcat on Android via `tracing-logcat` (`adb logcat -s Shelf`). Kotlin plugin errors show under the `Tauri` tag.
+- **`log` records** (tauri, wry, the frontend) reach `tracing` through `LogTracer`. `tauri-plugin-log` is registered with `skip_logger()`, only for the frontend's `log` command. Its npm package and Rust crate must share major/minor (pinned `~2.9`), or the Tauri CLI refuses to run.
+- **Frontend:** log with `log` from `src/lib/log.ts` (console, plus Rust in the app, with fields appended as `key=value`), not `console.*`. `installErrorHandlers()` forwards uncaught errors and rejections. Panics are logged by a panic hook.
+- **Export:** *Settings → Developer options* → *Copy logs* (the last 256 KiB to the clipboard) and *Save logs…* (all files, oldest first, via the save picker and `tauri-plugin-fs`). The screen also lists every file (`list_log_files`) with its time span, size and a save button for that file (`save_log_file`).
 
 ## Dev environment (Fedora 44, fish shell)
 

@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from "react"
 import { Navigate, useLocation, useNavigate, useParams } from "react-router"
 import { setConfig } from "@/api"
 import { ScreenHeader } from "@/components/ScreenHeader"
-import { type Group, type Section, SECTIONS, type Setting } from "@/components/settings/sections"
+import {
+  type Group,
+  type Section,
+  type Setting,
+  VISIBLE_SECTIONS,
+} from "@/components/settings/sections"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -61,9 +66,9 @@ export function Settings() {
     }
   }, [returnFocus])
 
-  const section = SECTIONS.find((s) => s.slug === slug)
+  const section = VISIBLE_SECTIONS.find((s) => s.slug === slug)
   if (slug && !section) return <Navigate to={SETTINGS_PATH} replace state={state} />
-  const shown = section ?? (wide ? SECTIONS[0] : undefined)
+  const shown = section ?? (wide ? VISIBLE_SECTIONS[0] : undefined)
 
   const openSection = (s: Section) => {
     const to = `${SETTINGS_PATH}/${s.slug}`
@@ -97,7 +102,7 @@ export function Settings() {
             }
           />
           <ul className="flex flex-col gap-1 p-2">
-            {SECTIONS.map((s) => (
+            {VISIBLE_SECTIONS.map((s) => (
               <li key={s.slug}>
                 <button
                   type="button"

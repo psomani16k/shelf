@@ -1,4 +1,5 @@
 import { setProgress } from "@/api"
+import { log } from "@/lib/log"
 
 const SAVE_DELAY_MS = 2000
 
@@ -22,7 +23,7 @@ export function progressSaver(id: string, saved: string | undefined): ProgressSa
     pending = undefined
     saved = cfi
     setProgress(id, cfi, { keepalive }).catch((e: unknown) => {
-      console.error("couldn't save reading progress", e)
+      log.error("couldn't save reading progress", { book_id: id, error: e })
     })
   }
 

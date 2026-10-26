@@ -32,7 +32,7 @@ Working end to end:
 - Tauri app with a library picker (local folder or server URL), the same Home/Reader/Settings UI as the web, plus app-only named libraries: switch in the library slideover, add and remove in *Settings → Library*. *Rebuild index* there works in both.
 - Android release APK (signed with a self-made keystore), with storage permission, a native folder picker and system-bar padding.
 
-Not built yet: authentication, the app's JSON logging and *Settings → Logs*, and more; see [roadmap.md](roadmap.md). On Linux the Tauri app is laggy on the developer's machine (WebKitGTK on hybrid NVIDIA/AMD under Wayland), so testing has moved to Android. See [known-issues.md](known-issues.md).
+Not built yet: authentication and more; see [roadmap.md](roadmap.md). On Linux the Tauri app is laggy on the developer's machine (WebKitGTK on hybrid NVIDIA/AMD under Wayland), so testing has moved to Android. See [known-issues.md](known-issues.md).
 
 ## Ground rules for agents
 

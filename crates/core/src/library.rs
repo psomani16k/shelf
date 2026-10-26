@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::{Component, Path, PathBuf},

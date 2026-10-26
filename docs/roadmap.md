@@ -42,11 +42,9 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 
 ## App
 
-- [ ] **Logging in release builds too**, at `info` (debug in dev):
-  - JSON lines with the server's keys (`timestamp`, `level`, `target`, `message`, fields at top level), from a custom `tauri_plugin_log::Builder::format(...)` formatter.
-  - Targets: stdout (logcat on Android) and a file in `app_log_dir()` (Linux: `~/.local/share/com.psomani16k.shelf/logs/`), capped with `max_file_size` and `RotationStrategy::KeepSome(n)`.
-- [ ] **Settings → Logs**: *Copy logs* (recent tail, via `tauri-plugin-clipboard-manager`) and *Save logs…* (dialog plugin's save picker, then a Rust command copies the file; check it works on Android).
-- [ ] **Frontend logging**: `src/lib/log.ts` wrapping `debug`/`info`/`warn`/`error`, forwarding to `@tauri-apps/plugin-log` in the app and `console.*` in the browser, plus `error` and `unhandledrejection` handlers.
+- [x] **Logging in release builds too**, as JSON lines like the server's, into one file per app start (the number kept is a setting) and stdout/logcat ([app.md](app.md#logging)).
+- [x] **Settings → Logs** (now *Developer options*): log-file count, *Copy logs*, *Save logs…*.
+- [x] **Frontend logging**: `src/lib/log.ts` and the `error`/`unhandledrejection` handlers ([frontend.md](frontend.md#logging-liblogts)).
 - [x] **Multiple libraries** in the UI: named libraries, a switcher in the library slideover, add/remove in Settings ([frontend.md](frontend.md#libraries-libuseapplibraryts)).
 - [ ] **Android back button**: close the open drawer or settings first. Today the app uses a `MemoryRouter`, so the WebView has no history and back exits the app.
 - [ ] **Offline reading in Remote mode** (M9): books and covers are already cached after download; still needed are offline listings and queued progress writes.
@@ -60,7 +58,24 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 - [ ] **Book details**: language, description, publisher, published date (extracted to `metadata.json`, a details view).
 - [ ] **Library info**: optional `.shelf/library.json` (`{ "name": … }`) and an "About / library info" section in Settings (name, book count).
 - [ ] **Reader**: chapter name and percentage display; an auto-hiding top bar; tap zones to turn pages; PageUp/PageDown/Space.
-- [ ] **More reader preferences**: font family, font size, line height, a sepia theme. Consider making size-like preferences per device (a phone and a laptop want different sizes), stored in the app store / localStorage instead of the library config.
+
+## Theming and reading customization
+
+Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all in the library's `config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`).
+
+- [ ] **Decide where each preference lives** before adding more. Colours and layout suit the library config (the same on every device); size-like ones (font size, line height, margins) differ between a phone and a laptop and probably belong per device (app store / `localStorage`). Record the choice in [decisions.md](decisions.md).
+- [ ] **More reader themes**: sepia, a low-contrast warm "night" theme, and pure black for OLED screens. New `ReaderTheme` enum values (append, never renumber), with `PALETTE` in `appearance.ts` becoming a table of themes and `readerCss` handling each.
+- [ ] **Typography**:
+  - font size, in steps;
+  - font family: the book's own, serif, sans-serif, and a dyslexia-friendly option, bundled with the frontend, since Android WebViews ship few fonts;
+  - line height and paragraph spacing;
+  - justification and hyphenation;
+  - a *Use publisher's styles* toggle: off overrides the book's fonts and spacing, on leaves them alone.
+- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings.
+- [ ] **Dark-theme images**: an option to dim images in dark themes, so a white illustration doesn't flash.
+- [ ] **Interface accent colour**, and an interface theme that follows the reader theme (so sepia reading gets a matching drawer and settings).
+- [ ] App only: **keep the screen on** while reading.
+- [ ] Later: custom CSS per library for anything the presets don't cover.
 
 ## Packaging and project
 

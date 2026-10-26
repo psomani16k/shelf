@@ -2,6 +2,7 @@ pub mod app_data;
 pub mod commands;
 pub mod error;
 pub mod libsrc;
+pub mod logging;
 pub mod native;
 pub mod state;
 
@@ -13,6 +14,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        // Only for its `log` command: the frontend's records reach `tracing` through `LogTracer`.
+        .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(native::init())
         .invoke_handler(tauri::generate_handler![
             native::storage_granted,
@@ -36,22 +41,21 @@ pub fn run() {
             commands::rebuild_index,
             commands::get_cover,
             commands::get_book_file,
+            logging::log_settings,
+            logging::set_log_files,
+            logging::list_log_files,
+            logging::copy_logs,
+            logging::save_logs,
+            logging::save_log_file,
         ])
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Debug)
-                        // Everything below us is chatty at debug; keep theirs at info.
-                        .level_for("tauri", log::LevelFilter::Info)
-                        .level_for("wry", log::LevelFilter::Info)
-                        .level_for("reqwest", log::LevelFilter::Info)
-                        .level_for("hyper_util", log::LevelFilter::Info)
-                        .level_for("notify", log::LevelFilter::Info)
-                        .build(),
-                )?;
+            // The log-file count is in the app data, so it's read before logging starts.
+            let mut data = app_data::AppData::load(app.handle())?;
+            app.manage(logging::init(app.handle(), data.log_files())?);
+            for problem in data.take_load_problems() {
+                tracing::warn!(%problem, "app data");
             }
-            app.manage(state::AppState::load(app.handle())?);
+            app.manage(state::AppState::new(data));
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -38,7 +38,7 @@ pnpm --dir frontend exec tsc -b
 
 `shelf-core` has pre-existing clippy warnings, so `--workspace -D warnings` fails on them. To lint just the app: `cargo clippy -p app --no-deps -- -D warnings`.
 
-Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with `tempfile`), `timeutil.rs` (RFC 3339 formatting and parsing) and `ebook_ingest.rs` (`unchanged_id` against files with a set mtime); in `app/src/app_data.rs` (library name validation). None yet for the server.
+Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with `tempfile`), `timeutil.rs` (RFC 3339 formatting and parsing) and `ebook_ingest.rs` (`unchanged_id` against files with a set mtime); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
 
 ## Working with this user
 
@@ -54,7 +54,7 @@ Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with 
 
 - **tokio everywhere**: async APIs, `tokio::spawn`, `tokio::sync`, `tokio::time`, `tokio::fs`. Blocking or CPU-heavy work (EPUB/ZIP parsing, hashing, image resizing) goes in `spawn_blocking`. Timing tests use `#[tokio::test(start_paused = true)]`. In `core`, get time from `crate::timeutil` (`crates/core/src/timeutil.rs`): `Instant`, `sleep`, `sleep_until` and `timeout` are tokio's monotonic clock, so a paused test controls them; use them for timeouts and debouncing. `Time` is a wall-clock timestamp (wraps `SystemTime`): `unix_nanos()` for things like unique file names, `Display` / `FromStr` for anything stored or shown: it writes RFC 3339 in UTC to the whole second (`2025-10-26T04:45:00Z`, sortable as text) and parses any RFC 3339 timestamp back, via `jiff`.
 - **Errors**: `anyhow` inside, `LibraryError` at the `Library` boundary, logged once where they leave Rust (`crates/server/src/error.rs`, `app/src/error.rs`).
-- **Logging**: `tracing` with structured fields (`info!(book_id = %id, "progress saved")`). Libraries (`core`, `proto`) never install a subscriber. Never log passwords, tokens, `Authorization`/`Cookie` headers, or auth request bodies. Levels and server log format: see `CLAUDE.md` and [server.md](server.md).
+- **Logging**: `tracing` with structured fields (`info!(book_id = %id, "progress saved")`). Libraries (`core`, `proto`) never install a subscriber. Never log passwords, tokens, `Authorization`/`Cookie` headers, or auth request bodies. Levels and log formats: see `CLAUDE.md`, [server.md](server.md) and [app.md](app.md#logging). Frontend code logs with `log` from `src/lib/log.ts`.
 - **On-disk data** goes only in `<library>/.shelf/`; app config, caches and logs go in the app's private dirs. Aim to preserve unknown JSON fields when rewriting files; today only `config.json` does (see [known-issues.md](known-issues.md)).
 - **Dependencies**: shared crate versions in the root `[workspace.dependencies]`, referenced with `{ workspace = true }`. (Some crates still pin their own: `shelf-proto`'s prost/pbjson, the Tauri crates, `rbook`, `fast_image_resize`.)
 - **Frontend**: components import the backend from `@/api`; app-only behaviour branches on `IS_TAURI` / `IS_ANDROID`; full-screen surfaces use the `safe-area` utility. `tauri.conf.json` before-commands use the `{ "script", "cwd": "../frontend" }` form.
@@ -82,7 +82,7 @@ Keep the HTTP route and the command speaking the same proto JSON, and the Tauri 
 
 ### Add an app-only setting
 
-Render it behind `IS_TAURI` in the relevant section's `content` component (see `CurrentLibrary` in `components/settings/LibrarySection.tsx`), keeping its hooks in their own component so the web never calls Tauri commands. For a new section, add it to `SECTIONS` in `sections.ts` (extend the `slug` union).
+Render it behind `IS_TAURI` in the relevant section's `content` component (see `Libraries` in `components/settings/LibrarySection.tsx`), keeping its hooks in their own component so the web never calls Tauri commands. For a new section, add it to `SECTIONS` in `sections.ts` (extend the `slug` union); mark a section that's entirely app-only with `appOnly: true`, as *Developer options* is. A per-device setting is a field of `AppData` (`app/src/app_data.rs`, stored in `app_data.json`) changed through a Rust command, as the log-file count is (`set_log_files` in `app/src/logging/mod.rs`).
 
 ### Add a library-wide setting
 

@@ -6,6 +6,7 @@ package configpb;
 message Config {
   ReaderConfig reader = 1;
   UiConfig ui = 2;
+  DeveloperConfig developer = 3;
 }
 
 message ReaderConfig {
@@ -56,4 +57,13 @@ message UiTheme {
     LIGHT = 1;
     DARK = 2;
   }
+}
+
+message DeveloperConfig {
+  optional LoggingConfig logging = 1;
+}
+
+message LoggingConfig {
+  optional uint32 max_mobile_files = 1;
+  optional uint32 max_desktop_files = 2;
 }

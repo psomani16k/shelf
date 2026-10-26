@@ -20,17 +20,24 @@ tauri-build = { version = "2.7.4", features = [] }
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-log = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
-# `log` makes core's tracing events reach tauri-plugin-log.
-tracing = { workspace = true, features = ["log"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 shelf-core = { path = "../crates/core" }
 shelf-proto = { path = "../crates/proto" }
 
 tauri = { version = "2.12.5", features = [] }
-tauri-plugin-log = "2"
+tauri-plugin-log = "~2.9"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-clipboard-manager = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+tracing-logcat = "0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }

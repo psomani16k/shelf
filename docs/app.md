@@ -7,9 +7,11 @@
 | File | Role |
 |---|---|
 | `main.rs` | Desktop entry; calls `app_lib::run()` |
-| `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (log plugin, `AppState`) |
+| `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (`AppData`, then logging, then `AppState`) |
+| `logging/mod.rs` | `init` (the `tracing` subscriber) and the log commands |
+| `logging/files.rs` | `LogFiles`: one log file per app start, pruned to the newest N |
 | `state.rs` | `AppState`: the stored library list and the currently open library (opened by name) |
-| `app_data.rs` | `AppData`: the library list and the current library's name, persisted with tauri-plugin-store; `validate_name` |
+| `app_data.rs` | `AppData`: the library list, the current library's name and the log-file count, persisted with tauri-plugin-store (`app_data.json`); `validate_name`, `validate_log_files` |
 | `commands.rs` | Library management commands and the `Library` passthroughs |
 | `error.rs` | `CommandError { status, message }`, the only place command errors are logged; `CommandError::invalid` for 400s |
 | `native.rs` | The `shelf` plugin: storage permission, folder picker, system insets (Android) |
@@ -18,7 +20,19 @@
 | `libsrc/remote.rs` | `RemoteLibraryBuilder` / `RemoteLibrary`, an HTTP client for `shelf-server` |
 | `libsrc/app_library.rs` | `AppLibrary` trait: `get_name`, `get_builder` |
 
-Plugins registered in `lib.rs`: `tauri-plugin-http` (Rust uses its `reqwest` re-export), `tauri-plugin-dialog` (desktop folder picker), `tauri-plugin-store` (app data), `native::init()` (Shelf's own), and `tauri-plugin-log` in debug builds only. `capabilities/default.json` grants `core:default`, `dialog:default`, `http:default`; the app's own commands in `invoke_handler` need no capability entry.
+Plugins registered in `lib.rs`:
+
+- `tauri-plugin-http`: Rust uses its `reqwest` re-export.
+- `tauri-plugin-dialog`: the desktop folder picker and the *Save logs* picker.
+- `tauri-plugin-store`: app data.
+- `tauri-plugin-fs`: Rust writes saved logs through it, so Android `content://` URIs work.
+- `tauri-plugin-clipboard-manager`: *Copy logs*, called from Rust.
+- `tauri-plugin-log` with `skip_logger()`: only its `log` command, for frontend logs.
+- `native::init()`: Shelf's own.
+
+`capabilities/default.json` grants `core:default`, `dialog:default`, `http:default` and `log:default`. The app's own commands in `invoke_handler` need no capability entry, and neither do plugins used only from Rust.
+
+The npm package and the Rust crate of a plugin must be on the same major/minor version, or `cargo tauri dev`/`build` refuses to run. That's why `tauri-plugin-log` is pinned to `~2.9` on both sides: the npm package has no 2.10.
 
 Tauri commands are like Go HTTP handlers registered on a mux: `#[tauri::command]` functions, with `State<'_, AppState>` injected the way you'd close over a dependency, and JSON args/results serialized by serde.
 
@@ -26,12 +40,12 @@ Tauri commands are like Go HTTP handlers registered on a mux: `#[tauri::command]
 
 ```rust
 pub struct AppState {
-    pub data: tokio::sync::Mutex<AppData>,            // the stored libraries and the current name
+    pub data: tokio::sync::Mutex<AppData>,            // the stored libraries, the current name, the log-file count
     library: tokio::sync::Mutex<Option<Arc<AnyLibrary>>>, // the open one
 }
 ```
 
-- `AppState::load` runs in `setup` and reads `AppData` from the store. No library is open yet.
+- `setup` loads `AppData` from the store first, starts logging with its log-file count, logs anything `AppData::load` had to fall back on (it ran before logging existed), then wraps it in `AppState::new`. No library is open yet.
 - Libraries are identified by **name**: required, trimmed, unique ignoring case (`app_data::validate_name`). A bad name, path or URL rejects with a 400 `CommandError` (logged at debug), not a 500.
 - `add_local_library(name, path)` / `add_remote_library(name, baseUrl)` add the library and make it the **current** one (the frontend then switches to it).
 - `select_library(name)` makes a library current without opening it; the frontend's open query does that.
@@ -74,7 +88,22 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 
 ## Logging
 
-`tauri-plugin-log` is registered only when `cfg!(debug_assertions)`: level `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` held at `info`. It uses the plugin's default targets (stdout and a file in the app log dir) and its default plain-text format. `tracing`'s `log` feature is on, so `core`'s `tracing` events reach it. **Release builds have no logging set up.** On Android, read logs with `adb logcat`; errors from the Kotlin plugin show under the `Tauri` tag. JSON lines in both builds and *Settings → Logs* are on the [roadmap](roadmap.md#app).
+`logging::init` runs in `setup` right after `AppData` is loaded (it needs the log-file count) and installs a `tracing-subscriber` registry, in both debug and release builds:
+
+- **Levels:** release `info`; debug `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` at `info`. `RUST_LOG` overrides either, as on the server.
+- **File layer:** JSON lines with the same flags as the server (`flatten_event`, `with_current_span`, no span list), so keys match: `timestamp`, `level`, `target`, `message`, and event fields at the top level. Written to `app_log_dir()` (Linux: `~/.local/share/com.psomani16k.shelf/logs/`).
+- **Console layer:** plain text to stdout on desktop. On Android it goes to logcat through `tracing-logcat`, tag `Shelf`, without time or level, since logcat adds both: `adb logcat -s Shelf`. Errors from the Kotlin plugin show under the `Tauri` tag.
+- **`log` records** (tauri, wry, and the frontend through `tauri-plugin-log`'s command) become `tracing` events through the `LogTracer` that `try_init` installs. Frontend lines have targets starting with `webview`, and their fields are part of the message text (`tracing-log` drops `log` key-values).
+- **Panics** are logged at `error` by a panic hook before the default one runs.
+
+**Files** (`LogFiles`):
+- **One file per app start**, named by the start time (`Time`, whole seconds, UTC): `shelf-2026-10-26T04:45:00Z.log`. Files are never renamed, and names sort by time. There's no size cap: a run's file grows for as long as the app runs. A restart within the same second carries on in that second's file.
+- N, the number of files kept with the current one included, is a per-device setting: the `log_files` field of `AppData` (key `log_files` in `app_data.json`), default 5, any whole number from 1 to 50 (`validate_log_files`). An unreadable or out-of-range stored value falls back to 5, with a warning.
+- **Pruning:** after creating this run's file, `open` deletes the oldest files until N are left. The current file is never deleted, even if the clock went back and it isn't the newest. Files in the folder that don't match `shelf-<time>.log` are ignored, including the `shelf.log` / `shelf.1.log` files from the first version of this code.
+- Changing N takes effect at once: `set_log_files` saves it through `AppState`'s `AppData`, then `set_keep` prunes to the new count.
+- The writer uses blocking `std::fs`, because `tracing` writers are synchronous; it's an exception to "tokio everywhere". Write errors go to `eprintln!` and the line is dropped, since logging them would loop.
+
+**Commands** (`logging/mod.rs`; see [api.md](api.md#logs)): `log_settings`, `set_log_files`, `list_log_files` (each file's name, size, start time and last write, newest first), `copy_logs` (the last 256 KiB, starting at a whole line, onto the clipboard), `save_logs` (every file oldest first into one) and `save_log_file` (one file, by a name from the list; anything that isn't a `shelf-<time>.log` name is refused with a 400, so it can't reach outside the log folder). Both saves use the dialog plugin's save picker (the suggested name has its colons removed, which Android's shared storage doesn't allow), read the logs after it closes, and write through `tauri-plugin-fs`. The UI is *Settings → Developer options → Logs* ([frontend.md](frontend.md#settings-and-appearance)).
 
 ## Android
 

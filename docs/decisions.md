@@ -54,6 +54,7 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 | App-to-server HTTP | From Rust (`reqwest` via tauri-plugin-http), behind the same `Library` trait as local folders | No CORS or cookie issues in the WebView; the frontend has one backend per platform |
 | Covers and books in the app | Raw bytes over IPC (`ipc::Response`) → Blob → object URL | WebKitGTK won't load custom URI schemes from the `http://` dev page |
 | Android storage | All files access (`MANAGE_EXTERNAL_STORAGE`) and a small Kotlin plugin, with plain `std::fs` paths | The simplest way to read a synced folder; fine for a sideloaded app |
+| App logging | `tracing-subscriber` JSON, as on the server, into Shelf's own log files, one per app start; `tauri-plugin-log` only carries frontend records in | The planned `tauri-plugin-log` formatter would get `tracing` fields flattened into the message text, so they couldn't be top-level keys. Owning the writer also lets a new kept-file count apply without a restart |
 | Server auth (planned) | Username + argon2 hash in config; opaque session tokens | Personal app: simple but real. See [roadmap.md](roadmap.md#authentication) |
 
 ### Naming and JSON conventions

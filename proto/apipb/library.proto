@@ -13,3 +13,15 @@ message RebuildIndexResponse {
   // `.shelf/books/` entries deleted because no file has their id any more.
   uint32 removed = 3;
 }
+
+message CreateDirectoryRequest {
+  string parent_directory = 1;
+  string directory_name = 2;
+}
+
+message CreateDirectoryResponse {}
+
+message UploadEbookRequest {
+  string parent_directory = 1;
+  string file_name = 2;
+}

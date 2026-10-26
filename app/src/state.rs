@@ -19,11 +19,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn load(app: &AppHandle) -> Result<Self> {
-        Ok(Self {
-            data: Mutex::new(AppData::load(app)?),
+    pub fn new(data: AppData) -> Self {
+        Self {
+            data: Mutex::new(data),
             library: Mutex::new(None),
-        })
+        }
     }
 
     /// Opens the library called `name`, replacing the open one. A local library runs its startup

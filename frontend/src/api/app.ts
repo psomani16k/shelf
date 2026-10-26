@@ -49,6 +49,48 @@ export type Insets = { top: number; right: number; bottom: number; left: number 
 /** Space taken by the status bar, navigation bar and cutout, in CSS px. Zero on desktops. */
 export const systemInsets = () => invokeCommand<Insets>("system_insets")
 
+export type LogSettings = {
+  /** How many log files are kept, the one being written included. */
+  keep_files: number
+  max_keep_files: number
+}
+
+export const logSettings = () => invokeCommand<LogSettings>("log_settings")
+
+/** 1 to `max_keep_files`, else a 400. Files past the new count are deleted at once. */
+export const setLogFiles = (keepFiles: number) =>
+  invokeCommand<LogSettings>("set_log_files", { keepFiles })
+
+export type LogFileInfo = {
+  /** `shelf-<started>.log`, one per app start. */
+  name: string
+  bytes: number
+  /** RFC 3339 time the app started this file. */
+  started: string
+  /** RFC 3339 time of the last write. */
+  last_write: string | null
+  /** The file this run is writing to. */
+  current: boolean
+}
+
+export type LogFileList = {
+  /** Where the files are. Only meaningful on a desktop; Android's is private to the app. */
+  dir: string
+  /** Newest first. */
+  files: LogFileInfo[]
+}
+
+export const listLogFiles = () => invokeCommand<LogFileList>("list_log_files")
+
+/** Puts the most recent log lines on the clipboard. */
+export const copyLogs = () => invokeCommand<void>("copy_logs")
+
+/** Asks where to save, then writes every log file into one. `false` if cancelled. */
+export const saveLogs = () => invokeCommand<boolean>("save_logs")
+
+/** Asks where to save, then copies that one log file there. `false` if cancelled. */
+export const saveLogFile = (name: string) => invokeCommand<boolean>("save_log_file", { name })
+
 /** The watcher synced a book. Returns the unsubscribe function. */
 export function onLibraryChanged(callback: () => void): () => void {
   const unlisten = listen("library-changed", callback)

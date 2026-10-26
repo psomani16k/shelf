@@ -88,6 +88,21 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 
 Names are required and unique ignoring case. An empty or duplicate name, an unreadable folder or a malformed URL rejects with status 400.
 
+### Logs
+
+App only (`app/src/logging/mod.rs`). See [app.md](app.md#logging).
+
+| Command | Args | Resolves to | Notes |
+|---|---|---|---|
+| `log_settings` | none | `{ keep_files, max_keep_files }` | `keep_files` counts every log file, the current one included |
+| `set_log_files` | `{ keepFiles }` | the same | 1 to `max_keep_files` (50), else a 400; saved in the app data; files past the new count are deleted at once |
+| `list_log_files` | none | `{ dir, files: [{ name, bytes, started, last_write, current }] }` | Newest first. `started` is the app start that began the file, `last_write` its mtime (RFC 3339; `last_write` may be `null`); `current` marks this run's file |
+| `copy_logs` | none | `null` | The last 256 KiB, starting at a whole line, onto the clipboard |
+| `save_logs` | none | `true`, or `false` if cancelled | Save picker, then every log file oldest first into one |
+| `save_log_file` | `{ name }` | `true`, or `false` if cancelled | Save picker, then that one file. A name that isn't `shelf-<time>.log` is a 400 |
+
+The frontend's own log lines go through `tauri-plugin-log`'s `plugin:log|log` command (`@tauri-apps/plugin-log`, allowed by `log:default`).
+
 ### Native helpers (`app/src/native.rs`)
 
 | Command | Android | Elsewhere |

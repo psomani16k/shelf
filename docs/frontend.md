@@ -21,9 +21,9 @@ Stack: React 19, Vite 8, TypeScript 6, Tailwind CSS v4, shadcn/ui on Base UI (No
 | `components/SlideDrawer.tsx` | Two-sided drawer that follows the finger; drives transforms through one CSS variable `--p` |
 | `components/BookCover.tsx` | Cover in a 2:3 box with a blurred backdrop; icon when there's no cover |
 | `components/ChooseFolder.tsx` | App-only folder picker button (dialog plugin on desktop, `pick_folder` on Android) |
-| `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere) |
+| `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere), `LogsSection.tsx` (app only: log-file count, copy, save) |
 | `components/ui/` | shadcn components (button, input, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
-| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`) |
+| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`, logging in `log.ts`) |
 | `gen/` | Generated proto code. Git-ignored, never hand-edit |
 | `foliate-js.d.ts` | Types for the parts of foliate-js that Shelf uses |
 
@@ -42,7 +42,7 @@ The `@/*` import alias points at `src/` (`paths` in `tsconfig.app.json` plus `re
 | `tauri.ts` | `tauriBackend`: the same calls over `invoke`. Also exports `invokeCommand`, which turns command rejections into `ApiError` |
 | `index.ts` | `api = IS_TAURI ? tauriBackend : httpBackend`, plus each function as a named export |
 | `error.ts` | `ApiError(status, message)`, thrown by both backends |
-| `app.ts` | App-only commands: library list management, storage permission, folder picker, insets, `onLibraryChanged` |
+| `app.ts` | App-only commands: library list management, log settings and export, storage permission, folder picker, insets, `onLibraryChanged` |
 
 Components import from `@/api` and don't know which backend they're on. App-only code imports from `@/api/app`.
 
@@ -55,7 +55,7 @@ export const IS_TAURI = isTauri()                                         // ins
 export const IS_ANDROID = IS_TAURI && /android/i.test(navigator.userAgent)
 ```
 
-Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the folder picker and the storage-permission step on Android.
+Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the *Developer options* settings section, forwarding logs to Rust, the folder picker and the storage-permission step on Android.
 
 ## App flow (`App.tsx`, app only)
 
@@ -88,7 +88,15 @@ Switching, adding, and removing the open library all call `resetLibraryCache`: i
 - `["library-config"]` → `getConfig`, read once; `setConfig` results are written straight into that cache.
 - `resolveAppearance` (`lib/appearance.ts`) turns `Config` into concrete values; unset fields mean the proto zero value. `useAppearance` also toggles the `dark` class on `<html>`.
 - `components/settings/sections.ts` defines sections. A section is either `groups` of `Setting`s (each bound to a `Config` field via `read`/`patch`, shown as a `Select`) or a `content` component for settings that aren't in the library config. *Library* (`LibrarySection.tsx`) is shown everywhere: *Rebuild index* for all, and, only when `IS_TAURI`, the list of libraries (red remove icon per row, *Add library* at the bottom). App-only settings go behind `IS_TAURI` inside a section's component, with their hooks in a separate component so the web never calls app commands.
+- A section marked `appOnly` (today *Developer options*, slug `developer`, `CodeXml` icon) is left out of `VISIBLE_SECTIONS`, which `Settings.tsx` renders, so the web never shows it or calls its commands.
+- *Developer options* (`LogsSection.tsx`), under a *Logs* heading: *Log files to keep*, a number field (1 to `max_keep_files`) saved on Enter or when the field loses focus, with an inline error for anything else (query `["log-settings"]`); *Copy logs* and *Save logs…*; and *Files*, every log file newest first (query `["log-files"]`, refetched after the count changes), shown by the time span it covers (start to last write) and its size, with the file name small underneath, a save button per row (`save_log_file`), and the folder on desktop. The count is stored on the device, not in the library config.
 - Library settings live in the library's `.shelf/config.json`, so they're shared by every device using that library.
+
+## Logging (`lib/log.ts`)
+
+- `log.debug/info/warn/error(message, fields?)` always writes to the console. In the app, it also sends `message key=value …` to Rust through `@tauri-apps/plugin-log`, which lands in the app's log files. Forwarding failures are swallowed, so logging never throws. Never pass secrets.
+- `installErrorHandlers()` (called in `main.tsx`) forwards uncaught `error` and `unhandledrejection` events, with the stack. It doesn't log them to the console again, since the browser already does.
+- Use `log` instead of `console.*` for anything worth keeping.
 
 ## Covers
 
@@ -113,7 +121,7 @@ pnpm --dir frontend exec tsc -b
 pnpm --dir frontend build
 ```
 
-Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `gestures.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
+Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `gestures.test.ts`, `log.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
 
 ## Favicon
 

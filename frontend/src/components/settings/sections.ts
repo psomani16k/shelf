@@ -1,5 +1,5 @@
 import type { MessageInitShape } from "@bufbuild/protobuf"
-import { BookOpen, LibraryBig, type LucideIcon, Palette } from "lucide-react"
+import { BookOpen, CodeXml, LibraryBig, type LucideIcon, Palette } from "lucide-react"
 import type { ComponentType } from "react"
 import {
   type Config,
@@ -9,7 +9,9 @@ import {
   ReaderTheme_Value,
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
+import { IS_TAURI } from "@/lib/platform"
 import { LibrarySection } from "./LibrarySection"
+import { LogsSection } from "./LogsSection"
 
 export type Setting = {
   id: string
@@ -29,11 +31,13 @@ export type Group = { label?: string; settings: Setting[] }
 /**
  * Either one per `Config` field, in the same nesting, or a `content` component for settings
  * that don't live in the library config (actions, and app-only settings behind `IS_TAURI`).
+ * `appOnly` sections aren't shown on the web.
  */
 export type Section = {
-  slug: "reader" | "ui" | "library"
+  slug: "reader" | "ui" | "library" | "developer"
   label: string
   icon: LucideIcon
+  appOnly?: true
 } & ({ groups: Group[]; content?: never } | { content: ComponentType; groups?: never })
 
 /** In size order; the enum's numbers put MEDIUM first only because it's the default. */
@@ -146,4 +150,13 @@ export const SECTIONS: Section[] = [
     ],
   },
   { slug: "library", label: "Library", icon: LibraryBig, content: LibrarySection },
+  {
+    slug: "developer",
+    label: "Developer options",
+    icon: CodeXml,
+    content: LogsSection,
+    appOnly: true,
+  },
 ]
+
+export const VISIBLE_SECTIONS = SECTIONS.filter((s) => !s.appOnly || IS_TAURI)
