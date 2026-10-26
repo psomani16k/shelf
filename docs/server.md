@@ -70,7 +70,7 @@ docker push --all-tags ghcr.io/psomani16k/shelf
 - A new ghcr package starts **private**. To make it public: github.com → your profile → *Packages* → `shelf` → *Package settings* → *Danger Zone* → *Change visibility* → *Public*. While private, the pulling machine needs `docker login ghcr.io` with a `read:packages` token.
 - "manifest unknown" on pull means the tag isn't in the registry (the push didn't complete) or, for a private package, the puller isn't logged in.
 
-As of 2026-10-26, version 0.1.0 had been built locally and a push attempted; that it landed and that the package is public hadn't been confirmed.
+This flow is in use: the home server runs the image pulled from ghcr.
 
 ## Deploying with compose
 

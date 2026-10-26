@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "shelf",
+  "productName": "Shelf",
   "version": "0.1.0",
   "identifier": "com.psomani16k.shelf",
   "build": {

@@ -108,6 +108,10 @@ pnpm --dir frontend build
 
 Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `gestures.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
 
+## Favicon
+
+`public/favicon.svg`, linked from `index.html`. It's the app icon drawing cropped for small sizes; the sources and how to regenerate the app icons are in [app.md](app.md#icons).
+
 ## Dev server
 
 `pnpm --dir frontend dev` serves on port 5173 (fixed, `strictPort`) and proxies `/api` to `http://localhost:8080`, so in a browser it talks to a locally running `shelf-server`. When `TAURI_DEV_HOST` is set (by `cargo tauri android dev`), Vite listens on that host and serves HMR on port 1421, so the phone can reach it.

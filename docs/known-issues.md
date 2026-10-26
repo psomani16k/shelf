@@ -31,11 +31,6 @@ Problems and risks in what's built, checked against the code on 2026-10-26. Plan
 - **Android folder picker** only maps folders on device storage (`com.android.externalstorage.documents`); other document providers are rejected.
 - `MANAGE_EXTERNAL_STORAGE` is restricted on the Play Store. Fine for sideloading, which is the plan.
 
-## Work in progress (2026-10-26)
-
-- The Android plugin (`ShelfPlugin.kt`, `app/src/native.rs`), the safe-area work, the Android manifest changes, `docker-compose.yml` and `docs/` are uncommitted, and the APK with the plugin hasn't been confirmed on a device yet.
-- Docker image `0.1.0`: built locally; the push to ghcr and making the package public weren't confirmed. See [server.md](server.md#publishing-manual-no-ci).
-
 ## Cleanups
 
 - `shelf-core` has pre-existing clippy warnings, and an unused `use serde::{Deserialize, Serialize}` in `library.rs`.

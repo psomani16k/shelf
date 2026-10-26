@@ -116,6 +116,25 @@ adb install -r gen/android/app/build/outputs/apk/universal/release/app-universal
 
 The version comes from `tauri.conf.json` (`0.1.0` → versionCode `1000`, via the generated `tauri.properties`).
 
+### Icons
+
+The icon is three off-white book spines and a leaning amber one on a shelf, on the UI's dark background (`#171717`). The sources are SVGs in `app/icons/source/`:
+
+| File | Used for |
+|---|---|
+| `icon.svg` | Desktop icons, Windows tiles, and Android's fallback icon (the drawing on a rounded tile) |
+| `android-fg.svg`, `android-bg.svg` | Android adaptive icon layers. The launcher shows only the middle 72 of 108 units and crops it to its own shape, so the drawing is scaled to 2/3 of the canvas |
+| `android-monochrome.svg` | Android 13+ themed icons (white silhouette; the launcher recolours it) |
+| `icon-manifest.json` | Ties them together for `cargo tauri icon`; `android_fg_scale` sizes the drawing in the Android 7 fallback icon |
+
+`frontend/public/favicon.svg` is the same drawing cropped tighter so it reads at 16 px. To regenerate after changing a source:
+
+```fish
+cd app; and cargo tauri icon icons/source/icon-manifest.json; and rm -r icons/ios
+```
+
+It writes `app/icons/*` and, because `gen/android` exists, the Android `mipmap-*` folders and `mipmap-anydpi-v26/ic_launcher.xml`. The `ios/` folder it also creates isn't needed.
+
 ### Release signing
 
 Android only installs signed APKs. Shelf isn't on the Play Store, so a self-made keystore is enough; the certificate details entered in `keytool` are arbitrary.

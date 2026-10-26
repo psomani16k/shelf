@@ -10,7 +10,7 @@ services:
     volumes:
       # The library: a folder of .epub files. The server runs as uid 1000 and writes its
       # metadata to a hidden .shelf folder inside it, so that uid needs write access.
-      - ./books:/books
+      - path/to/library:/books
     environment:
       # error, warn, info or debug.
       RUST_LOG: info
