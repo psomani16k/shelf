@@ -6,6 +6,7 @@ import { onLibraryChanged, openLibrary } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
 import { IS_TAURI } from "@/lib/platform"
 import { useLibraries } from "@/lib/useAppLibrary"
+import { useSystemInsets } from "@/lib/useSystemInsets"
 import { Home } from "@/screens/Home"
 import { OpenFailed } from "@/screens/OpenFailed"
 import { PickLibrary } from "@/screens/PickLibrary"
@@ -24,6 +25,7 @@ export default function App() {
 /** The app has to open a library before it can show the same UI as the web. */
 function AppFlow() {
   const queryClient = useQueryClient()
+  useSystemInsets()
   // The watcher added, changed or removed a book.
   useEffect(
     () =>

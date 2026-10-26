@@ -75,7 +75,7 @@ export function Settings() {
 
   return (
     // tabIndex: clicks on plain text keep focus inside, so Escape still reaches the handler.
-    <div ref={rootRef} tabIndex={-1} className="fixed inset-0 z-50 flex bg-background outline-none">
+    <div ref={rootRef} tabIndex={-1} className="safe-area fixed inset-0 z-50 flex bg-background outline-none">
       {(wide || !shown) && (
         <nav className="flex w-full flex-col md:w-64 md:shrink-0 md:border-r">
           <ScreenHeader

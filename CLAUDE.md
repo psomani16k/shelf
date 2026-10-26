@@ -1,53 +1,57 @@
 # Shelf
 
 Cross-platform EPUB reader. The library is a plain folder of `.epub` files, with app data in a hidden `.shelf/` folder inside it. It runs as:
-- a Tauri 2 app on Linux and Android, in Local mode (reads a folder) or Server mode (talks to the server)
+- a Tauri 2 app on Linux and Android, with a local library (reads a folder on the device) or a remote one (talks to `shelf-server`)
 - a web UI served by `shelf-server`
 
-**`PLAN.md` is the source of truth.** It covers decisions, the on-disk format, the API and the milestones. Work one milestone at a time, follow Section 0, and tick checkboxes as you go. If a settled decision (Section 2) looks wrong, stop and explain before deviating.
+**`docs/` describes the code as it is**: architecture, on-disk format, API, server, app, frontend, development and known issues. Start at `docs/README.md`. The reasoning behind the design is in `docs/decisions.md`; planned work in `docs/roadmap.md` (tick items off and move their description into the relevant doc when you build them); bugs and risks in `docs/known-issues.md`. Keep `docs/` true to the code when you change things. If a decision in `docs/decisions.md` looks wrong, stop and explain before deviating.
 
-## Core assumptions (these override PLAN.md where they conflict)
+## Core assumptions
 
-- **One user, one device at a time.** The app only has to make switching devices smooth. There's no live syncing between devices running at once: no `ProgressChanged` events and no "jump to newer position" prompt while reading. Progress is read when a book is opened.
-- **Extracted book metadata is stored in `.shelf/`**, so it syncs with the library and each book is extracted once, not on every device. (This replaces PLAN §4.5, which kept the metadata cache outside the library.) Layout: `.shelf/books/<sha1-of-file>/{metadata.json,thumbnail.jpeg,progress.json}`, `.shelf/state.json` (the last book opened) and `.shelf/config.json` (library settings that sync with it, partially updated by `set_config`); see PLAN §4.1.
-- **Browsing never hashes.** After the startup sync, every `metadata.json` is loaded into an in-memory `LibraryIndex` (`core/src/index.rs`). Folder listings filter it by `path`, and the watcher's extractor keeps it up to date. `core` owns the types and logic; the app (and later the server) creates and holds them.
-- **Keeping `.shelf/` in sync with the library:**
-  - **On startup:** a full diff of the library against `.shelf/` brings the metadata up to date. Books are matched by `rel_path`, `size` and `mtime` recorded in their metadata.
-  - **While running:** a watcher keeps them in sync.
-  - **One idempotent routine:** both use the same "sync this relative path" function. It looks at the disk: if the file exists and differs from what's stored, extract it; if it's gone, drop the metadata. It never relies on event types (add, modify, rename).
+- **One user, one device at a time.** The app only has to make switching devices smooth. There's no live syncing between devices running at once: no progress-changed events and no "jump to newer position" prompt while reading. Progress is read when a book is opened.
+- **Extracted book metadata is stored in `.shelf/`**, so it syncs with the library and each book is extracted once, not on every device. Layout: `.shelf/books/<sha1-of-file>/{metadata.json,thumbnail.jpeg,progress.json}`, `.shelf/state.json` (the last book opened) and `.shelf/config.json` (library settings that sync with it, partially updated by `set_config`). See `docs/library-format.md`.
+- **Book IDs are the SHA-1 of the whole file.** A moved file keeps its ID; an edited one gets a new ID.
+- **Browsing never hashes.** After the startup sync, every `metadata.json` is loaded into an in-memory `RwLock<Vec<BookMetadata>>` inside `BookLibrary` (`crates/core/src/library.rs`). Folder listings filter it by `path`, and the watcher's extractor keeps it up to date. `core` owns the types and logic; the server and the app create and hold a `BookLibrary`.
+- **Keeping `.shelf/` in sync with the library** (`crates/core/src/routines/extractor.rs`):
+  - **On startup:** `sync_library` hashes every book file (rayon, inside `spawn_blocking`), extracts the ones with no `.shelf/books/<id>/`, fixes `path` for moved ones, and deletes `.shelf/books/<id>/` folders no file produced (their progress too).
+  - **While running:** the watcher feeds the `extractor` task, which calls `sync_path` for each changed path.
+  - **Look at the disk, not event types:** `sync_path` extracts a file that exists and drops a gone one from the in-memory index (its folder stays until the next startup, since a move's remove can arrive before its create). Startup and watcher share the same extraction routine (`EbookExtractor`).
   - **Extraction output is deterministic:** the same file always gives the same bytes. No timestamps or device names, so two devices writing it can't create sync conflicts.
-- **The watcher:**
-  - **Scope:** it reports relative paths of `.epub` files only. It ignores `.shelf/` entirely, which also stops metadata writes from re-triggering it, and all other dot-folders, following the scanner's rule. Filter **before** queuing, so ignored paths never delay a flush.
-  - **Batching:** paths are queued and de-duplicated in a set, then flushed to the sync routine after **5 s of silence**, or **60 s after the first queued path**, whichever comes first.
-  - **Implementation:** a `tokio::spawn`ed debounce task using `tokio::sync::mpsc` and `tokio::time::timeout_at`. `Watcher::new` must be called inside a tokio runtime. Dropping the `Watcher` stops it.
-  - **Startup order:** start the watcher **before** the initial diff, so nothing arriving in between is missed.
+- **The watcher** (`crates/core/src/watcher.rs`):
+  - **Scope:** it reports `.epub` paths only, ignoring `.shelf/` and every other dot-file or dot-folder, following the scanner's rule. It filters **before** queuing.
+  - **Batching:** a per-path 5 s debounce in a `tokio_util::time::DelayQueue`; a new event for a path resets its timer. There's no upper bound (see `docs/known-issues.md`). Sync work runs on rayon.
+  - **Lifecycle:** `LibraryWatcher::initialize` must be called inside a tokio runtime. `BookLibrary::open` starts it **before** the startup sync, so nothing arriving in between is missed. Dropping the `BookLibrary` drops the watcher, which ends the extractor task.
   - **Failed extraction** (e.g. a half-copied file) logs at `warn` and is retried on the next event or startup.
+- **`on_change`:** `BookLibrary::open` takes a callback run after each watcher sync. The server passes a no-op; the app emits the `library-changed` event so the frontend refetches listings.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `crates/core` (`shelf-core`) | Library logic: scan, book IDs, EPUB metadata, progress files, watcher. **No Tauri, HTTP or prost deps.** |
-| `crates/proto` (`shelf-proto`) | Rust types generated from `proto/` (build.rs: protox → prost + pbjson) and conversions to/from `core` types |
-| `crates/server` (`shelf-server`) | axum server; embeds `frontend/dist` with rust-embed |
-| `app/` | Tauri crate (Tauri's usual `src-tauri`). `app/gen/android` is generated by `cargo tauri android init` but committed. |
+| `crates/core` (`shelf-core`) | Library logic: scan, book IDs, EPUB metadata and thumbnails, progress/state/config files, watcher, the `Library` trait. **No Tauri or HTTP deps.** |
+| `crates/proto` (`shelf-proto`) | Rust types generated from `proto/` (build.rs: protox → prost + pbjson). New `.proto` files must be added to the list in `build.rs`. |
+| `crates/server` (`shelf-server`) | axum server over one `BookLibrary` at `/books`, port 8080; embeds `frontend/dist` with rust-embed |
+| `app/` | Tauri crate (Tauri's usual `src-tauri`). `AppState` holds the stored library list and the open `AnyLibrary` (local or remote). `app/gen/android` is generated by `cargo tauri android init` but committed and hand-edited (Kotlin plugin `ShelfPlugin.kt`, manifest permissions, release signing). |
 | `frontend/` | React + Vite + TS SPA, shared by the app and the server |
 | `frontend/vendor/foliate-js` | EPUB renderer, a pinned git submodule. Don't edit. |
-| `proto/<package>/*.proto` (e.g. `proto/bookkeeping/`) | Schema for every wire type. Package names have no version suffix (no `v1`); `buf lint` excludes `PACKAGE_VERSION_SUFFIX`. |
+| `proto/<package>/*.proto` (`apipb`, `bookkeeperpb`, `configpb`, `statepb`) | Schema for every wire type and on-disk file. Package names have no version suffix (no `v1`); `buf lint` excludes `PACKAGE_VERSION_SUFFIX`. |
+| `Dockerfile`, `docker-compose.yml` | Server image (published by hand to `ghcr.io/psomani16k/shelf`, no CI) and a sample deployment |
 
 ## Commands
 
-Run from the repo root unless noted.
+Run from the repo root unless noted. In instructions for the user, use fish syntax (`; and`, not `&&`).
 
 ```bash
 cargo fmt && cargo clippy --workspace -- -D warnings && cargo test --workspace
+cargo clippy -p app --no-deps -- -D warnings   # core has pre-existing clippy warnings
 buf lint
 pnpm --dir frontend lint      # oxlint
 pnpm --dir frontend test      # vitest (regenerates proto code first)
 pnpm --dir frontend gen:proto # buf generate → frontend/src/gen/
 
-cd app && cargo tauri dev           # Linux desktop
-cd app && cargo tauri android dev   # Android, phone over USB (check `adb devices`)
+cd app && cargo tauri dev                                # Linux desktop
+cd app && cargo tauri android dev                        # Android, phone over USB (check `adb devices`)
+cd app && cargo tauri android build --apk --target aarch64   # signed release APK
 ```
 
 ## Code style
@@ -57,70 +61,65 @@ cd app && cargo tauri android dev   # Android, phone over USB (check `adb device
   - `tokio::sync` channels and locks, `tokio::time` for timers, `tokio::fs` for file I/O
   - CPU-heavy or blocking work (such as EPUB/ZIP parsing) goes in `tokio::task::spawn_blocking`, never directly in async code
   - timing-dependent tests use `#[tokio::test(start_paused = true)]`
+  - Existing exception: `core` uses rayon for parallel extraction and hashing, and `BookKeeper` uses blocking `std::fs` (called through `spawn_blocking` / `with_keeper`).
 - **Few comments.** Make the code simple to read instead. Comment only a non-obvious "why" or a trap, in one line. No module essays or comments that repeat what the code says. Put design explanations in docs or chat.
 
 ## Things to know
 
 - **Generated code is not committed.** `frontend/src/gen/` is git-ignored and rebuilt by `pnpm dev` / `build` / `test`. Rust proto code is generated into `target/`. Never hand-edit either. Change the `.proto` files instead, and never renumber or reuse a field. TypeScript is generated as `.js` + `.d.ts` (`target=js+dts`), because protobuf-es emits TS `enum`s, which `erasableSyntaxOnly` in `tsconfig.app.json` rejects.
-- **All API traffic is JSON** (Tauri IPC and HTTP), encoded from the proto types. JSON keys are the snake_case proto field names (not camelCase), enum values are sent by their CAPITAL_SNAKE_CASE names, and messages are CapitalCamelCase. Don't use 64-bit integer types in `.proto` unless absolutely necessary: proto3 JSON sends them as strings. Use `int32` / `uint32` / `double`. See the conventions note under PLAN §2. Protobuf is only the shared schema, never sent as binary. Exception: EPUB and cover bytes are sent raw.
-- **The on-disk format is hand-written serde JSON, not generated from proto** (PLAN 4.3). Preserve unknown fields.
-- **The frontend never sees file paths**, only book IDs, through the `Backend` interface (PLAN 6).
+- **All API traffic is JSON** (Tauri IPC and HTTP), encoded from the proto types. JSON keys are the snake_case proto field names (not camelCase), enum values are sent by their CAPITAL_SNAKE_CASE names, and messages are CapitalCamelCase. Enums sit in wrapper messages (`ReaderFlow.Value`) so values stay plain (`"PAGINATED"`). Don't use 64-bit integer types in `.proto` unless absolutely necessary: proto3 JSON sends them as strings. Use `int32` / `uint32` / `double`. Protobuf is only the shared schema, never sent as binary. Exception: EPUB and cover bytes are sent raw (HTTP `GET /api/books/{id}/cover|file`; Tauri `get_cover` / `get_book_file` returning `ipc::Response` → `ArrayBuffer`).
+- **HTTP routes and Tauri commands mirror each other**, one per `Library` trait method, with the same proto JSON. See `docs/api.md`. Adding an operation touches the trait, `BookLibrary`, `LocalLibrary`/`RemoteLibrary`/`AnyLibrary`, the server route, the app command, and the frontend `Backend` in both `http.ts` and `tauri.ts` (recipe in `docs/development.md`).
+- **Errors are `{ status, message }`-shaped at both boundaries:** the server sends an `ApiError` JSON body (500s say only `internal error`); app commands reject with `CommandError` (500s carry the full message). The frontend turns both into `ApiError`.
+- **The on-disk files use the generated proto types**, serialized with pbjson (snake_case keys, enum names). pbjson ignores unknown fields on read, so only `config.json` keeps fields this build doesn't know (`set_config` merges into the raw JSON). `state.json` and `config.json` are written atomically (temp file + rename); `metadata.json`, `progress.json` and thumbnails use plain `fs::write`.
+- **The frontend never sees file paths**, only book IDs, through the `Backend` interface (`frontend/src/api`). The one exception is the app's library picker, which sends a chosen folder path to Rust.
+- **App-specific frontend behaviour** branches on `IS_TAURI` / `IS_ANDROID` (`frontend/src/lib/platform.ts`). App-only commands live in `frontend/src/api/app.ts`; app-only settings in `APP_SECTIONS` (`components/settings/sections.ts`).
+- **Android system bars:** the app draws edge to edge. Full-screen surfaces must use the `safe-area` Tailwind utility, which pads by `--inset-*` CSS variables set from the `system_insets` command.
+- **Android storage:** a local library needs all-files access (`MANAGE_EXTERNAL_STORAGE`, granted on a settings page) and the folder comes from the native picker in `ShelfPlugin.kt`; tauri-plugin-dialog's folder picker doesn't work on Android.
+- **Android release signing:** keystore `~/.android/shelf-release.jks` (alias `shelf`), read through the git-ignored `app/gen/android/keystore.properties`. Never print, log or commit its passwords.
 - **Dependencies:** declare shared crate versions in the root `[workspace.dependencies]` and use `{ workspace = true }` in member crates.
 - **Linting is Oxlint, not ESLint.** Config is in `frontend/.oxlintrc.json`, and it already ignores `vendor/`, `src/gen/` and `dist/`.
 - **shadcn/ui** uses the Base UI library and the Nova preset. Add components with `pnpm dlx shadcn@latest add <name>` from `frontend/`. The class-name helper is the `cn` package.
 - **TypeScript 6:** don't add `baseUrl` (deprecated). The `@/*` alias is set with `paths` only, plus `resolve.alias` in `vite.config.ts`.
 - **`tauri.conf.json` before-commands use the `{ "script", "cwd": "../frontend" }` form.** Tauri runs them from `app/`, and a bare `pnpm --dir ../frontend` broke depending on where the CLI was invoked.
-- **Vite** listens on `TAURI_DEV_HOST` when it's set, so the phone can reach the dev server.
-- **Bundle identifier:** `com.psomani16k.shelf`. Changing it after install makes Android treat the app as a new app.
+- **Vite** listens on `TAURI_DEV_HOST` when it's set, so the phone can reach the dev server, and proxies `/api` to `http://localhost:8080` for browser development.
+- **WebKitGTK** (Linux) won't load custom URI schemes from the `http://` dev-server page, which is why covers go over IPC. The Linux app is laggy on the developer's hybrid-GPU Wayland machine; testing happens on Android.
+- **Bundle identifier:** `com.psomani16k.shelf` (debug builds add `.debug`). Changing it after install makes Android treat the app as a new app.
 - **Cloning:** use `git clone --recursive`, or run `git submodule update --init`, to get foliate-js.
 
 ## Logging
 
 ### Everywhere
 
-- **Every log line is a single-line JSON object** (`{"key":"value",...}`), on the server and in the app. There is no plain-text mode. Every line has `timestamp` (RFC 3339 UTC), `level`, `target` and `message`, with event fields as top-level keys rather than nested. On the server, also include the current span's fields, such as `request_id`. With `tracing-subscriber` this means `.json().flatten_event(true)` **(verify the exact options)**.
 - **Rust uses `tracing`** with structured fields: `info!(book_id = %id, "progress saved")`. Library crates (`core`, `shelf-proto`) only emit events and never install a subscriber. Only the server and app binaries decide where logs go.
 - **Levels:**
   - `error`: something failed that the user will notice (saving progress, opening a library).
-  - `warn`: something odd that was handled (unparseable progress file, duplicate book ID, skipped conflict copy, login rate limit hit).
-  - `info`: lifecycle (start, bind address, library opened, scan finished with counts, login succeeded or failed with username and client IP).
+  - `warn`: something odd that was handled (unparseable progress file, unreachable server, failed extraction).
+  - `info`: lifecycle (start, bind address, library opened, sync finished with counts).
   - `debug`: per-request detail, watcher events, cache hits and misses.
-- **Log errors once, where they cross the boundary**: where axum turns an error into a response, and in the Tauri command wrapper. 5xx and internal errors go at `error`, 4xx at `debug`. Don't log an error and also return it.
-- **Never log** passwords, session tokens or their hashes, `Authorization` / `Cookie` / `Set-Cookie` headers, or anything from `/api/auth/*` request bodies.
+- **Log errors once, where they cross the boundary**: `crates/server/src/error.rs` (where axum turns an error into a response) and `app/src/error.rs` (`CommandError`). 5xx and internal errors go at `error`, 404s at `debug`. Don't log an error and also return it.
+- **Never log** passwords, session tokens or their hashes, `Authorization` / `Cookie` / `Set-Cookie` headers, or anything from `/api/auth/*` request bodies (for when auth exists).
+- **Never write logs, caches or device/app config into the library folder.** Only `.shelf/` data and the library's own settings (`.shelf/config.json`) go there. App data, the remote-library download cache and logs live in the app's private dirs.
 
-### Server (likely runs in Docker)
+### Server (`crates/server/src/logging.rs`)
 
-- **All logs go to stdout, never to files.** `docker logs` and journald both capture it.
-- **The access log** is one line per API request, emitted by a custom axum middleware with `target: "access"`. Fields: `request_id`, `method`, `path`, `status`, `latency_ms`, `req_bytes`, `resp_bytes`, `user` (if authenticated), `client_ip`, `user_agent`. Filter for it with `docker logs shelf | jq 'select(.target == "access")'`.
-- **Request bodies:** off by default. With `log_bodies = true` in the config, access lines also include JSON request and response bodies, cut off at about 4 KB. Never for `/api/auth/*`, and never for raw-byte endpoints (`/file`, `/cover`).
-- **Request IDs:** tower-http `SetRequestIdLayer` + `PropagateRequestIdLayer` (`x-request-id`). Put the ID in the request span so text logs carry it too.
+- **One JSON object per line on stdout, never files**: `tracing_subscriber::fmt().json().flatten_event(true).with_current_span(true).with_span_list(false)`. Lines have `timestamp`, `level`, `target`, `message` and event fields at the top level; lines inside a request carry a nested `span` object with its `request_id`.
 - **Level:** `RUST_LOG`, default `info`.
-- **Client IP:** behind Caddy or Tailscale, the connection comes from the proxy. Trust `X-Forwarded-For` only when the connection comes from a proxy listed in the config.
-- **Docker log rotation:** the default `json-file` driver never rotates. Set `max-size` / `max-file` in the compose file's `logging:` section.
+- **The access log** is one line per `/api` request from the `access_log` middleware, `target: "access"`, with `request_id`, `method`, `path`, `status`, `latency_ms`, `req_bytes`, `resp_bytes`, `client_ip`, `user_agent`. Filter with `docker logs shelf | jq 'select(.target == "access")'`.
+- **Request IDs:** tower-http `SetRequestIdLayer` + `PropagateRequestIdLayer` (`x-request-id`, UUIDs), put in the request span.
+- **Client IP** is the TCP peer; `X-Forwarded-For` isn't read, so behind a proxy it's the proxy.
+- **Docker log rotation:** `docker-compose.yml` sets `max-size` / `max-file` for the `json-file` driver, which never rotates by default.
+- Not built: a `user` field (there's no auth), request-body logging, a server config file.
 
 ### App (Linux and Android)
 
-- **`tauri-plugin-log` runs in both debug and release builds.**
-  - Targets: stdout (on Android this should end up in logcat **(verify)**) and a file in the log dir.
-  - Level: `debug` in dev builds, `info` in release.
-  - File size: capped with `max_file_size` plus `RotationStrategy::KeepSome(n)`.
-  - Turn on `tracing`'s `log` feature in `app`, so `core`'s `tracing` events reach the plugin's `log`-based output.
-  - JSON lines come from a custom formatter (`Builder::format(...)`) that writes one `serde_json` object per line with the same keys as the server.
-- **Log files live only in the app's private log dir** (`app_log_dir()`):
-  - Linux: `~/.local/share/com.psomani16k.shelf/logs/`
-  - Android: inside the app's private internal storage
-  - **Never write logs, caches or device/app config into the library folder.** Only `.shelf/` data from PLAN §4 and the library's own settings (`.shelf/config.json`) go there.
-- **Settings → Logs** has two buttons:
-  - **Copy logs:** the recent tail of the log, copied with `tauri-plugin-clipboard-manager`.
-  - **Save logs…:** the dialog plugin's save picker, then a Rust command copies the log file there. Check that this works on Android **(verify)**.
-- **Frontend:** `src/lib/log.ts` wraps `debug` / `info` / `warn` / `error`.
-  - Inside Tauri it forwards to `@tauri-apps/plugin-log`, so frontend and Rust logs end up in the same file.
-  - In the browser it uses `console.*`.
-  - Register `error` and `unhandledrejection` handlers that log at `error`.
+- **`tauri-plugin-log` is registered only in debug builds** (`app/src/lib.rs`): level `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` at `info`; default targets (stdout and a file in the app log dir), default plain-text format. Release builds don't log.
+- `tracing`'s `log` feature is on in `app`, so `core`'s `tracing` events reach the plugin.
+- On Android, read logs with `adb logcat`; Kotlin plugin errors show under the `Tauri` tag.
+- Not built yet: logging in release, JSON lines with the server's keys (a `Builder::format(...)` formatter), file size limits, *Settings → Logs* (copy/save), and a frontend `src/lib/log.ts` with `error`/`unhandledrejection` handlers. The frontend uses `console.*` today.
 
 ## Dev environment (Fedora 44, fish shell)
 
-- **Shell:** the user's interactive shell is fish. Instructions for them shouldn't use bash-only syntax such as heredocs or `export`.
+- **Shell:** the user's interactive shell is fish. Instructions for them shouldn't use bash-only syntax such as heredocs, `export` or `&&`.
 - **Missing system library:** when a `-sys` crate can't find one, run `dnf provides 'pkgconfig(<name>)'` to find the `-devel` package.
 - **Android:**
   - SDK at `~/Android/Sdk`, with `platforms;android-37.0` (Google's new naming), `build-tools;37.0.0` and NDK `29.0.13846066`. Environment variables are set in `~/.config/fish/config.fish`.
@@ -131,4 +130,6 @@ cd app && cargo tauri android dev   # Android, phone over USB (check `adb device
 They're a backend engineer, mostly Go, and know Rust outside web work. They're using this project to learn **frontend/app development** and **writing servers in Rust**.
 
 - **Writing code:** Claude writes the code, to keep development moving. In those areas, still explain the *why* briefly, comparing to Go (net/http, goroutines, context, middleware) where it helps.
+- **Checks:** the user runs `cargo fmt`, `cargo clippy`, cargo builds/tests and Docker builds themselves; tell them the command instead. Frontend checks (`tsc`, oxlint, vitest, vite build) are fine to run.
+- **Scope:** edit only the files a request names; suggest wider refactors in chat.
 - **Chores:** do config, docs and mechanical fixes directly. Don't turn basics into exercises.

@@ -1,0 +1,135 @@
+# The Tauri app
+
+`app/` is a Tauri 2 app for Linux and Android. The Rust side holds the open library; the WebView runs the same React frontend as the web build. Bundle identifier: `com.psomani16k.shelf` (changing it makes Android treat it as a different app).
+
+## Rust layout (`app/src`)
+
+| File | Role |
+|---|---|
+| `main.rs` | Desktop entry; calls `app_lib::run()` |
+| `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (log plugin, `AppState`) |
+| `state.rs` | `AppState`: the stored library list and the currently open library |
+| `app_data.rs` | `AppData`: the library list, persisted with tauri-plugin-store |
+| `commands.rs` | Library management commands and the `Library` passthroughs |
+| `error.rs` | `CommandError { status, message }`, the only place command errors are logged |
+| `native.rs` | The `shelf` plugin: storage permission, folder picker, system insets (Android) |
+| `libsrc/mod.rs` | `LibrarySource` (what's stored) and `AnyLibrary` (what's open) |
+| `libsrc/local.rs` | `LocalLibraryBuilder` / `LocalLibrary` over `shelf_core::BookLibrary` |
+| `libsrc/remote.rs` | `RemoteLibraryBuilder` / `RemoteLibrary`, an HTTP client for `shelf-server` |
+| `libsrc/app_library.rs` | `AppLibrary` trait: `get_name`, `get_builder` |
+
+Plugins registered in `lib.rs`: `tauri-plugin-http` (Rust uses its `reqwest` re-export), `tauri-plugin-dialog` (desktop folder picker), `tauri-plugin-store` (app data), `native::init()` (Shelf's own), and `tauri-plugin-log` in debug builds only. `capabilities/default.json` grants `core:default`, `dialog:default`, `http:default`; the app's own commands in `invoke_handler` need no capability entry.
+
+Tauri commands are like Go HTTP handlers registered on a mux: `#[tauri::command]` functions, with `State<'_, AppState>` injected the way you'd close over a dependency, and JSON args/results serialized by serde.
+
+## State and library lifecycle
+
+```rust
+pub struct AppState {
+    pub data: tokio::sync::Mutex<AppData>,            // the stored library list
+    library: tokio::sync::Mutex<Option<Arc<AnyLibrary>>>, // the open one
+}
+```
+
+- `AppState::load` runs in `setup` and reads `AppData` from the store. No library is open yet.
+- `open_library(index)` → `AppState::open`: clones the `LibrarySource` at `index`, builds it, and replaces the open library. The `on_change` it passes emits the `library-changed` event. For a local library, building runs `BookLibrary::open`, so the command resolves only after the startup sync. Dropping the previous `Arc` stops its watcher.
+- Passthrough commands get the library with `state.library()`, which errors with "no library is open" before `open_library`.
+- `remove_library(index)` removes, saves, and closes the open library (with one library stored, the removed one is always the open one).
+
+The frontend currently uses only index `0`; the Rust side already stores a list so more libraries can come later.
+
+## Stored data
+
+`AppData` lives in the app's private data directory, never in a library:
+
+- Store file `app_data.json`, key `libraries`, via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
+- Each entry is a serde externally tagged `LibrarySource`:
+
+```json
+{
+  "libraries": [
+    { "Local": { "root": "/storage/emulated/0/Books", "name": "Books" } },
+    { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "nas" } }
+  ]
+}
+```
+
+A missing or unreadable list loads as empty (with a warning) rather than blocking the app.
+
+## Local libraries
+
+`LocalLibrary` wraps `BookLibrary` (see [library-format.md](library-format.md)). Added with `add_local_library(path)`: the path is canonicalized and must be a folder; the name is the folder's name.
+
+## Remote libraries
+
+`RemoteLibrary` (`libsrc/remote.rs`) implements `Library` over a `shelf-server`:
+
+- `add_remote_library(baseUrl)`: `http://` is prepended when there's no `://`; only http/https are accepted; name = host; cache dir = `<app cache dir>/remote/<host>-<port>` (Linux: `~/.cache/com.psomani16k.shelf/remote/...`). Nothing is contacted when adding or opening; the first request is what reaches the server.
+- `api_call(req, path)`: POSTs JSON to `{base_url}/api{path}`. A non-2xx response becomes an error carrying `HttpStatus`, with the server's `ApiError.message` in the context; `to_library_error` maps a 404 to `LibraryError::NotFound`. An empty body (204) decodes as `null` → `()`.
+- `get_cover` / `get_book`: download `GET /api/books/{id}/{cover|file}` once into `<cache>/{cover|file}/<id>.{jpeg|epub}` (via a `.part-<pid>` temp file and rename), then return the cached path. IDs are content hashes, so a cached file never goes stale. The ID must be alphanumeric, so a server can't make the app write outside the cache.
+- `list_books` / `list_sub_directories` can't fail in the trait, so errors are logged at `warn` and an empty listing is returned. An unreachable server therefore looks like an empty library.
+- The client has a 10 s connect timeout and no overall timeout. The cache is never evicted and isn't deleted when the library is removed.
+
+## Logging
+
+`tauri-plugin-log` is registered only when `cfg!(debug_assertions)`: level `debug`, with `tauri`, `wry`, `reqwest`, `hyper_util` and `notify` held at `info`. It uses the plugin's default targets (stdout and a file in the app log dir) and its default plain-text format. `tracing`'s `log` feature is on, so `core`'s `tracing` events reach it. **Release builds have no logging set up.** On Android, read logs with `adb logcat`; errors from the Kotlin plugin show under the `Tauri` tag. JSON lines in both builds and *Settings → Logs* are on the [roadmap](roadmap.md#app).
+
+## Android
+
+### Project files
+
+`app/gen/android` is generated by `cargo tauri android init` but committed and hand-edited. Hand-made changes:
+
+| File | Change |
+|---|---|
+| `app/src/main/java/com/psomani16k/shelf/ShelfPlugin.kt` | Shelf's native plugin (below) |
+| `app/src/main/java/com/psomani16k/shelf/MainActivity.kt` | `enableEdgeToEdge()` before `super.onCreate` |
+| `app/src/main/AndroidManifest.xml` | `READ_EXTERNAL_STORAGE` (maxSdkVersion 32), `MANAGE_EXTERNAL_STORAGE`, `requestLegacyExternalStorage="true"` |
+| `app/build.gradle.kts` | Release signing from `keystore.properties` |
+
+SDK levels: `minSdk 24`, `compileSdk`/`targetSdk 37`. Debug builds get the application ID suffix `.debug`, so a debug and a release install are separate apps with separate data. `usesCleartextTraffic` is `false` in release; that policy applies to Java/WebView networking, not to Rust's `reqwest`, which is what talks to servers.
+
+### The `shelf` plugin
+
+`native.rs` registers the Kotlin class `ShelfPlugin` on Android (`register_android_plugin("com.psomani16k.shelf", "ShelfPlugin")`) and exposes four commands (see [api.md](api.md)). Each Android call goes through `PluginHandle::run_mobile_plugin`, which blocks until Kotlin resolves (for a picker, until the user is done), so it runs in `spawn_blocking`. On other platforms the commands return desktop answers without native code.
+
+`ShelfPlugin.kt`:
+
+- **Storage.** A library is a plain folder, so the app needs to read arbitrary files. On Android 11+ (API 30+) that's *All files access* (`MANAGE_EXTERNAL_STORAGE`), granted only on a system settings page: `requestStorage` opens `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` and reports `Environment.isExternalStorageManager()` when the user returns. Below 30 it requests `READ_EXTERNAL_STORAGE` through Tauri's permission alias `storage`.
+- **Folder picker.** `pickFolder` launches `ACTION_OPEN_DOCUMENT_TREE` and maps the tree URI to a filesystem path: `primary:Books/Sci` → `/storage/emulated/0/Books/Sci`, `1234-ABCD:Books` → `/storage/1234-ABCD/Books`. Only the `com.android.externalstorage.documents` provider is supported (not Drive, Downloads shortcuts, etc.); others reject with a message. The tauri-plugin-dialog folder picker doesn't work on Android, which is why this exists.
+- **Insets.** Because the app draws edge to edge, the WebView sits under the status and navigation bars. `systemInsets` returns `systemBars() | displayCutout()` insets divided by display density, i.e. in CSS pixels. The frontend turns them into CSS variables (see [frontend.md](frontend.md)).
+
+### Building
+
+Dev, with the phone on USB (`adb devices`):
+
+```fish
+cd app; and cargo tauri android dev
+```
+
+Release APK for arm64 phones:
+
+```fish
+cd app; and cargo tauri android build --apk --target aarch64
+adb install -r gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
+
+The version comes from `tauri.conf.json` (`0.1.0` → versionCode `1000`, via the generated `tauri.properties`).
+
+### Release signing
+
+Android only installs signed APKs. Shelf isn't on the Play Store, so a self-made keystore is enough; the certificate details entered in `keytool` are arbitrary.
+
+- Keystore: `~/.android/shelf-release.jks`, alias `shelf`, created with
+  `keytool -genkey -v -keystore ~/.android/shelf-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias shelf`.
+- `app/gen/android/keystore.properties` (git-ignored) holds `storeFile`, `storePassword`, `keyAlias`, `keyPassword`. `build.gradle.kts` loads it; without the file, release builds are unsigned and won't install.
+- **Never print, log or commit the passwords or the keystore.**
+- Updates must be signed with the same key. Losing the keystore means uninstalling and reinstalling, which loses the app's private data (the stored library list), not the library itself.
+
+## Linux
+
+```fish
+cd app; and cargo tauri dev
+```
+
+`tauri.conf.json` runs `pnpm dev` (port 5173) from `../frontend` before starting, and `pnpm build` before bundling. On the developer's machine (Fedora, Wayland/niri, hybrid NVIDIA + AMD GPUs, webkit2gtk 2.54) the app is laggy and slow to show its first frame, in both debug and release. The backend isn't the cause (the library opens in under a second); it's WebKitGTK's rendering path. Environment switches tried without an acceptable result: `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, `WEBKIT_FORCE_VBLANK_TIMER`, `WEBKIT_WEB_RENDER_DEVICE_FILE`, `__NV_DISABLE_EXPLICIT_SYNC`.

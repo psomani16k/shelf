@@ -1,0 +1,22 @@
+# Sample: copy it next to your books folder, adjust the volume, then `docker compose up -d`.
+# Logs: `docker compose logs -f shelf`, or `docker compose logs shelf | jq 'select(.target == "access")'`.
+services:
+  shelf:
+    image: ghcr.io/psomani16k/shelf:latest
+    container_name: shelf
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # The library: a folder of .epub files. The server runs as uid 1000 and writes its
+      # metadata to a hidden .shelf folder inside it, so that uid needs write access.
+      - ./books:/books
+    environment:
+      # error, warn, info or debug.
+      RUST_LOG: info
+    logging:
+      # Docker's default json-file driver never rotates on its own.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

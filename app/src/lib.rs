@@ -2,6 +2,7 @@ pub mod app_data;
 pub mod commands;
 pub mod error;
 pub mod libsrc;
+pub mod native;
 pub mod state;
 
 use tauri::Manager;
@@ -12,7 +13,12 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(native::init())
         .invoke_handler(tauri::generate_handler![
+            native::storage_granted,
+            native::request_storage,
+            native::pick_folder,
+            native::system_insets,
             commands::list_libraries,
             commands::add_local_library,
             commands::add_remote_library,

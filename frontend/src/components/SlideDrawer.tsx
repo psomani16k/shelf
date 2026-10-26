@@ -154,7 +154,7 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
   return (
     <div
       ref={rootRef}
-      className="group fixed inset-0 overflow-hidden bg-background [--push:1] landscape:[--push:0.5]"
+      className="group safe-area fixed inset-0 overflow-hidden bg-background [--push:1] landscape:[--push:0.5]"
       style={{ "--p": progressOf(open) } as CSSProperties}
       // A drag that ends over a button must not also click it.
       onClickCapture={(e) => {
@@ -164,6 +164,8 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
         e.stopPropagation()
       }}
     >
+      {/* Absolute children fill this box, which the safe-area padding keeps clear of the system bars. */}
+      <div className="relative size-full">
       <div
         className={`absolute inset-0 flex flex-col ${moves}`}
         style={{ transform: pushed }}
@@ -217,6 +219,7 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
           {right.content}
         </aside>
       )}
+      </div>
     </div>
   )
 }

@@ -129,3 +129,14 @@
     @apply font-sans;
     }
 }
+/* The phone's status bar, navigation bar and cutout. The app sets these from native insets. */
+:root {
+  --inset-top: 0px;
+  --inset-right: 0px;
+  --inset-bottom: 0px;
+  --inset-left: 0px;
+}
+
+@utility safe-area {
+  padding: var(--inset-top) var(--inset-right) var(--inset-bottom) var(--inset-left);
+}
