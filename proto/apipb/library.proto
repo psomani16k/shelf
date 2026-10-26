@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package apipb;
+
+// Re-hashes every book, ignoring `last_update_time`, and rebuilds the index from the results.
+message RebuildIndexRequest {}
+
+message RebuildIndexResponse {
+  // Book files found in the library.
+  uint32 books = 1;
+  // Files that couldn't be read or parsed; retried on their next change or start.
+  uint32 failed = 2;
+  // `.shelf/books/` entries deleted because no file has their id any more.
+  uint32 removed = 3;
+}

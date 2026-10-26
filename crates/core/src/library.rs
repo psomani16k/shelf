@@ -7,12 +7,11 @@ use std::{
 
 use anyhow::{Context, anyhow};
 
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListBooksResponseItem, ListDirectoriesRequest,
-        ListDirectoriesResponse, SetProgressRequest, SetStateRequest,
+        ListDirectoriesResponse, RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     bookkeeping::{BookMetadata, BookProgress, EpubProgress, book_file_type},
     config::Config,
@@ -34,6 +33,8 @@ pub struct BookLibrary {
     metadata: Arc<RwLock<Vec<BookMetadata>>>,
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
     config_lock: Mutex<()>,
+    // A second rebuild waits for the first instead of hashing everything twice at once.
+    rebuild_lock: Mutex<()>,
     // Dropping it closes the extractor's channel, which ends the extractor task.
     _watcher: LibraryWatcher,
 }
@@ -52,9 +53,9 @@ impl BookLibrary {
         watcher.watch().await?;
         // Events that arrive during the sync wait in `recv` until the extractor starts.
         let (root, keeper, metadata) = tokio::task::spawn_blocking(move || {
-            sync_library(&root)?;
+            sync_library(&root, false)?;
             let keeper = BookKeeper::new(&root)?;
-            let metadata = load_metadata(&keeper)?;
+            let metadata = keeper.all_book_metadata()?;
             anyhow::Ok((root, keeper, metadata))
         })
         .await??;
@@ -66,6 +67,7 @@ impl BookLibrary {
             keeper,
             metadata,
             config_lock: Mutex::new(()),
+            rebuild_lock: Mutex::new(()),
             _watcher: watcher,
         })
     }
@@ -83,21 +85,6 @@ impl BookLibrary {
         let keeper = self.keeper.clone();
         tokio::task::spawn_blocking(move || f(keeper)).await?
     }
-}
-
-/// Reads every `.shelf/books/*/metadata.json`. Blocks: call it inside `spawn_blocking`.
-fn load_metadata(keeper: &BookKeeper) -> anyhow::Result<Vec<BookMetadata>> {
-    Ok(keeper
-        .all_book_hashes()?
-        .into_par_iter()
-        .filter_map(|hash| match keeper.book_metadata(&hash) {
-            Ok(meta) => meta,
-            Err(e) => {
-                warn!(id = %hash, error = %e, "skipped unreadable metadata");
-                None
-            }
-        })
-        .collect())
 }
 
 /// Returns the folder with slashes trimmed (`""` is the root) and the prefix its contents' paths start with.
@@ -258,5 +245,21 @@ impl Library for BookLibrary {
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         let _guard = self.config_lock.lock().await;
         Ok(update_config(self.keeper.root(), &patch).await?)
+    }
+
+    async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
+        let _guard = self.rebuild_lock.lock().await;
+        let (report, metadata) = self
+            .with_keeper(|k| {
+                let report = sync_library(k.root(), true)?;
+                anyhow::Ok((report, k.all_book_metadata()?))
+            })
+            .await?;
+        *self.metadata.write().await = metadata;
+        Ok(RebuildIndexResponse {
+            books: report.books as u32,
+            failed: report.failed as u32,
+            removed: report.removed as u32,
+        })
     }
 }

@@ -8,12 +8,12 @@
 |---|---|
 | `main.rs` | Desktop entry; calls `app_lib::run()` |
 | `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (log plugin, `AppState`) |
-| `state.rs` | `AppState`: the stored library list and the currently open library |
-| `app_data.rs` | `AppData`: the library list, persisted with tauri-plugin-store |
+| `state.rs` | `AppState`: the stored library list and the currently open library (opened by name) |
+| `app_data.rs` | `AppData`: the library list and the current library's name, persisted with tauri-plugin-store; `validate_name` |
 | `commands.rs` | Library management commands and the `Library` passthroughs |
-| `error.rs` | `CommandError { status, message }`, the only place command errors are logged |
+| `error.rs` | `CommandError { status, message }`, the only place command errors are logged; `CommandError::invalid` for 400s |
 | `native.rs` | The `shelf` plugin: storage permission, folder picker, system insets (Android) |
-| `libsrc/mod.rs` | `LibrarySource` (what's stored) and `AnyLibrary` (what's open) |
+| `libsrc/mod.rs` | `LibrarySource` (what's stored, with `name()`) and `AnyLibrary` (what's open) |
 | `libsrc/local.rs` | `LocalLibraryBuilder` / `LocalLibrary` over `shelf_core::BookLibrary` |
 | `libsrc/remote.rs` | `RemoteLibraryBuilder` / `RemoteLibrary`, an HTTP client for `shelf-server` |
 | `libsrc/app_library.rs` | `AppLibrary` trait: `get_name`, `get_builder` |
@@ -26,35 +26,37 @@ Tauri commands are like Go HTTP handlers registered on a mux: `#[tauri::command]
 
 ```rust
 pub struct AppState {
-    pub data: tokio::sync::Mutex<AppData>,            // the stored library list
+    pub data: tokio::sync::Mutex<AppData>,            // the stored libraries and the current name
     library: tokio::sync::Mutex<Option<Arc<AnyLibrary>>>, // the open one
 }
 ```
 
 - `AppState::load` runs in `setup` and reads `AppData` from the store. No library is open yet.
-- `open_library(index)` → `AppState::open`: clones the `LibrarySource` at `index`, builds it, and replaces the open library. The `on_change` it passes emits the `library-changed` event. For a local library, building runs `BookLibrary::open`, so the command resolves only after the startup sync. Dropping the previous `Arc` stops its watcher.
+- Libraries are identified by **name**: required, trimmed, unique ignoring case (`app_data::validate_name`). A bad name, path or URL rejects with a 400 `CommandError` (logged at debug), not a 500.
+- `add_local_library(name, path)` / `add_remote_library(name, baseUrl)` add the library and make it the **current** one (the frontend then switches to it).
+- `select_library(name)` makes a library current without opening it; the frontend's open query does that.
+- `open_library(name)` → `AppState::open`: clones that `LibrarySource`, builds it, and replaces the open library. The `on_change` it passes emits the `library-changed` event. For a local library, building runs `BookLibrary::open`, so the command resolves only after the startup sync. Dropping the previous `Arc` stops its watcher.
 - Passthrough commands get the library with `state.library()`, which errors with "no library is open" before `open_library`.
-- `remove_library(index)` removes, saves, and closes the open library (with one library stored, the removed one is always the open one).
-
-The frontend currently uses only index `0`; the Rust side already stores a list so more libraries can come later.
+- `remove_library(name)` forgets the library on this device (its folder or server is untouched), clears `current` if it was current, and closes it if it's the open one (`AppState::open_name`).
 
 ## Stored data
 
 `AppData` lives in the app's private data directory, never in a library:
 
-- Store file `app_data.json`, key `libraries`, via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
+- Store file `app_data.json`, keys `libraries` and `current` (the name of the library to open on start), via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
 - Each entry is a serde externally tagged `LibrarySource`:
 
 ```json
 {
   "libraries": [
     { "Local": { "root": "/storage/emulated/0/Books", "name": "Books" } },
-    { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "nas" } }
-  ]
+    { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "NAS" } }
+  ],
+  "current": "NAS"
 }
 ```
 
-A missing or unreadable list loads as empty (with a warning) rather than blocking the app.
+A missing or unreadable list loads as empty (with a warning) rather than blocking the app. Libraries from before names were required already had one (the folder name or host), so they load unchanged. Two remote libraries on the same server share one download cache, since it's keyed by content hash.
 
 ## Local libraries
 

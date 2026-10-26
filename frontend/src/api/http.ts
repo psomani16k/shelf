@@ -9,6 +9,11 @@ import {
 } from "@bufbuild/protobuf"
 import { ApiErrorSchema } from "@/gen/apipb/error_pb"
 import {
+  RebuildIndexRequestSchema,
+  type RebuildIndexResponse,
+  RebuildIndexResponseSchema,
+} from "@/gen/apipb/library_pb"
+import {
   ListBooksRequestSchema,
   type ListBooksResponse,
   ListBooksResponseSchema,
@@ -47,6 +52,7 @@ export const httpBackend: Backend = {
   setState,
   getConfig,
   setConfig,
+  rebuildIndex,
   getCover,
   getBookFile,
 }
@@ -101,6 +107,10 @@ export async function getConfig(): Promise<Config> {
 export async function setConfig(patch: MessageInitShape<typeof ConfigSchema>): Promise<Config> {
   const res = await send("/config/set", jsonBody(ConfigSchema, patch))
   return fromJson(ConfigSchema, (await res.json()) as JsonValue, decodeOptions)
+}
+
+export function rebuildIndex(): Promise<RebuildIndexResponse> {
+  return post("/library/rebuild", RebuildIndexRequestSchema, {}, RebuildIndexResponseSchema)
 }
 
 export async function getCover(id: string): Promise<Blob> {

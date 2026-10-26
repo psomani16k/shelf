@@ -10,20 +10,30 @@ export type LibraryInfo = {
   location: string
 }
 
-export const listLibraries = () => invokeCommand<LibraryInfo[]>("list_libraries")
+export type Libraries = {
+  /** The library the app opens; unset before the first one is added or after it's removed. */
+  current: string | null
+  libraries: LibraryInfo[]
+}
 
-export const addLocalLibrary = (path: string) =>
-  invokeCommand<LibraryInfo>("add_local_library", { path })
+export const listLibraries = () => invokeCommand<Libraries>("list_libraries")
+
+/** Names are required and unique (ignoring case); a bad one rejects with a 400. */
+export const addLocalLibrary = (name: string, path: string) =>
+  invokeCommand<LibraryInfo>("add_local_library", { name, path })
 
 /** `baseUrl` is the server's origin, e.g. `http://nas:8080`; `http://` is assumed when left out. */
-export const addRemoteLibrary = (baseUrl: string) =>
-  invokeCommand<LibraryInfo>("add_remote_library", { baseUrl })
+export const addRemoteLibrary = (name: string, baseUrl: string) =>
+  invokeCommand<LibraryInfo>("add_remote_library", { name, baseUrl })
 
-export const removeLibrary = (index: number) =>
-  invokeCommand<void>("remove_library", { index })
+/** Makes it the library the app opens, now and on the next start. */
+export const selectLibrary = (name: string) => invokeCommand<void>("select_library", { name })
+
+/** Forgets the library on this device; nothing in its folder is deleted. */
+export const removeLibrary = (name: string) => invokeCommand<void>("remove_library", { name })
 
 /** Resolves once the library is ready to browse; a local one syncs its `.shelf/` first. */
-export const openLibrary = (index: number) => invokeCommand<void>("open_library", { index })
+export const openLibrary = (name: string) => invokeCommand<void>("open_library", { name })
 
 /** Android: whether the app may read the device's files. Always true elsewhere. */
 export const storageGranted = () => invokeCommand<boolean>("storage_granted")

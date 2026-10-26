@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "apipb/error.proto",
         "apipb/progress.proto",
         "apipb/state.proto",
+        "apipb/library.proto",
     ];
 
     let descriptors = protox::compile(files, [PROTO_ROOT])?;

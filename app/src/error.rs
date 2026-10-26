@@ -10,6 +10,18 @@ pub struct CommandError {
     message: String,
 }
 
+impl CommandError {
+    /// Bad input from the user, such as a duplicate library name: a 400, logged at debug.
+    pub fn invalid(e: anyhow::Error) -> Self {
+        let message = format!("{e:#}");
+        debug!(error = %message, "invalid input");
+        Self {
+            status: 400,
+            message,
+        }
+    }
+}
+
 impl From<LibraryError> for CommandError {
     fn from(e: LibraryError) -> Self {
         match e {

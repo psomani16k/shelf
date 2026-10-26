@@ -1,13 +1,11 @@
-use std::{
-    io::ErrorKind,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{io::ErrorKind, path::Path};
 
 use anyhow::Context;
 use shelf_proto::state::State;
 use tokio::{fs, io::AsyncWriteExt};
 use tracing::{debug, warn};
+
+use crate::timeutil::Time;
 
 const SHELF_DIR: &str = ".shelf";
 const STATE_FILE: &str = ".shelf/state.json";
@@ -39,8 +37,11 @@ pub async fn write_state(root: &Path, state: &State) -> anyhow::Result<()> {
 pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let dir = path.parent().context("no parent folder")?;
     let name = path.file_name().context("no file name")?.to_string_lossy();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let tmp = dir.join(format!(".{name}{TMP_MARKER}{}-{nanos}", std::process::id()));
+    let tmp = dir.join(format!(
+        ".{name}{TMP_MARKER}{}-{}",
+        std::process::id(),
+        Time::now().unix_nanos()
+    ));
 
     let result = async {
         let mut file = fs::File::create(&tmp).await?;

@@ -5,7 +5,10 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::{app_data::AppData, libsrc::AnyLibrary};
+use crate::{
+    app_data::AppData,
+    libsrc::{AnyLibrary, app_library::AppLibrary},
+};
 
 /// The watcher synced a book; the frontend refetches its listings.
 const LIBRARY_CHANGED: &str = "library-changed";
@@ -23,17 +26,16 @@ impl AppState {
         })
     }
 
-    /// Opens the library at `index`, replacing the open one. A local library runs its startup
+    /// Opens the library called `name`, replacing the open one. A local library runs its startup
     /// sync here, so this resolves when it's ready to browse.
-    pub async fn open(&self, app: &AppHandle, index: usize) -> Result<()> {
+    pub async fn open(&self, app: &AppHandle, name: &str) -> Result<()> {
         let source = self
             .data
             .lock()
             .await
-            .libraries()
-            .get(index)
+            .find(name)
             .cloned()
-            .with_context(|| format!("no library at index {index}"))?;
+            .with_context(|| format!("there's no library called {name}"))?;
         let app = app.clone();
         let library = source
             .build(move || {
@@ -49,6 +51,10 @@ impl AppState {
 
     pub async fn close(&self) {
         *self.library.lock().await = None;
+    }
+
+    pub async fn open_name(&self) -> Option<String> {
+        self.library.lock().await.as_ref().map(|l| l.get_name())
     }
 
     pub async fn library(&self) -> Result<Arc<AnyLibrary>> {

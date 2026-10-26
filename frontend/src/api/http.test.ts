@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { ApiError, getCover, getProgress, getState, listBooks, setProgress, setState } from "./http"
+import {
+  ApiError,
+  getCover,
+  getProgress,
+  getState,
+  listBooks,
+  rebuildIndex,
+  setProgress,
+  setState,
+} from "./http"
 
 function mockFetch(status: number, body?: unknown) {
   const fetch = vi.fn(async (_url: string, _init?: RequestInit) =>
@@ -69,6 +78,16 @@ describe("http api", () => {
 
     expect(fetch.mock.calls[0][0]).toBe("/api/state/set")
     expect(sentJson(fetch)).toEqual({ last_book_id: "abc" })
+  })
+
+  it("rebuilds the index with an empty request", async () => {
+    const fetch = mockFetch(200, { books: 12, removed: 1 })
+
+    const res = await rebuildIndex()
+
+    expect(fetch.mock.calls[0][0]).toBe("/api/library/rebuild")
+    expect(sentJson(fetch)).toEqual({})
+    expect(res).toMatchObject({ books: 12, failed: 0, removed: 1 })
   })
 
   it("turns error responses into ApiError", async () => {

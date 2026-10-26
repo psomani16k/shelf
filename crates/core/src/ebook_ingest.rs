@@ -8,7 +8,7 @@ use sha1::{Digest, Sha1};
 use shelf_proto::bookkeeping::{BookMetadata, book_file_type};
 use std::fs::{self};
 
-use crate::bookkeeper::BookKeeper;
+use crate::{bookkeeper::BookKeeper, timeutil::Time};
 
 pub struct EbookExtractor {
     book_keeper: BookKeeper,
@@ -28,6 +28,34 @@ impl EbookExtractor {
             book_keeper,
             relative_path: book,
         });
+    }
+
+    /// The book's path relative to the library root, as stored in `metadata.path`.
+    pub fn rel_path(&self) -> String {
+        self.relative_path.to_string_lossy().into_owned()
+    }
+
+    /// The file's modified time, at the precision `last_update_time` is stored with.
+    fn modified(&self) -> anyhow::Result<Time> {
+        let book = self.book_keeper.root().join(&self.relative_path);
+        Ok(Time::from(fs::metadata(book)?.modified()?).whole_seconds())
+    }
+
+    /// `known`'s id when it describes this file and the file hasn't been modified since
+    /// `known` was written, so the book needn't be hashed again.
+    pub fn unchanged_id(&self, known: &BookMetadata) -> anyhow::Result<Option<String>> {
+        if known.path != self.rel_path() || known.id.is_empty() {
+            return Ok(None);
+        }
+        // Missing in metadata from before the field existed; hashing once adds it.
+        let Some(updated) = known
+            .last_update_time
+            .as_deref()
+            .and_then(|t| t.parse::<Time>().ok())
+        else {
+            return Ok(None);
+        };
+        Ok((self.modified()? <= updated).then(|| known.id.clone()))
     }
 
     pub fn extract(&self) -> anyhow::Result<String> {
@@ -56,12 +84,11 @@ impl EbookExtractor {
                             self.relative_path
                         )
                     })?;
-            let path = self.relative_path.to_string_lossy();
-            if meta.path != path || meta.id.is_empty() {
-                meta.path = path.into_owned();
-                meta.id = hash.to_string();
-                self.book_keeper.set_book_metadata(hash, &meta)?;
-            }
+            // Always rewritten: a touched but unchanged file would otherwise be hashed on every start.
+            meta.path = self.rel_path();
+            meta.id = hash.to_string();
+            meta.last_update_time = Some(Time::now().to_string());
+            self.book_keeper.set_book_metadata(hash, &meta)?;
             return Ok(());
         }
         fs::create_dir_all(book_dir)?;
@@ -80,9 +107,10 @@ impl EbookExtractor {
         let metadata = BookMetadata {
             authors: authors,
             title: title,
-            path: self.relative_path.to_string_lossy().to_string(),
+            path: self.rel_path(),
             file_type: book_file_type::Value::Epub as i32,
             id: hash.to_string(),
+            last_update_time: Some(Time::now().to_string()),
         };
         self.book_keeper.set_book_metadata(hash, &metadata)?;
 
@@ -117,5 +145,61 @@ impl EbookExtractor {
             Self::THUMBNAIL_JPEG_QUALITY,
         ))?;
         Ok(jpeg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, time::UNIX_EPOCH};
+
+    use super::*;
+    use crate::timeutil::Duration;
+
+    /// 2025-10-26T04:45:00Z
+    const MTIME: u64 = 1_761_453_900;
+
+    /// `unchanged_id` only looks at the file's mtime, so an empty file stands in for a book.
+    fn book(nanos: u32) -> (tempfile::TempDir, EbookExtractor) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("dune.epub");
+        File::create(&path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::new(MTIME, nanos))
+            .unwrap();
+        let extractor = EbookExtractor::new(root.path(), &path).unwrap();
+        (root, extractor)
+    }
+
+    fn known(path: &str, updated: Option<&str>) -> BookMetadata {
+        BookMetadata {
+            path: path.into(),
+            id: "abc".into(),
+            last_update_time: updated.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unchanged_when_not_modified_since() {
+        let (_root, book) = book(500_000_000);
+        let id = Some("abc".to_owned());
+        // Written in the same second as the file: the stamp has no fraction to compare.
+        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T04:45:00Z"))).unwrap(), id);
+        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T05:00:00Z"))).unwrap(), id);
+    }
+
+    #[test]
+    fn changed_when_modified_since() {
+        let (_root, book) = book(0);
+        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T04:44:59Z"))).unwrap(), None);
+    }
+
+    #[test]
+    fn changed_when_path_or_stamp_differs() {
+        let (_root, book) = book(0);
+        let later = Some("2025-10-26T05:00:00Z");
+        assert_eq!(book.unchanged_id(&known("other.epub", later)).unwrap(), None);
+        assert_eq!(book.unchanged_id(&known("dune.epub", None)).unwrap(), None);
+        assert_eq!(book.unchanged_id(&known("dune.epub", Some("garbage"))).unwrap(), None);
     }
 }

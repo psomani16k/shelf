@@ -9,7 +9,6 @@ import {
   ReaderTheme_Value,
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
-import { IS_TAURI } from "@/lib/platform"
 import { LibrarySection } from "./LibrarySection"
 
 export type Setting = {
@@ -29,7 +28,7 @@ export type Group = { label?: string; settings: Setting[] }
 
 /**
  * Either one per `Config` field, in the same nesting, or a `content` component for settings
- * that don't live in the library config (app-only ones).
+ * that don't live in the library config (actions, and app-only settings behind `IS_TAURI`).
  */
 export type Section = {
   slug: "reader" | "ui" | "library"
@@ -47,10 +46,6 @@ const MARGIN_CHOICES = [
 
 const scrolled = (c: Config) =>
   (c.reader?.flow ?? ReaderFlow_Value.SCROLLED) === ReaderFlow_Value.SCROLLED
-
-const APP_SECTIONS: Section[] = [
-  { slug: "library", label: "Library", icon: LibraryBig, content: LibrarySection },
-]
 
 export const SECTIONS: Section[] = [
   {
@@ -150,5 +145,5 @@ export const SECTIONS: Section[] = [
       },
     ],
   },
-  ...(IS_TAURI ? APP_SECTIONS : []),
+  { slug: "library", label: "Library", icon: LibraryBig, content: LibrarySection },
 ]

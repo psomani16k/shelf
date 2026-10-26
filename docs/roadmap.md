@@ -28,9 +28,9 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 
 ## Library core
 
-- [ ] **Faster startup:** skip hashing unchanged files by recording `size` and `mtime` in `metadata.json` and matching on `rel_path` + `size` + `mtime`; hash only new or changed files.
+- [x] **Faster startup:** done with `last_update_time` vs the file's mtime ([library-format.md](library-format.md#startup-sync)). Possible follow-up: also record the file's `size`, to catch a same-path replacement with an older mtime.
 - [ ] **Watcher flush cap:** flush a path at the latest 60 s after its first event, so a file that keeps changing still syncs.
-- [ ] **Watcher modify filtering:** ignore metadata-only/access events instead of re-hashing the file (TODO in `watcher.rs`).
+- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: `sync_path` checks `unchanged_id` first. A touch still does. (The TODO in `watcher.rs` about filtering event kinds is still there.)
 - [ ] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails (`write_atomic`).
 - [ ] **Keep unknown fields** when rewriting `state.json`, `metadata.json` and `progress.json` (merge into raw JSON as `config.json` does).
 - [ ] **Don't delete unrecognised entries in `.shelf/books/`**, such as sync-tool conflict copies; only remove folders that are valid IDs for books that are gone.
@@ -47,7 +47,7 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
   - Targets: stdout (logcat on Android) and a file in `app_log_dir()` (Linux: `~/.local/share/com.psomani16k.shelf/logs/`), capped with `max_file_size` and `RotationStrategy::KeepSome(n)`.
 - [ ] **Settings → Logs**: *Copy logs* (recent tail, via `tauri-plugin-clipboard-manager`) and *Save logs…* (dialog plugin's save picker, then a Rust command copies the file; check it works on Android).
 - [ ] **Frontend logging**: `src/lib/log.ts` wrapping `debug`/`info`/`warn`/`error`, forwarding to `@tauri-apps/plugin-log` in the app and `console.*` in the browser, plus `error` and `unhandledrejection` handlers.
-- [ ] **Multiple libraries** in the UI (switching, adding a second); the Rust side already stores a list.
+- [x] **Multiple libraries** in the UI: named libraries, a switcher in the library slideover, add/remove in Settings ([frontend.md](frontend.md#libraries-libuseapplibraryts)).
 - [ ] **Android back button**: close the open drawer or settings first. Today the app uses a `MemoryRouter`, so the WebView has no history and back exits the app.
 - [ ] **Offline reading in Remote mode** (M9): books and covers are already cached after download; still needed are offline listings and queued progress writes.
 - [ ] Remote cache housekeeping: evict old files, delete the cache when a library is removed, an overall request timeout.

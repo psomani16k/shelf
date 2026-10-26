@@ -30,6 +30,7 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | POST | `/api/state/set` | `SetStateRequest` `{last_book_id?}` | `204` |
 | POST | `/api/config/get` | none | `Config` |
 | POST | `/api/config/set` | `Config` (a partial patch) | `Config` (the whole merged config) |
+| POST | `/api/library/rebuild` | `RebuildIndexRequest` `{}` | `RebuildIndexResponse` `{books, failed, removed}` |
 | GET | `/api/books/{id}/cover` | — | JPEG bytes |
 | GET | `/api/books/{id}/file` | — | EPUB bytes |
 
@@ -37,6 +38,7 @@ Notes:
 - `directory_path` is relative to the library root, `""` is the root; leading and trailing slashes are trimmed. Books are sorted by title (else file name), folders by name, both case-insensitively.
 - `/cover` and `/file` use tower-http `ServeFile` (Range, `Last-Modified`, content type) and add `Cache-Control: no-store`.
 - `set_progress` without `epub_progress` is a no-op `204`.
+- `/library/rebuild` answers only when the rebuild is done, which takes as long as reading every book file. A second rebuild waits for the first.
 - Every non-API path is the SPA (`crates/server/src/frontend.rs`). Unknown `/api/*` paths return a JSON 404.
 
 ### Errors
@@ -67,6 +69,7 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `set_state` | `{ req: SetStateRequest }` | `null` |
 | `get_config` | none | `Config` |
 | `set_config` | `{ patch: Config }` | `Config` |
+| `rebuild_index` | none | `RebuildIndexResponse`. For a remote library, the server rebuilds its own index |
 | `get_cover` | `{ id }` | `ArrayBuffer` (JPEG) |
 | `get_book_file` | `{ id }` | `ArrayBuffer` (EPUB) |
 
@@ -76,11 +79,14 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 
 | Command | Args | Resolves to | Notes |
 |---|---|---|---|
-| `list_libraries` | none | `LibraryInfo[]` | `{ name, kind: "local" \| "remote", location }` |
-| `add_local_library` | `{ path }` | `LibraryInfo` | Canonicalizes the path, requires a folder; name = folder name |
-| `add_remote_library` | `{ baseUrl }` | `LibraryInfo` | Prepends `http://` if there's no `://`; only http/https; name = host |
-| `remove_library` | `{ index }` | `null` | Also closes the open library |
-| `open_library` | `{ index }` | `null` | Resolves after a local library's startup sync |
+| `list_libraries` | none | `{ current, libraries: LibraryInfo[] }` | `LibraryInfo` is `{ name, kind: "local" \| "remote", location }`; `current` is a name or `null` |
+| `add_local_library` | `{ name, path }` | `LibraryInfo` | Canonicalizes the path, requires a folder; becomes current |
+| `add_remote_library` | `{ name, baseUrl }` | `LibraryInfo` | Prepends `http://` if there's no `://`; only http/https; becomes current |
+| `select_library` | `{ name }` | `null` | Makes it current (persisted); doesn't open it |
+| `remove_library` | `{ name }` | `null` | Forgets it on this device; closes it if open; nothing in the library is deleted |
+| `open_library` | `{ name }` | `null` | Resolves after a local library's startup sync |
+
+Names are required and unique ignoring case. An empty or duplicate name, an unreadable folder or a malformed URL rejects with status 400.
 
 ### Native helpers (`app/src/native.rs`)
 
@@ -93,7 +99,7 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 
 ### Errors
 
-A failed command rejects with `CommandError` `{ status, message }`, the same shape as the server's errors plus a status. `NotFound` → `404 "not found"` (logged at debug). Anything else → `500` with the full `anyhow` chain as the message (logged at error). Unlike the server, the app shows the real message, since the user owns the device. "no library is open" is a 500 from any passthrough called before `open_library`.
+A failed command rejects with `CommandError` `{ status, message }`, the same shape as the server's errors plus a status. `NotFound` → `404 "not found"` (logged at debug). Bad input to the library-management commands (name, folder, URL) → `400` with the reason (logged at debug, `CommandError::invalid`). Anything else → `500` with the full `anyhow` chain as the message (logged at error). Unlike the server, the app shows the real message, since the user owns the device. "no library is open" is a 500 from any passthrough called before `open_library`.
 
 The frontend's `invokeCommand` (`frontend/src/api/tauri.ts`) turns rejections into `ApiError(status, message)`, the same class the HTTP backend throws.
 

@@ -6,7 +6,7 @@ An axum server (`crates/server`) that serves one library over HTTP and serves th
 
 `main.rs`:
 1. Installs JSON logging (`logging::init`).
-2. Opens `BookLibrary` at **`/books`** (fixed) with a no-op `on_change`. This runs the full startup sync, so a big library delays the server's start. The watcher then keeps it current.
+2. Opens `BookLibrary` at **`/books`** (fixed) with a no-op `on_change`. This runs the startup sync, which hashes only new and modified books (all of them on the very first start). The watcher then keeps it current.
 3. Routes: `/api/*` → `api::router()` with the request-ID and access-log layers; everything else → `frontend::serve`.
 4. Listens on **`0.0.0.0:8080`** (fixed). Shuts down gracefully on Ctrl-C or SIGTERM (`docker stop`).
 

@@ -13,10 +13,10 @@ Cross-platform EPUB reader. The library is a plain folder of `.epub` files, with
 - **Book IDs are the SHA-1 of the whole file.** A moved file keeps its ID; an edited one gets a new ID.
 - **Browsing never hashes.** After the startup sync, every `metadata.json` is loaded into an in-memory `RwLock<Vec<BookMetadata>>` inside `BookLibrary` (`crates/core/src/library.rs`). Folder listings filter it by `path`, and the watcher's extractor keeps it up to date. `core` owns the types and logic; the server and the app create and hold a `BookLibrary`.
 - **Keeping `.shelf/` in sync with the library** (`crates/core/src/routines/extractor.rs`):
-  - **On startup:** `sync_library` hashes every book file (rayon, inside `spawn_blocking`), extracts the ones with no `.shelf/books/<id>/`, fixes `path` for moved ones, and deletes `.shelf/books/<id>/` folders no file produced (their progress too).
+  - **On startup:** `sync_library` (rayon, inside `spawn_blocking`) skips hashing a book whose `metadata.json` has the same `path` and a `last_update_time` no earlier than the file's mtime (`EbookExtractor::unchanged_id`). Every other book file is hashed: new ones are extracted, known ones get `path`, `id` and `last_update_time` rewritten. Then `.shelf/books/<id>/` folders no file produced are deleted (their progress too).
   - **While running:** the watcher feeds the `extractor` task, which calls `sync_path` for each changed path.
-  - **Look at the disk, not event types:** `sync_path` extracts a file that exists and drops a gone one from the in-memory index (its folder stays until the next startup, since a move's remove can arrive before its create). Startup and watcher share the same extraction routine (`EbookExtractor`).
-  - **Extraction output is deterministic:** the same file always gives the same bytes. No timestamps or device names, so two devices writing it can't create sync conflicts.
+  - **Look at the disk, not event types:** `sync_path` skips an unchanged file (same `unchanged_id` check, no `on_change`), extracts a new or modified one, and drops a gone one from the in-memory index (its folder stays until the next startup, since a move's remove can arrive before its create). Startup and watcher share the same extraction routine (`EbookExtractor`).
+  - **Extraction output is deterministic:** the same file always gives the same title, authors and thumbnail. The one exception is `last_update_time` in `metadata.json`: when that device last hashed the file, by its own clock (RFC 3339 UTC, whole seconds, via `crate::timeutil::Time`).
 - **The watcher** (`crates/core/src/watcher.rs`):
   - **Scope:** it reports `.epub` paths only, ignoring `.shelf/` and every other dot-file or dot-folder, following the scanner's rule. It filters **before** queuing.
   - **Batching:** a per-path 5 s debounce in a `tokio_util::time::DelayQueue`; a new event for a path resets its timer. There's no upper bound (see `docs/known-issues.md`). Sync work runs on rayon.
@@ -60,7 +60,8 @@ cd app && cargo tauri android build --apk --target aarch64   # signed release AP
   - async APIs, `tokio::spawn` rather than OS threads
   - `tokio::sync` channels and locks, `tokio::time` for timers, `tokio::fs` for file I/O
   - CPU-heavy or blocking work (such as EPUB/ZIP parsing) goes in `tokio::task::spawn_blocking`, never directly in async code
-  - timing-dependent tests use `#[tokio::test(start_paused = true)]`
+  - in `core`, take time from `crate::timeutil`: tokio's `Instant`, `sleep`, `timeout` (monotonic, follow the paused test clock) and `Time`, a wall-clock timestamp wrapping `SystemTime`
+  - timing-dependent tests use `#[tokio::test(start_paused = true)]` (`core` has tokio's `test-util` in dev-dependencies)
   - Existing exception: `core` uses rayon for parallel extraction and hashing, and `BookKeeper` uses blocking `std::fs` (called through `spawn_blocking` / `with_keeper`).
 - **Few comments.** Make the code simple to read instead. Comment only a non-obvious "why" or a trap, in one line. No module essays or comments that repeat what the code says. Put design explanations in docs or chat.
 
@@ -72,7 +73,7 @@ cd app && cargo tauri android build --apk --target aarch64   # signed release AP
 - **Errors are `{ status, message }`-shaped at both boundaries:** the server sends an `ApiError` JSON body (500s say only `internal error`); app commands reject with `CommandError` (500s carry the full message). The frontend turns both into `ApiError`.
 - **The on-disk files use the generated proto types**, serialized with pbjson (snake_case keys, enum names). pbjson ignores unknown fields on read, so only `config.json` keeps fields this build doesn't know (`set_config` merges into the raw JSON). `state.json` and `config.json` are written atomically (temp file + rename); `metadata.json`, `progress.json` and thumbnails use plain `fs::write`.
 - **The frontend never sees file paths**, only book IDs, through the `Backend` interface (`frontend/src/api`). The one exception is the app's library picker, which sends a chosen folder path to Rust.
-- **App-specific frontend behaviour** branches on `IS_TAURI` / `IS_ANDROID` (`frontend/src/lib/platform.ts`). App-only commands live in `frontend/src/api/app.ts`; app-only settings in `APP_SECTIONS` (`components/settings/sections.ts`).
+- **App-specific frontend behaviour** branches on `IS_TAURI` / `IS_ANDROID` (`frontend/src/lib/platform.ts`). App-only commands live in `frontend/src/api/app.ts`; app-only settings render behind `IS_TAURI` inside a settings section's component (e.g. the library list in `components/settings/LibrarySection.tsx`). App libraries are identified by a required, unique name; switching resets every cached query except the library list, so the new library's config and data load fresh.
 - **Android system bars:** the app draws edge to edge. Full-screen surfaces must use the `safe-area` Tailwind utility, which pads by `--inset-*` CSS variables set from the `system_insets` command.
 - **Android storage:** a local library needs all-files access (`MANAGE_EXTERNAL_STORAGE`, granted on a settings page) and the folder comes from the native picker in `ShelfPlugin.kt`; tauri-plugin-dialog's folder picker doesn't work on Android.
 - **Android release signing:** keystore `~/.android/shelf-release.jks` (alias `shelf`), read through the git-ignored `app/gen/android/keystore.properties`. Never print, log or commit its passwords.

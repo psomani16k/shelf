@@ -8,6 +8,7 @@ import {
   toJson,
 } from "@bufbuild/protobuf"
 import { invoke } from "@tauri-apps/api/core"
+import { RebuildIndexResponseSchema } from "@/gen/apipb/library_pb"
 import {
   ListBooksRequestSchema,
   ListBooksResponseSchema,
@@ -57,6 +58,12 @@ export const tauriBackend: Backend = {
     const json = await invokeCommand<JsonValue>("set_config", { patch: encode(ConfigSchema, patch) })
     return fromJson(ConfigSchema, json, decodeOptions)
   },
+  rebuildIndex: async () =>
+    fromJson(
+      RebuildIndexResponseSchema,
+      await invokeCommand<JsonValue>("rebuild_index"),
+      decodeOptions,
+    ),
   // These commands return raw bytes, which arrive as an ArrayBuffer.
   getCover: async (id) =>
     new Blob([await invokeCommand<ArrayBuffer>("get_cover", { id })], { type: "image/jpeg" }),

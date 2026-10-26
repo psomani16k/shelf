@@ -8,6 +8,9 @@ message BookMetadata {
   repeated string authors = 3;
   BookFileType.Value file_type = 4;
   string id = 5;
+  // When this was last written after hashing the file: RFC 3339 UTC, whole seconds (core's `Time`).
+  // A book whose file mtime isn't newer isn't hashed again at startup.
+  optional string last_update_time = 6;
 }
 
 message FolderListing {

@@ -10,7 +10,7 @@ use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest,
+        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     config::Config,
 };
@@ -112,6 +112,10 @@ impl Library for LocalLibrary {
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         self.lib.set_config(patch).await
+    }
+
+    async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
+        self.lib.rebuild_index().await
     }
 }
 

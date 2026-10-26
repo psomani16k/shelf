@@ -18,6 +18,7 @@ export const {
   setState,
   getConfig,
   setConfig,
+  rebuildIndex,
   getCover,
   getBookFile,
 } = api

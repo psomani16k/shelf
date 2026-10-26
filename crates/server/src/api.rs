@@ -15,7 +15,7 @@ use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest,
+        RebuildIndexRequest, RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     config::Config,
 };
@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/state/set", post(set_state))
         .route("/config/get", post(get_config))
         .route("/config/set", post(set_config))
+        .route("/library/rebuild", post(rebuild_index))
         .route("/books/{id}/cover", get(cover))
         .route("/books/{id}/file", get(file))
         // Unknown API paths get a JSON 404 instead of falling through to the frontend.
@@ -97,6 +98,13 @@ async fn set_config(
     Json(patch): Json<Config>,
 ) -> Result<Json<Config>, ApiErrorResponse> {
     Ok(Json(library.set_config(patch).await?))
+}
+
+async fn rebuild_index(
+    State(library): State<AppState>,
+    Json(_req): Json<RebuildIndexRequest>,
+) -> Result<Json<RebuildIndexResponse>, ApiErrorResponse> {
+    Ok(Json(library.rebuild_index().await?))
 }
 
 async fn cover(

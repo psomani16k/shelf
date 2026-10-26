@@ -23,6 +23,7 @@ pub fn run() {
             commands::add_local_library,
             commands::add_remote_library,
             commands::remove_library,
+            commands::select_library,
             commands::open_library,
             commands::list_books,
             commands::list_directories,
@@ -32,6 +33,7 @@ pub fn run() {
             commands::set_state,
             commands::get_config,
             commands::set_config,
+            commands::rebuild_index,
             commands::get_cover,
             commands::get_book_file,
         ])

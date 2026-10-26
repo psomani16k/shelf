@@ -4,7 +4,7 @@ use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest,
+        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     config::Config,
 };
@@ -63,4 +63,8 @@ pub trait Library {
         &self,
         patch: Config,
     ) -> impl Future<Output = Result<Config, LibraryError>> + Send;
+
+    /// Re-hashes every book, ignoring `last_update_time`, and reloads the index. Slow on big
+    /// libraries; for when the index looks wrong.
+    fn rebuild_index(&self) -> impl Future<Output = Result<RebuildIndexResponse, LibraryError>> + Send;
 }

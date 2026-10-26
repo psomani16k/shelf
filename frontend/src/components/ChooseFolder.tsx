@@ -21,6 +21,7 @@ async function chooseFolder(): Promise<string | null> {
 export function ChooseFolder({ label, onPick, disabled, variant, size }: Props) {
   return (
     <Button
+      type="button"
       variant={variant}
       size={size}
       disabled={disabled}

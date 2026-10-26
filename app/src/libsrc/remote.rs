@@ -11,7 +11,7 @@ use shelf_proto::{
     api::{
         ApiError, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest,
+        RebuildIndexRequest, RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     config::Config,
 };
@@ -247,6 +247,13 @@ impl Library for RemoteLibrary {
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         self.api_call(&patch, "/config/set")
+            .await
+            .map_err(to_library_error)
+    }
+
+    /// The server rebuilds its own index; nothing here is cached by path.
+    async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
+        self.api_call(&RebuildIndexRequest {}, "/library/rebuild")
             .await
             .map_err(to_library_error)
     }

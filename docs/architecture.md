@@ -29,6 +29,7 @@ Everything the UI can do to a library is one method on `shelf_core::traits::Libr
 | `get_progress` / `set_progress` | progress as an EPUB CFI string |
 | `get_state` / `set_state` | the last book opened |
 | `get_config` / `set_config(patch)` | library settings; `set_config` merges a partial patch and returns the whole config |
+| `rebuild_index()` | `RebuildIndexResponse`: re-hashes every book (ignoring `last_update_time`), reloads the index, returns counts |
 
 Errors are `LibraryError::NotFound` or `LibraryError::Internal(anyhow::Error)`. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
 
@@ -66,10 +67,10 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 
 1. Deletes temp files left in `.shelf/` by a crash mid-write.
 2. Starts the filesystem watcher (before the sync, so nothing that changes during the sync is missed; its events queue in a channel).
-3. In `spawn_blocking`: runs the full startup sync (`sync_library`), then loads every `.shelf/books/*/metadata.json` into memory.
+3. In `spawn_blocking`: runs the startup sync (`sync_library`, which only hashes new and modified books), then loads every `.shelf/books/*/metadata.json` into memory (`BookKeeper::all_book_metadata`).
 4. Spawns the `extractor` task, which drains the watcher channel, debounces each path for 5 s, re-syncs it, updates the in-memory metadata and calls `on_change`.
 
-Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
+`rebuild_index` runs the same sync with `force` (every book hashed) and swaps in the reloaded metadata. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
 
 `on_change` is a no-op in the server. In the app it emits the `library-changed` Tauri event, and the frontend refetches its folder listings.
 

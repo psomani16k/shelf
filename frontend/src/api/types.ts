@@ -1,5 +1,6 @@
 import type { MessageInitShape } from "@bufbuild/protobuf"
 import type { ListBooksResponse, ListDirectoriesResponse } from "@/gen/apipb/list_pb"
+import type { RebuildIndexResponse } from "@/gen/apipb/library_pb"
 import type { GetProgressResponse } from "@/gen/apipb/progress_pb"
 import type { GetStateResponse } from "@/gen/apipb/state_pb"
 import type { Config, ConfigSchema } from "@/gen/configpb/config_pb"
@@ -23,6 +24,8 @@ export type Backend = {
   getConfig: () => Promise<Config>
   /** Only the fields set in `patch` change; resolves to the whole config. */
   setConfig: (patch: MessageInitShape<typeof ConfigSchema>) => Promise<Config>
+  /** Re-hashes every book and reloads the index. Takes as long as reading the whole library. */
+  rebuildIndex: () => Promise<RebuildIndexResponse>
   /** The thumbnail JPEG. Rejects with a 404 `ApiError` when the book has no cover. */
   getCover: (id: string) => Promise<Blob>
   /** The EPUB file, ready for foliate-js. */

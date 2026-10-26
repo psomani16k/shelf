@@ -7,7 +7,7 @@ use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest,
+        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
     },
     config::Config,
 };
@@ -29,6 +29,13 @@ pub enum LibrarySource {
 }
 
 impl LibrarySource {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Local(builder) => builder.name(),
+            Self::Remote(builder) => builder.name(),
+        }
+    }
+
     /// `on_change` fires when a local library's watcher syncs a book; a server pushes nothing.
     pub async fn build(self, on_change: impl Fn() + Send + Sync + 'static) -> Result<AnyLibrary> {
         Ok(match self {
@@ -95,6 +102,10 @@ impl Library for AnyLibrary {
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         dispatch!(self, lib => lib.set_config(patch).await)
+    }
+
+    async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
+        dispatch!(self, lib => lib.rebuild_index().await)
     }
 }
 

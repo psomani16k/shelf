@@ -5,7 +5,7 @@ import { BrowserRouter, MemoryRouter } from "react-router"
 import { onLibraryChanged, openLibrary } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
 import { IS_TAURI } from "@/lib/platform"
-import { useLibraries } from "@/lib/useAppLibrary"
+import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { useSystemInsets } from "@/lib/useSystemInsets"
 import { Home } from "@/screens/Home"
 import { OpenFailed } from "@/screens/OpenFailed"
@@ -37,11 +37,10 @@ function AppFlow() {
   )
 
   const libraries = useLibraries()
-  // One library for now; the Rust side already stores a list.
-  const current = libraries.data?.[0]
+  const current = useCurrentLibrary()
   const open = useQuery({
-    queryKey: ["open-library", current?.kind, current?.location],
-    queryFn: () => openLibrary(0),
+    queryKey: ["open-library", current?.name],
+    queryFn: () => openLibrary(current!.name),
     enabled: !!current,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -56,13 +55,17 @@ function AppFlow() {
       </CenteredScreen>
     )
   }
-  if (libraries.isError) return <OpenFailed error={libraries.error} />
+  if (libraries.isError) {
+    return <OpenFailed error={libraries.error} onRetry={() => void libraries.refetch()} />
+  }
   if (!current) return <PickLibrary />
   if (open.isPending) return <Syncing />
-  if (open.isError) return <OpenFailed error={open.error} />
+  if (open.isError) {
+    return <OpenFailed library={current} error={open.error} onRetry={() => void open.refetch()} />
+  }
   return (
-    // In memory, so each library starts at "/" and no URL survives a change of library.
-    <MemoryRouter>
+    // In memory, and keyed, so each library starts at "/" and no URL survives a switch.
+    <MemoryRouter key={current.name}>
       <Home />
     </MemoryRouter>
   )

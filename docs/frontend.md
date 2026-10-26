@@ -9,20 +9,21 @@ Stack: React 19, Vite 8, TypeScript 6, Tailwind CSS v4, shadcn/ui on Base UI (No
 | Path | What |
 |---|---|
 | `main.tsx` | Creates the `QueryClient`, hooks up cover URL revocation, renders `App` |
-| `App.tsx` | Web: `<BrowserRouter><Home/>`. App: `AppFlow` (pick → open → `<MemoryRouter><Home/>`) |
+| `App.tsx` | Web: `<BrowserRouter><Home/>`. App: `AppFlow` (pick → open the current library → `<MemoryRouter key={name}><Home/>`) |
 | `api/` | The backend layer (below) |
 | `screens/Home.tsx` | The main screen for both: library drawer, reader, contents drawer, settings route |
 | `screens/Settings.tsx` | Settings overlay: sidebar on wide screens, list → section on phones |
 | `screens/PickLibrary.tsx`, `OpenFailed.tsx`, `Syncing.tsx` | App-only screens before a library is open |
+| `components/AddLibraryForm.tsx`, `LibrarySwitcher.tsx`, `RemoveLibraryConfirm.tsx` | App-only library management: add (name + folder or server), switch, remove with an inline confirm |
 | `components/Reader.tsx` | foliate-js wrapper: open at saved position, input handling, progress saving |
-| `components/LibraryPanel.tsx` | Folder/book grid with breadcrumb |
+| `components/LibraryPanel.tsx` | Folder/book grid with breadcrumb; in the app, the library switcher above its bottom bar |
 | `components/TocPanel.tsx` | Table of contents tree |
 | `components/SlideDrawer.tsx` | Two-sided drawer that follows the finger; drives transforms through one CSS variable `--p` |
 | `components/BookCover.tsx` | Cover in a 2:3 box with a blurred backdrop; icon when there's no cover |
 | `components/ChooseFolder.tsx` | App-only folder picker button (dialog plugin on desktop, `pick_folder` on Android) |
-| `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (app-only) |
+| `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere) |
 | `components/ui/` | shadcn components (button, input, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
-| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags) |
+| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`) |
 | `gen/` | Generated proto code. Git-ignored, never hand-edit |
 | `foliate-js.d.ts` | Types for the parts of foliate-js that Shelf uses |
 
@@ -54,17 +55,23 @@ export const IS_TAURI = isTauri()                                         // ins
 export const IS_ANDROID = IS_TAURI && /android/i.test(navigator.userAgent)
 ```
 
-Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the app-only *Library* settings section, the folder picker and the storage-permission step on Android.
+Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the folder picker and the storage-permission step on Android.
 
 ## App flow (`App.tsx`, app only)
 
 1. `useSystemInsets()` publishes system bar sizes as CSS variables.
 2. Subscribes to `library-changed` → invalidates `["dirs"]` and `["books"]`.
-3. `useLibraries()` (`list_libraries`). Pending → spinner; error → `OpenFailed`; none → `PickLibrary`.
-4. Opens library 0 with a query keyed by `["open-library", kind, location]` (`staleTime`/`gcTime: Infinity`, no retry). Pending → `Syncing`; error → `OpenFailed`.
-5. `<MemoryRouter><Home/></MemoryRouter>`: in memory so each library starts at `/` and no URL survives a change of library.
+3. `useLibraries()` (`list_libraries`) and `useCurrentLibrary()`: the stored `current` if it's still in the list, else the first library. Pending → spinner; error → `OpenFailed`; no library → `PickLibrary`.
+4. Opens the current library with a query keyed by `["open-library", name]` (`staleTime`/`gcTime: Infinity`, no retry). Pending → `Syncing`; error → `OpenFailed` (*Try again*, *Remove this library*, or switch to another).
+5. `<MemoryRouter key={name}><Home/></MemoryRouter>`: in memory and keyed, so each library starts at `/` and no URL or folder survives a switch.
 
-`PickLibrary` offers a local folder (on Android it first asks for storage access) or a server URL. `useForgetLibrary()` (`OpenFailed`, Settings → Library → *Change library*) calls `removeLibrary(0)`, drops every cached query except `["libraries"]`, and refetches the list, which sends the app back to `PickLibrary`.
+### Libraries (`lib/useAppLibrary.ts`)
+
+- **Add** (`AddLibraryForm`: name, then a folder or a server URL; used by `PickLibrary` on first run and by Settings → Library → *Add library*). The name is required and checked against the list (ignoring case) before Rust checks it again. Choosing a folder or leaving the URL field pre-fills an empty name with the folder name or host. Adding switches to the new library.
+- **Switch** (`LibrarySwitcher`, in its own strip just above the library slideover's bottom bar (settings gear), opening upward; also on `OpenFailed`): each entry shows the name and its source (folder path or server URL).
+- **Remove** (red icon per row in Settings → Library, or *Remove this library* on `OpenFailed`): an inline `RemoveLibraryConfirm` explains that nothing in the library is deleted.
+
+Switching, adding, and removing the open library all call `resetLibraryCache`: it removes **every cached query except `["libraries"]`** (books, folders, last book, covers, the open-book file and `["library-config"]`), then refetches the list. `AppFlow` then opens the new current library, and Home remounts and loads that library's own data and **config** (theme, layout, margins). Removing a library that isn't open only refetches the list.
 
 ## Home and reading
 
@@ -80,7 +87,7 @@ Evaluated once at load. This is the switch for app-specific behaviour. Current u
 
 - `["library-config"]` → `getConfig`, read once; `setConfig` results are written straight into that cache.
 - `resolveAppearance` (`lib/appearance.ts`) turns `Config` into concrete values; unset fields mean the proto zero value. `useAppearance` also toggles the `dark` class on `<html>`.
-- `components/settings/sections.ts` defines sections. A section is either `groups` of `Setting`s (each bound to a `Config` field via `read`/`patch`, shown as a `Select`) or a `content` component for settings that aren't in the library config. `APP_SECTIONS` (currently *Library*) is appended only when `IS_TAURI`. Add future app-only settings (e.g. Logs) there.
+- `components/settings/sections.ts` defines sections. A section is either `groups` of `Setting`s (each bound to a `Config` field via `read`/`patch`, shown as a `Select`) or a `content` component for settings that aren't in the library config. *Library* (`LibrarySection.tsx`) is shown everywhere: *Rebuild index* for all, and, only when `IS_TAURI`, the list of libraries (red remove icon per row, *Add library* at the bottom). App-only settings go behind `IS_TAURI` inside a section's component, with their hooks in a separate component so the web never calls app commands.
 - Library settings live in the library's `.shelf/config.json`, so they're shared by every device using that library.
 
 ## Covers

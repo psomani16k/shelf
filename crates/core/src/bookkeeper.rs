@@ -4,10 +4,11 @@ use std::{
 };
 
 use anyhow::Ok;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
 use std::fs::{self};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookKeeper {
@@ -83,6 +84,21 @@ impl BookKeeper {
             return Ok(Some(meta));
         }
         Ok(None)
+    }
+
+    /// Reads every `.shelf/books/*/metadata.json`, skipping unreadable ones with a warning.
+    pub fn all_book_metadata(&self) -> anyhow::Result<Vec<BookMetadata>> {
+        Ok(self
+            .all_book_hashes()?
+            .into_par_iter()
+            .filter_map(|hash| match self.book_metadata(&hash) {
+                std::result::Result::Ok(meta) => meta,
+                Err(e) => {
+                    warn!(id = %hash, error = %e, "skipped unreadable metadata");
+                    None
+                }
+            })
+            .collect())
     }
 
     pub fn set_book_metadata(&self, hash: &str, metadata: &BookMetadata) -> anyhow::Result<()> {

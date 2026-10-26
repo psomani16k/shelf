@@ -3937,6 +3937,7 @@ dependencies = [
  "anyhow",
  "fast_image_resize",
  "image",
+ "jiff",
  "notify",
  "rayon",
  "rbook",

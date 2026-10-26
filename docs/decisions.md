@@ -27,7 +27,7 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 
 - **Sync conflict resolution.** Syncing the folder is the sync tool's job.
 - **Live syncing between devices in use at the same time.** One user, one device at a time: progress is read when a book opens. No "progress changed" events and no "jump to newer position" prompts.
-- Windows, macOS and iOS (but don't break them needlessly).
+- Native Windows, macOS and iOS apps (but don't break them needlessly). Distributing them without warnings needs paid signing: Apple's $99/year developer program (iOS also needs a Mac to build, and free installs expire after 7 days), and Windows code signing (Microsoft's Artifact Signing is open to individuals only in the US and Canada). Not worth it for a personal project. On those devices, use the web UI from `shelf-server` in a browser.
 - Play Store distribution. This is what allows the Android all-files-access approach.
 - Multi-user features beyond a simple login (and the login isn't built yet).
 
@@ -49,7 +49,7 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 | Positions | EPUB CFI strings | Stable across screen sizes, fonts and devices |
 | Progress storage | One file per book, last writer wins | Conflicts are out of scope |
 | Book ID | SHA-1 of the file's bytes | Stable across moves and renames; needs nothing from the EPUB |
-| Extracted metadata | Stored in the library's `.shelf/`, deterministic output | Each book is extracted once, not on every device, and syncs with the library |
+| Extracted metadata | Stored in the library's `.shelf/`; deterministic apart from `last_update_time` | Each book is extracted once, not on every device, and syncs with the library |
 | Library settings | `.shelf/config.json`, merged by partial patches | Settings follow the library to every device |
 | App-to-server HTTP | From Rust (`reqwest` via tauri-plugin-http), behind the same `Library` trait as local folders | No CORS or cookie issues in the WebView; the frontend has one backend per platform |
 | Covers and books in the app | Raw bytes over IPC (`ipc::Response`) → Blob → object URL | WebKitGTK won't load custom URI schemes from the `http://` dev page |
@@ -75,7 +75,7 @@ The UI works only with book IDs, through one `Backend` interface with an HTTP an
 | The plan said | What was built, and why |
 |---|---|
 | Book ID from the OPF `unique-identifier` (SHA-256, 16 hex chars), file hash as fallback | SHA-1 of the file, always. Simpler; the cost is that editing a book changes its ID (see [roadmap.md](roadmap.md)) |
-| Metadata cache outside the library, keyed by path/size/mtime | Metadata in `.shelf/books/<id>/`, so it's extracted once and syncs. Startup re-hashes every file instead of checking size/mtime |
+| Metadata cache outside the library, keyed by path/size/mtime | Metadata in `.shelf/books/<id>/`, so it's extracted once and syncs. Startup skips hashing a book whose mtime isn't newer than its `last_update_time` (the time this device last hashed it), at the cost of `metadata.json` differing per device |
 | Progress at `.shelf/progress/<id>.json` with `fraction`, `chapter`, `updated`, `device` | `.shelf/books/<id>/progress.json` with the CFI only |
 | Hand-written serde structs for on-disk files, preserving unknown fields | The generated proto types, via pbjson. Only `config.json` keeps unknown fields |
 | Atomic writes staged in `.shelf/tmp/` | Temp file next to the target, then rename (same filesystem, nothing to ignore in sync tools). Only `state.json` and `config.json` so far |

@@ -4,5 +4,6 @@ pub mod ebook_ingest;
 pub mod library;
 pub mod routines;
 pub mod state;
+pub mod timeutil;
 pub mod traits;
 pub mod watcher;

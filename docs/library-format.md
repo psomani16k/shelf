@@ -44,11 +44,14 @@ All files are pretty-printed JSON using the **proto JSON shape**: snake_case key
   "title": "Dune",
   "authors": ["Frank Herbert"],
   "file_type": "EPUB",
-  "id": "3f786850e387550fdab836ed7e6dc881de23001b"
+  "id": "3f786850e387550fdab836ed7e6dc881de23001b",
+  "last_update_time": "2026-10-26T04:45:00Z"
 }
 ```
 
-`path` is relative to the library root with `/` separators. Written once at extraction; afterwards only `path` (and `id`, if empty) is rewritten when the file moves. Extraction output is deterministic: no timestamps or device names, so two devices writing it produce the same bytes.
+`path` is relative to the library root with `/` separators. `last_update_time` is when the metadata was last written after hashing the file (RFC 3339 UTC, whole seconds, from `crate::timeutil::Time`); it lets the startup sync skip hashing unchanged books. Title, authors and the thumbnail are extracted once; each later hash of the same file rewrites only `path`, `id` and `last_update_time`.
+
+The extracted fields are deterministic, but `last_update_time` is each device's own clock, so two devices that both hash a book write different bytes (see [known-issues.md](known-issues.md#data-safety)).
 
 ### `thumbnail.jpeg`
 
@@ -88,15 +91,20 @@ Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "no
 `sync_library` (`crates/core/src/routines/extractor.rs`) runs on every `BookLibrary::open`, in a blocking thread, with rayon over all files:
 
 1. List every `.shelf/books/<id>` folder.
-2. For every book file: read and SHA-1 the whole file, then
-   - if `.shelf/books/<id>/` exists: fix `path` in `metadata.json` if the file moved;
-   - otherwise: create the folder, parse the EPUB with `rbook`, write `metadata.json` and the thumbnail.
-3. Delete every `.shelf/books/<id>/` folder whose ID no file produced. **This deletes that book's progress too.**
-4. Log `library synced` with `books`, `failed` and `removed` counts.
+2. Load every `metadata.json`, keyed by `path`.
+3. For every book file:
+   - **Skip hashing** (`EbookExtractor::unchanged_id`) when a `metadata.json` has this `path`, a non-empty `id`, and a `last_update_time` no earlier than the file's mtime (both compared to the whole second). The stored `id` is used as is.
+   - Otherwise read and SHA-1 the whole file, then
+     - if `.shelf/books/<id>/` exists: rewrite `path`, `id` and `last_update_time` in its `metadata.json` (always, so a touched but identical file is hashed once, not on every start);
+     - otherwise: create the folder, parse the EPUB with `rbook`, write `metadata.json` (with `last_update_time`) and the thumbnail.
+4. Delete every `.shelf/books/<id>/` folder whose ID no file produced. **This deletes that book's progress too.**
+5. Log `library synced` with `books`, `hashed`, `skipped`, `failed` and `removed` counts.
 
 A file that fails (for example half-copied) is logged at `warn` and retried on the next watcher event or startup.
 
-Because every file is hashed, startup time grows with the total size of the library, on every start. Matching by `rel_path`/`size`/`mtime` instead is on the [roadmap](roadmap.md#library-core).
+So only new and modified books are hashed; an unchanged library starts with one `stat` per book plus reading its `metadata.json`. Metadata written before `last_update_time` existed has no stamp, so the first start after upgrading hashes everything once and adds it.
+
+**Rebuild index** (*Settings → Library*, `Library::rebuild_index`) runs the same sync with `force` set: every book is hashed regardless of `last_update_time`, then the in-memory index is replaced with what's on disk. It fixes stale IDs (such as a same-path replacement with an older mtime) and re-stamps every book. Title, authors and thumbnails of known books aren't re-extracted.
 
 After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetadata>` behind a `tokio::sync::RwLock`. Browsing (`list_books`, `list_sub_directories`) and ID checks only read that list; they never touch the disk or hash anything.
 
@@ -110,7 +118,8 @@ After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetad
 
 The `extractor` task (`routines/extractor.rs`) debounces with a `tokio_util::time::DelayQueue`: each path fires **5 s after its last event**; a new event for the same path resets its timer. There is no 60 s upper bound yet ([roadmap](roadmap.md#library-core)). When a path fires, `sync_path` runs on the rayon pool:
 
-- File exists → extract it (same routine as the startup sync) and upsert its metadata in memory, matched by ID, so a moved book only changes `path`.
+- File exists and is unchanged (the same `unchanged_id` check against its in-memory metadata) → nothing to do; logged at `debug`, and `on_change()` isn't called.
+- File exists and is new or modified → extract it (same routine as the startup sync) and upsert its metadata in memory, matched by ID, so a moved book only changes `path`.
 - File is gone → remove entries with that `path` from memory. The `.shelf/books/<id>/` folder stays until the next startup sync, because a move's remove event can arrive before its create event.
 
-Then `on_change()` is called. It doesn't look at event kinds (add, rename, …): it just looks at the disk.
+Otherwise `on_change()` is called. It doesn't look at event kinds (add, rename, …): it just looks at the disk.

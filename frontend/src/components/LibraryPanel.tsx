@@ -2,9 +2,11 @@ import { useQuery } from "@tanstack/react-query"
 import { ChevronRight, Folder, LoaderCircle, Settings, X } from "lucide-react"
 import { listBooks, listDirectories } from "@/api"
 import { BookCover } from "@/components/BookCover"
+import { LibrarySwitcher } from "@/components/LibrarySwitcher"
 import { Button } from "@/components/ui/button"
 import type { ListBooksResponseItem } from "@/gen/apipb/list_pb"
 import { bookAuthors, itemTitle } from "@/lib/book"
+import { IS_TAURI } from "@/lib/platform"
 
 type Props = {
   /** Relative to the library root; `""` is the root. */
@@ -65,6 +67,7 @@ export function LibraryPanel({
         )}
       </div>
 
+      {IS_TAURI && <LibrarySwitcher side="top" className="border-t p-2" />}
       <div className="flex items-center gap-1 border-t p-2">
         <Button variant="ghost" size="icon" onClick={onOpenSettings} aria-label="Settings">
           <Settings />
