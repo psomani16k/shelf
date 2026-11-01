@@ -74,7 +74,7 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 
 ## Local libraries
 
-`LocalLibrary` wraps `BookLibrary` (see [library-format.md](library-format.md)). Added with `add_local_library(path)`: the path is canonicalized and must be a folder; the name is the folder's name.
+`LocalLibrary` wraps `BookLibrary` (see [library-format.md](library-format.md)) and holds a `rebuild_lock`, so a second rebuild waits for the first. Added with `add_local_library(path)`: the path is canonicalized and must be a folder; the name is the folder's name.
 
 ## Remote libraries
 

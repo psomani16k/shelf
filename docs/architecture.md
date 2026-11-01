@@ -33,12 +33,13 @@ Everything the UI can do to a library is one method on `shelf_core::traits::Libr
 
 Errors are `LibraryError::NotFound` or `LibraryError::Internal(anyhow::Error)`. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
 
-Three implementations:
+Four implementations:
 
 | Type | Where | Backed by |
 |---|---|---|
-| `BookLibrary` | `crates/core/src/library.rs` | A folder on disk plus its `.shelf/`. Used by the server and by the app's local libraries. |
-| `LocalLibrary` | `app/src/libsrc/local.rs` | Thin wrapper over `BookLibrary` that also remembers a display name. |
+| `BookLibrary` | `crates/core/src/library.rs` | A folder on disk plus its `.shelf/`. Not used directly: the server and the app's local libraries wrap it. |
+| `ServerLibrary` | `crates/server/src/library.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time. |
+| `LocalLibrary` | `app/src/libsrc/local.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time and remembers a display name. |
 | `RemoteLibrary` | `app/src/libsrc/remote.rs` | HTTP calls to a `shelf-server`, with covers and EPUBs cached on disk so it can hand out `PathBuf`s like the local one. |
 
 On the frontend the same surface is the `Backend` type (`frontend/src/api/types.ts`), implemented by `httpBackend` (fetch) and `tauriBackend` (`invoke`). See [frontend.md](frontend.md).
@@ -70,7 +71,7 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 3. In `spawn_blocking`: runs the startup sync (`sync_library`, which only hashes new and modified books), then loads every `.shelf/books/*/metadata.json` into memory (`BookKeeper::all_book_metadata`).
 4. Spawns the `extractor` task, which drains the watcher channel, debounces each path for 5 s, re-syncs it, updates the in-memory metadata and calls `on_change`.
 
-`rebuild_index` runs the same sync with `force` (every book hashed) and swaps in the reloaded metadata. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
+`rebuild_index` runs the same sync with `force` (every book hashed) and swaps in the reloaded metadata. `BookLibrary` doesn't stop two rebuilds running at once; its wrappers (`ServerLibrary`, `LocalLibrary`) each hold a `rebuild_lock`, so a second rebuild waits for the first. `RemoteLibrary` has none, since the server's lock covers it. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
 
 `on_change` is a no-op in the server. In the app it emits the `library-changed` Tauri event, and the frontend refetches its folder listings.
 

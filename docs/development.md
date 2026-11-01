@@ -68,7 +68,7 @@ Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with 
 2. **Trait**: a method on `Library` in `crates/core/src/traits.rs`.
 3. **Core**: implement it on `BookLibrary` (`crates/core/src/library.rs`). Blocking file work through `with_keeper` / `spawn_blocking`.
 4. **App**: forward it in `LocalLibrary` (`libsrc/local.rs`), implement it with `api_call` in `RemoteLibrary` (`libsrc/remote.rs`), add a `dispatch!` arm in `AnyLibrary` (`libsrc/mod.rs`).
-5. **Server**: a handler and route in `crates/server/src/api.rs`.
+5. **Server**: forward it in `ServerLibrary` (`crates/server/src/library.rs`), then a handler and route in `crates/server/src/api.rs`.
 6. **App command**: a `#[tauri::command]` in `app/src/commands.rs`, added to `generate_handler!` in `app/src/lib.rs`.
 7. **Frontend**: add it to `Backend` (`api/types.ts`), `httpBackend` (`api/http.ts`), `tauriBackend` (`api/tauri.ts`) and the named exports in `api/index.ts`.
 

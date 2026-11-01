@@ -6,7 +6,7 @@ An axum server (`crates/server`) that serves one library over HTTP and serves th
 
 `main.rs`:
 1. Installs JSON logging (`logging::init`).
-2. Opens `BookLibrary` at **`/books`** (fixed) with a no-op `on_change`. This runs the startup sync, which hashes only new and modified books (all of them on the very first start). The watcher then keeps it current.
+2. Opens `ServerLibrary` (a `BookLibrary` plus a lock so only one rebuild runs at a time) at **`/books`** (fixed) with a no-op `on_change`. This runs the startup sync, which hashes only new and modified books (all of them on the very first start). The watcher then keeps it current.
 3. Routes: `/api/*` → `api::router()` with the request-ID and access-log layers; everything else → `frontend::serve`.
 4. Listens on **`0.0.0.0:8080`** (fixed). Shuts down gracefully on Ctrl-C or SIGTERM (`docker stop`).
 
@@ -19,7 +19,8 @@ There is no config file, no authentication, no TLS. Put it on a trusted network 
 | File | Role |
 |---|---|
 | `main.rs` | Startup, router assembly, graceful shutdown |
-| `api.rs` | One handler per `Library` method; `AppState = Arc<BookLibrary>`. Routes are listed in [api.md](api.md). |
+| `api.rs` | One handler per `Library` method; `AppState = Arc<ServerLibrary>`. Routes are listed in [api.md](api.md). |
+| `library.rs` | `ServerLibrary`: forwards every `Library` method to its `BookLibrary`, taking `rebuild_lock` around `rebuild_index`. |
 | `error.rs` | `ApiErrorResponse`: `LibraryError` → status + `ApiError` JSON. The only place request errors are logged (404 at debug, 500 at error). |
 | `frontend.rs` | Serves `frontend/dist` embedded with `rust-embed`. Unknown paths get `index.html` (client-side routes). `assets/*` (hashed names) get `Cache-Control: public, max-age=31536000, immutable`, the rest `no-cache`. Built without `dist`, it answers `404 the frontend isn't built`. |
 | `logging.rs` | Subscriber setup and the access-log middleware. |
