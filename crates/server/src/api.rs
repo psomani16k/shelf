@@ -7,10 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use shelf_core::{
-    library::BookLibrary,
-    traits::{Library, LibraryError},
-};
+use shelf_core::traits::{Library, LibraryError};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -23,9 +20,9 @@ use shelf_proto::{
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use crate::error::ApiErrorResponse;
+use crate::{error::ApiErrorResponse, library::ServerLibrary};
 
-pub type AppState = Arc<BookLibrary>;
+pub type AppState = Arc<ServerLibrary>;
 
 pub fn router() -> Router<AppState> {
     Router::new()

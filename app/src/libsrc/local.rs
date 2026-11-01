@@ -14,6 +14,7 @@ use shelf_proto::{
     },
     config::Config,
 };
+use tokio::sync::Mutex;
 
 use crate::libsrc::{LibrarySource, app_library::AppLibrary};
 
@@ -40,16 +41,15 @@ impl LocalLibraryBuilder {
     }
 
     /// Opens the folder: starts its watcher and syncs `.shelf/`, so it takes as long as the sync.
-    pub async fn build(
-        self,
-        on_change: impl Fn() + Send + Sync + 'static,
-    ) -> Result<LocalLibrary> {
+    pub async fn build(self, on_change: impl Fn() + Send + Sync + 'static) -> Result<LocalLibrary> {
         LocalLibrary::new(Path::new(&self.root), self.name, on_change).await
     }
 }
 
 pub struct LocalLibrary {
-    lib: BookLibrary,
+    book_library: BookLibrary,
+    // A second rebuild waits for the first instead of hashing everything twice at once.
+    rebuild_lock: Mutex<()>,
     root: PathBuf,
     name: String,
 }
@@ -63,7 +63,8 @@ impl LocalLibrary {
     ) -> Result<Self> {
         let lib = BookLibrary::open(root.to_path_buf(), on_change).await?;
         Ok(Self {
-            lib,
+            book_library: lib,
+            rebuild_lock: Mutex::new(()),
             root: root.to_path_buf(),
             name,
         })
@@ -72,50 +73,51 @@ impl LocalLibrary {
 
 impl Library for LocalLibrary {
     async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
-        self.lib.list_books(req).await
+        self.book_library.list_books(req).await
     }
 
     async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
-        self.lib.list_sub_directories(req).await
+        self.book_library.list_sub_directories(req).await
     }
 
     async fn get_cover(&self, id: &str) -> Result<PathBuf, LibraryError> {
-        self.lib.get_cover(id).await
+        self.book_library.get_cover(id).await
     }
 
     async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
-        self.lib.get_book(id).await
+        self.book_library.get_book(id).await
     }
 
     async fn get_progress(
         &self,
         req: GetProgressRequest,
     ) -> Result<GetProgressResponse, LibraryError> {
-        self.lib.get_progress(req).await
+        self.book_library.get_progress(req).await
     }
 
     async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
-        self.lib.set_progress(req).await
+        self.book_library.set_progress(req).await
     }
 
     async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
-        self.lib.get_state(req).await
+        self.book_library.get_state(req).await
     }
 
     async fn set_state(&self, req: SetStateRequest) -> Result<(), LibraryError> {
-        self.lib.set_state(req).await
+        self.book_library.set_state(req).await
     }
 
     async fn get_config(&self) -> Result<Config, LibraryError> {
-        self.lib.get_config().await
+        self.book_library.get_config().await
     }
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
-        self.lib.set_config(patch).await
+        self.book_library.set_config(patch).await
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
-        self.lib.rebuild_index().await
+        let _guard = self.rebuild_lock.lock().await;
+        self.book_library.rebuild_index().await
     }
 }
 

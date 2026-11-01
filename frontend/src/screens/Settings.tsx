@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { Config } from "@/gen/configpb/config_pb"
+import { useBackButton } from "@/lib/backButton"
 import { LIBRARY_CONFIG_KEY, useLibraryConfig } from "@/lib/useAppearance"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { cn } from "cn"
@@ -67,6 +68,11 @@ export function Settings() {
   }, [returnFocus])
 
   const section = VISIBLE_SECTIONS.find((s) => s.slug === slug)
+  const backToList = () =>
+    state?.fromList ? navigate(-1) : navigate(SETTINGS_PATH, { replace: true, state: { depth } })
+  // Same as the header's back arrow: a section on a phone goes back to the list.
+  useBackButton(() => void (!wide && section ? backToList() : close()))
+
   if (slug && !section) return <Navigate to={SETTINGS_PATH} replace state={state} />
   const shown = section ?? (wide ? VISIBLE_SECTIONS[0] : undefined)
 
@@ -75,8 +81,6 @@ export function Settings() {
     if (wide) void navigate(to, { replace: true, state })
     else void navigate(to, { state: { depth: depth && depth + 1, fromList: true } })
   }
-  const backToList = () =>
-    state?.fromList ? navigate(-1) : navigate(SETTINGS_PATH, { replace: true, state: { depth } })
 
   return (
     // tabIndex: clicks on plain text keep focus inside, so Escape still reaches the handler.

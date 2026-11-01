@@ -23,7 +23,7 @@ Stack: React 19, Vite 8, TypeScript 6, Tailwind CSS v4, shadcn/ui on Base UI (No
 | `components/ChooseFolder.tsx` | App-only folder picker button (dialog plugin on desktop, `pick_folder` on Android) |
 | `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere), `LogsSection.tsx` (app only: log-file count, copy, save) |
 | `components/ui/` | shadcn components (button, input, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
-| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`, logging in `log.ts`) |
+| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`, logging in `log.ts`, the Android back button in `backButton.ts`) |
 | `gen/` | Generated proto code. Git-ignored, never hand-edit |
 | `foliate-js.d.ts` | Types for the parts of foliate-js that Shelf uses |
 
@@ -55,7 +55,7 @@ export const IS_TAURI = isTauri()                                         // ins
 export const IS_ANDROID = IS_TAURI && /android/i.test(navigator.userAgent)
 ```
 
-Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the *Developer options* settings section, forwarding logs to Rust, the folder picker and the storage-permission step on Android.
+Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the *Developer options* settings section, forwarding logs to Rust, the folder picker, the storage-permission step and the back button on Android.
 
 ## App flow (`App.tsx`, app only)
 
@@ -111,6 +111,15 @@ The Android app draws edge to edge, so the page needs padding for the status bar
 - `safe-area` is applied to every full-screen surface: `SlideDrawer`'s root (with an inner `relative size-full` box so its absolutely positioned children respect the padding), the `Settings` root, and `CenteredScreen`. **Any new full-screen or `fixed inset-0` surface needs it too.**
 
 On the web and desktop the variables stay `0px`.
+
+## Android back button (`lib/backButton.ts`)
+
+The app uses a `MemoryRouter`, so the WebView has no history of its own. Instead, each open layer registers a handler with `useBackButton(onBack, active)`, and back runs the newest one:
+
+- An open drawer (`SlideDrawer`) closes.
+- Settings (`Settings.tsx`) does what its header arrow does: a section on a phone goes back to the list; otherwise settings closes.
+
+Tauri's `onBackButtonPress` takes the button over completely, so the listener is registered only while at least one layer is open and removed when the last one closes. With nothing open, Android's own behaviour applies (the app goes to the background). Opening settings from the library drawer stacks settings on top, so back closes settings and then the drawer. Pop-ups such as an open select aren't layers: back closes the screen under them. The permission comes with `core:default`.
 
 ## Tests and lint
 

@@ -32,8 +32,6 @@ pub struct BookLibrary {
     metadata: Arc<RwLock<Vec<BookMetadata>>>,
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
     config_lock: Mutex<()>,
-    // A second rebuild waits for the first instead of hashing everything twice at once.
-    rebuild_lock: Mutex<()>,
     // Dropping it closes the extractor's channel, which ends the extractor task.
     _watcher: LibraryWatcher,
 }
@@ -66,7 +64,6 @@ impl BookLibrary {
             keeper,
             metadata,
             config_lock: Mutex::new(()),
-            rebuild_lock: Mutex::new(()),
             _watcher: watcher,
         })
     }
@@ -247,7 +244,6 @@ impl Library for BookLibrary {
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
-        let _guard = self.rebuild_lock.lock().await;
         let (report, metadata) = self
             .with_keeper(|k| {
                 let report = sync_library(k.root(), true)?;

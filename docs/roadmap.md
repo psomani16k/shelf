@@ -46,7 +46,7 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 - [x] **Settings → Logs** (now *Developer options*): log-file count, *Copy logs*, *Save logs…*.
 - [x] **Frontend logging**: `src/lib/log.ts` and the `error`/`unhandledrejection` handlers ([frontend.md](frontend.md#logging-liblogts)).
 - [x] **Multiple libraries** in the UI: named libraries, a switcher in the library slideover, add/remove in Settings ([frontend.md](frontend.md#libraries-libuseapplibraryts)).
-- [ ] **Android back button**: close the open drawer or settings first. Today the app uses a `MemoryRouter`, so the WebView has no history and back exits the app.
+- [x] **Android back button**: closes the open drawer or settings first ([frontend.md](frontend.md#android-back-button-libbackbuttonts)).
 - [ ] **Offline reading in Remote mode** (M9): books and covers are already cached after download; still needed are offline listings and queued progress writes.
 - [ ] Remote cache housekeeping: evict old files, delete the cache when a library is removed, an overall request timeout.
 - [ ] Device name setting (default hostname, or "android"), used for the progress `device` field below.

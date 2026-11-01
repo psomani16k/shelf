@@ -28,7 +28,6 @@ Problems and risks in what's built, checked against the code on 2026-10-26. Plan
 - A library can't be renamed or repointed; remove it and add it again (nothing in the library is lost).
 - `RemoteLibrary`: the download cache is never evicted and isn't deleted when the library is removed; there's a 10 s connect timeout but no overall request timeout.
 - The app has no logging in release builds; debug builds log plain text, not JSON.
-- On Android the back button exits the app even with a drawer or settings open (the `MemoryRouter` leaves the WebView without history).
 - The server has no authentication. Run it only on a trusted network: anyone who reaches it can read, change progress and settings, and start a *Rebuild index* (slow but harmless).
 - The server's library path (`/books`) and bind address (`0.0.0.0:8080`) are hard-coded, and `client_ip` behind a proxy is the proxy.
 

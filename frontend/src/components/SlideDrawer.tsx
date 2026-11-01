@@ -1,4 +1,5 @@
 import { type CSSProperties, type PointerEvent, type ReactNode, useEffect, useRef } from "react"
+import { useBackButton } from "@/lib/backButton"
 import { settle } from "@/lib/settle"
 
 /** Pixels a pointer must move before we decide whether it's a drag or a scroll. */
@@ -72,6 +73,8 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [open, onOpenChange])
+
+  useBackButton(() => onOpenChange(null), open !== null)
 
   const onPointerDown = (e: PointerEvent) => {
     suppressClick.current = false
