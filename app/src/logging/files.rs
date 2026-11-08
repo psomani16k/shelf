@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use shelf_core::timeutil::Time;
+use shelf_utility::timeutil::Time;
 
 const PREFIX: &str = "shelf-";
 const SUFFIX: &str = ".log";

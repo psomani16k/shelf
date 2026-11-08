@@ -12,6 +12,8 @@ It runs in three ways, all with the same React UI:
 
 ## Where to read next
 
+New here? The repo's [README](../README.md) says what Shelf does and how to run it; [CONTRIBUTING.md](../CONTRIBUTING.md) gets a development setup going. The docs below describe the code in depth.
+
 | Doc | Read it when you need… |
 |---|---|
 | [decisions.md](decisions.md) | Goals, non-goals, the settled technical choices and why, and where the original plan changed |
@@ -25,7 +27,7 @@ It runs in three ways, all with the same React UI:
 | [development.md](development.md) | Setting up, running, testing, conventions, and how the user likes to work |
 | [known-issues.md](known-issues.md) | Bugs, risks and cleanups in what's built |
 
-## Status (2026-10-26)
+## Status (2026-11-02)
 
 Working end to end:
 - Web UI served by `shelf-server`, image published by hand to `ghcr.io/psomani16k/shelf`.

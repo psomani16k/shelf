@@ -2,9 +2,10 @@ use std::{
     collections::BTreeSet,
     path::{Component, Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use shelf_proto::{
     api::{
@@ -15,14 +16,14 @@ use shelf_proto::{
     bookkeeping::{BookMetadata, BookProgress, EpubProgress, book_file_type},
     config::Config,
 };
-use tokio::sync::{Mutex, RwLock};
-use tracing::{info, warn};
+use shelf_utility::routines::Debounced;
+use tokio::sync::{Mutex, RwLock, mpsc::UnboundedReceiver};
+use tracing::{debug, info, warn};
 
 use crate::{
     bookkeeper::BookKeeper,
-    config::{read_config, update_config},
-    routines::extractor::{extractor, sync_library},
-    state::{clean_up_temp_files, read_state, write_state},
+    routines::{extractor::sync_library, index_sync::IndexSync},
+    state::{read_state, write_state},
     traits::{Library, LibraryError},
     watcher::LibraryWatcher,
 };
@@ -37,35 +38,54 @@ pub struct BookLibrary {
 }
 
 impl BookLibrary {
+    const DEBOUNCE: Duration = Duration::from_secs(5);
+
     /// Starts the watcher, syncs `.shelf/` with the folder, loads every book's metadata, then
     /// starts the extractor, which calls `on_change` after each book it syncs. Must run inside tokio.
-    pub async fn open(
-        root: PathBuf,
-        on_change: impl Fn() + Send + Sync + 'static,
-    ) -> anyhow::Result<Self> {
-        if let Err(e) = clean_up_temp_files(&root).await {
-            warn!(error = %e, "couldn't remove leftover temp files");
-        }
+    pub async fn open(root: PathBuf, on_change: impl Fn() + Send + Sync + 'static) -> Result<Self> {
         let (mut watcher, recv) = LibraryWatcher::initialize(&root)?;
         watcher.watch().await?;
         // Events that arrive during the sync wait in `recv` until the extractor starts.
-        let (root, keeper, metadata) = tokio::task::spawn_blocking(move || {
-            sync_library(&root, false)?;
-            let keeper = BookKeeper::new(&root)?;
-            let metadata = keeper.all_book_metadata()?;
-            anyhow::Ok((root, keeper, metadata))
-        })
-        .await??;
+        let keeper = {
+            let root = root.clone();
+            tokio::task::spawn_blocking(move || BookKeeper::new(&root)).await??
+        };
+        sync_library(&keeper, false).await?;
+        let listing = keeper.clone();
+        let metadata = tokio::task::spawn_blocking(move || listing.all_book_metadata()).await??;
         info!(root = %root.display(), books = metadata.len(), "library opened");
 
-        let metadata = Arc::new(RwLock::new(metadata));
-        tokio::spawn(extractor(root, recv, metadata.clone(), on_change));
-        Ok(Self {
+        if let Err(e) = keeper.clean_up_temp_files().await {
+            warn!(error = %e, "couldn't remove leftover temp files");
+        }
+
+        let library = Self {
             keeper,
-            metadata,
+            metadata: Arc::new(RwLock::new(metadata)),
             config_lock: Mutex::new(()),
             _watcher: watcher,
-        })
+        };
+        library.receive_and_process_library_updates(recv, on_change);
+        Ok(library)
+    }
+
+    /// Syncs each path from the watcher 5 s after its last event, on the blocking pool with one
+    /// job per CPU at most. Runs until the watcher is dropped.
+    fn receive_and_process_library_updates(
+        &self,
+        recv: UnboundedReceiver<PathBuf>,
+        on_change: impl Fn() + Send + Sync + 'static,
+    ) {
+        let sync = IndexSync::new(self.keeper.clone(), self.metadata.clone());
+        let job = move |path: PathBuf| match sync.sync_path(&path) {
+            Ok(true) => {
+                info!(path = ?path, "synced");
+                on_change();
+            }
+            Ok(false) => debug!(path = ?path, "unchanged since last sync"),
+            Err(e) => warn!(path = ?path, error = %format!("{e:#}"), "sync failed"),
+        };
+        tokio::spawn(Debounced::new(Self::DEBOUNCE).receive_and_process_blocking(job, recv));
     }
 
     /// Ids index into `.shelf/books/`, so only known ones may reach the disk (no `../` tricks).
@@ -76,22 +96,11 @@ impl BookLibrary {
     /// Runs blocking `BookKeeper` file I/O off the async worker threads.
     async fn with_keeper<T: Send + 'static>(
         &self,
-        f: impl FnOnce(BookKeeper) -> anyhow::Result<T> + Send + 'static,
-    ) -> anyhow::Result<T> {
+        f: impl FnOnce(BookKeeper) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
         let keeper = self.keeper.clone();
         tokio::task::spawn_blocking(move || f(keeper)).await?
     }
-}
-
-/// Returns the folder with slashes trimmed (`""` is the root) and the prefix its contents' paths start with.
-fn folder_prefix(path: &str) -> (&str, String) {
-    let dir = path.trim_matches('/');
-    let prefix = if dir.is_empty() {
-        String::new()
-    } else {
-        format!("{dir}/")
-    };
-    (dir, prefix)
 }
 
 impl Library for BookLibrary {
@@ -170,7 +179,7 @@ impl Library for BookLibrary {
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
             return Err(anyhow!("book {id} has an unsafe path: {}", book.path).into());
         }
-        Ok(self.keeper.root().join(rel))
+        Ok(self.keeper.library_root().join(rel))
     }
 
     async fn get_progress(
@@ -213,7 +222,7 @@ impl Library for BookLibrary {
     }
 
     async fn get_state(&self, _req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
-        let state = read_state(self.keeper.root()).await?;
+        let state = read_state(self.keeper.library_root()).await?;
         let last_book_id = match state.last_book_id {
             Some(id) if self.has_book(&id).await => Some(id),
             _ => None,
@@ -228,28 +237,24 @@ impl Library for BookLibrary {
             return Err(LibraryError::NotFound);
         }
         // Read first, so fields this server doesn't know about survive the write.
-        let mut state = read_state(self.keeper.root()).await?;
+        let mut state = read_state(self.keeper.library_root()).await?;
         state.last_book_id = req.last_book_id;
-        write_state(self.keeper.root(), &state).await?;
+        write_state(self.keeper.library_root(), &state).await?;
         Ok(())
     }
 
     async fn get_config(&self) -> Result<Config, LibraryError> {
-        Ok(read_config(self.keeper.root()).await?)
+        Ok(self.keeper.read_config().await?)
     }
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         let _guard = self.config_lock.lock().await;
-        Ok(update_config(self.keeper.root(), &patch).await?)
+        Ok(self.keeper.update_config(&patch).await?)
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
-        let (report, metadata) = self
-            .with_keeper(|k| {
-                let report = sync_library(k.root(), true)?;
-                anyhow::Ok((report, k.all_book_metadata()?))
-            })
-            .await?;
+        let report = sync_library(&self.keeper, true).await?;
+        let metadata = self.with_keeper(|k| k.all_book_metadata()).await?;
         *self.metadata.write().await = metadata;
         Ok(RebuildIndexResponse {
             books: report.books as u32,
@@ -257,4 +262,15 @@ impl Library for BookLibrary {
             removed: report.removed as u32,
         })
     }
+}
+
+/// Returns the folder with slashes trimmed (`""` is the root) and the prefix its contents' paths start with.
+fn folder_prefix(path: &str) -> (&str, String) {
+    let dir = path.trim_matches('/');
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    (dir, prefix)
 }

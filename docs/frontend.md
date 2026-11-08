@@ -20,6 +20,7 @@ Stack: React 19, Vite 8, TypeScript 6, Tailwind CSS v4, shadcn/ui on Base UI (No
 | `components/TocPanel.tsx` | Table of contents tree |
 | `components/SlideDrawer.tsx` | Two-sided drawer that follows the finger; drives transforms through one CSS variable `--p` |
 | `components/BookCover.tsx` | Cover in a 2:3 box with a blurred backdrop; icon when there's no cover |
+| `components/CenteredScreen.tsx`, `ScreenHeader.tsx`, `ProgressBar.tsx` | Shared pieces: a full-screen centred layout (with `safe-area`), the 48px title bar at the top of a screen, a 3px position bar |
 | `components/ChooseFolder.tsx` | App-only folder picker button (dialog plugin on desktop, `pick_folder` on Android) |
 | `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere), `LogsSection.tsx` (app only: log-file count, copy, save) |
 | `components/ui/` | shadcn components (button, input, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
@@ -37,7 +38,7 @@ The `@/*` import alias points at `src/` (`paths` in `tsconfig.app.json` plus `re
 
 | File | What |
 |---|---|
-| `types.ts` | `Backend`: `listBooks`, `listDirectories`, `getProgress`, `setProgress`, `getState`, `setState`, `getConfig`, `setConfig`, `getCover`, `getBookFile` |
+| `types.ts` | `Backend`: `listBooks`, `listDirectories`, `getProgress`, `setProgress`, `getState`, `setState`, `getConfig`, `setConfig`, `rebuildIndex`, `getCover`, `getBookFile` |
 | `http.ts` | `httpBackend`: `fetch` to same-origin `/api`. Encodes with `toJson(..., { useProtoFieldName: true })`, decodes with `ignoreUnknownFields` |
 | `tauri.ts` | `tauriBackend`: the same calls over `invoke`. Also exports `invokeCommand`, which turns command rejections into `ApiError` |
 | `index.ts` | `api = IS_TAURI ? tauriBackend : httpBackend`, plus each function as a named export |
@@ -130,7 +131,7 @@ pnpm --dir frontend exec tsc -b
 pnpm --dir frontend build
 ```
 
-Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `gestures.test.ts`, `log.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
+Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `backButton.test.ts`, `gestures.test.ts`, `log.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
 
 ## Favicon
 

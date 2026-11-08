@@ -1,134 +1,273 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use anyhow::Ok;
+use anyhow::Context;
 use fast_image_resize::Resizer;
 use image::{DynamicImage, codecs::jpeg::JpegEncoder};
-use rbook::Epub;
+use rbook::{
+    Epub,
+    ebook::toc::TocEntryKind,
+    epub::manifest::{EpubManifest, EpubManifestEntry},
+};
 use sha1::{Digest, Sha1};
 use shelf_proto::bookkeeping::{BookMetadata, book_file_type};
-use std::fs::{self};
+use tracing::{debug, info, warn};
 
-use crate::{bookkeeper::BookKeeper, timeutil::Time};
+use crate::bookkeeper::BookKeeper;
+use shelf_utility::timeutil::Time;
 
-pub struct EbookExtractor {
-    book_keeper: BookKeeper,
-    relative_path: PathBuf,
+/// Only the book's path is known; `read` loads the book.
+pub struct Uncached;
+
+/// What `read` found on disk.
+pub enum Cached {
+    /// The book's bytes, their SHA-1, and the `metadata.json` stored under it, if any.
+    Present {
+        book: Arc<[u8]>,
+        hash: String,
+        metadata: Option<BookMetadata>,
+    },
+    /// The file is gone. `hash` is the id whose `metadata.json` still has its path, if any.
+    Gone { hash: Option<String> },
 }
 
-impl EbookExtractor {
-    // The largest a thumbnail gets; it keeps the cover's own shape inside this box.
-    const THUMBNAIL_WIDTH: u32 = 400;
-    const THUMBNAIL_HEIGHT: u32 = 600;
-    const THUMBNAIL_JPEG_QUALITY: u8 = 85;
+/// Blocking throughout: use it inside `spawn_blocking`.
+pub struct EbookExtractor<S = Uncached> {
+    book_keeper: BookKeeper,
+    relative_path: PathBuf,
+    state: S,
+}
 
-    pub fn new(root: &Path, book: &Path) -> anyhow::Result<Self> {
-        let book_keeper = BookKeeper::new(root)?;
-        let book = book_keeper.book_cleaned_path(book)?;
-        return Ok(Self {
-            book_keeper,
-            relative_path: book,
-        });
-    }
-
+impl<S> EbookExtractor<S> {
     /// The book's path relative to the library root, as stored in `metadata.path`.
     pub fn rel_path(&self) -> String {
         self.relative_path.to_string_lossy().into_owned()
     }
 
+    fn path(&self) -> PathBuf {
+        self.book_keeper.library_root().join(&self.relative_path)
+    }
+
     /// The file's modified time, at the precision `last_update_time` is stored with.
     fn modified(&self) -> anyhow::Result<Time> {
-        let book = self.book_keeper.root().join(&self.relative_path);
-        Ok(Time::from(fs::metadata(book)?.modified()?).whole_seconds())
+        Ok(Time::from(fs::metadata(self.path())?.modified()?).whole_seconds())
     }
 
     /// `known`'s id when it describes this file and the file hasn't been modified since
-    /// `known` was written, so the book needn't be hashed again.
-    pub fn unchanged_id(&self, known: &BookMetadata) -> anyhow::Result<Option<String>> {
-        if known.path != self.rel_path() || known.id.is_empty() {
+    /// `known` was written, so the book needn't be read and hashed again.
+    pub fn predict_id_change_using_modified_time(
+        &self,
+        known: &BookMetadata,
+    ) -> anyhow::Result<Option<String>> {
+        if known.path != self.rel_path() || known.id.is_empty() || !self.path().exists() {
             return Ok(None);
         }
+        Ok(self.stamp_covers_mtime(known)?.then(|| known.id.clone()))
+    }
+
+    fn stamp_covers_mtime(&self, known: &BookMetadata) -> anyhow::Result<bool> {
         // Missing in metadata from before the field existed; hashing once adds it.
         let Some(updated) = known
             .last_update_time
             .as_deref()
             .and_then(|t| t.parse::<Time>().ok())
         else {
-            return Ok(None);
+            return Ok(false);
         };
-        Ok((self.modified()? <= updated).then(|| known.id.clone()))
+        Ok(self.modified()? <= updated)
+    }
+}
+
+impl EbookExtractor<Uncached> {
+    pub fn new(book_keeper: BookKeeper, book: &Path) -> anyhow::Result<Self> {
+        // A gone file can't be canonicalized; the watcher's paths already are.
+        let relative_path = if book.exists() {
+            book_keeper.book_cleaned_path(book)?
+        } else {
+            book.strip_prefix(book_keeper.library_root())?.to_path_buf()
+        };
+        Ok(Self {
+            book_keeper,
+            relative_path,
+            state: Uncached,
+        })
     }
 
-    pub fn extract(&self) -> anyhow::Result<String> {
-        let book = self.book_keeper.root().join(&self.relative_path);
-        let file = fs::read(&book)?;
-        let mut hasher = Sha1::new();
-        hasher.update(&file);
-        let hash: String = hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        self.extract_epub(&hash)?;
-        Ok(hash)
+    /// Reads and hashes the book, and loads its `metadata.json` if it has one. For a gone file,
+    /// scans every `metadata.json` for the id that still has its path.
+    pub fn read(self) -> anyhow::Result<EbookExtractor<Cached>> {
+        let path = self.path();
+        let state = if path.exists() {
+            let book: Arc<[u8]> = fs::read(path)?.into();
+            let hash = sha1_hex(&book);
+            let metadata = self.book_keeper.book_metadata(&hash)?;
+            Cached::Present {
+                book,
+                hash,
+                metadata,
+            }
+        } else {
+            let rel_path = self.rel_path();
+            let hash = self
+                .book_keeper
+                .all_book_metadata()?
+                .into_iter()
+                .find(|m| m.path == rel_path)
+                .map(|m| m.id);
+            Cached::Gone { hash }
+        };
+        Ok(EbookExtractor {
+            book_keeper: self.book_keeper,
+            relative_path: self.relative_path,
+            state,
+        })
     }
+}
 
-    fn extract_epub(&self, hash: &str) -> anyhow::Result<()> {
-        let book_dir = self.book_keeper.book_dir(hash);
-        if book_dir.exists() {
-            let mut meta =
-                self.book_keeper
-                    .book_metadata(hash)?
-                    .ok_or_else(|| -> anyhow::Error {
-                        anyhow::format_err!(
-                            "Expected metadata to exist for book {:?}",
-                            self.relative_path
-                        )
-                    })?;
-            // Always rewritten: a touched but unchanged file would otherwise be hashed on every start.
-            meta.path = self.rel_path();
-            meta.id = hash.to_string();
-            meta.last_update_time = Some(Time::now().to_string());
-            self.book_keeper.set_book_metadata(hash, &meta)?;
-            return Ok(());
+impl EbookExtractor<Cached> {
+    // The largest a thumbnail gets; it keeps the cover's own shape inside this box.
+    const THUMBNAIL_WIDTH: u32 = 400;
+    const THUMBNAIL_HEIGHT: u32 = 600;
+    const THUMBNAIL_JPEG_QUALITY: u8 = 85;
+
+    /// The SHA-1 of the book's bytes, or `None` if the file is gone.
+    pub fn hash(&self) -> Option<&str> {
+        match &self.state {
+            Cached::Present { hash, .. } => Some(hash),
+            Cached::Gone { .. } => None,
         }
-        fs::create_dir_all(book_dir)?;
+    }
 
-        let book = Epub::open(self.book_keeper.root().join(&self.relative_path))?;
-        let metadata = book.metadata();
-        let title = match metadata.title() {
-            Some(t) => Some(t.to_string()),
-            None => None,
+    /// Brings `.shelf/books/<hash>/` up to date and returns the book's id and metadata. Without
+    /// `force`, known metadata only gets its `path` and `last_update_time` refreshed. A gone book
+    /// has no metadata, and an id only if `.shelf/` still had one for its path.
+    pub fn extract(&self, force: bool) -> anyhow::Result<(Option<String>, Option<BookMetadata>)> {
+        debug!(path = %self.rel_path(), force, "extracting");
+        let (book, hash, metadata) = match &self.state {
+            Cached::Gone { hash } => return Ok((hash.clone(), None)),
+            Cached::Present {
+                book,
+                hash,
+                metadata,
+            } => (book, hash, metadata),
         };
-        let authors: Vec<_> = metadata.creators().collect();
-        let authors = authors
-            .iter()
-            .map(|a| -> String { a.to_string() })
-            .collect();
-        let metadata = BookMetadata {
-            authors: authors,
-            title: title,
-            path: self.rel_path(),
+        let meta = match metadata {
+            Some(known) if !force => self.refresh(hash, known.clone())?,
+            _ => self.extract_full(book, hash)?,
+        };
+        Ok((Some(hash.clone()), Some(meta)))
+    }
+
+    fn refresh(&self, hash: &str, mut meta: BookMetadata) -> anyhow::Result<BookMetadata> {
+        debug!(path = %self.rel_path(), id = hash, "refreshing metadata");
+        let mut changed = false;
+        if meta.path != self.rel_path() {
+            meta.path = self.rel_path();
+            changed = true;
+        }
+        if meta.id != hash {
+            meta.id = hash.to_owned();
+            changed = true;
+        }
+        // Otherwise a touched but unchanged file would be hashed on every start.
+        if !self.stamp_covers_mtime(&meta)? {
+            meta.last_update_time = Some(Time::now().to_string());
+            changed = true;
+        }
+        if changed {
+            self.book_keeper.set_book_metadata(hash, &meta)?;
+        }
+        Ok(meta)
+    }
+
+    fn extract_full(&self, book: &Arc<[u8]>, hash: &str) -> anyhow::Result<BookMetadata> {
+        let path = self.rel_path();
+        debug!(path = %path, id = hash, bytes = book.len(), "full extraction started");
+        let book = Epub::read(Cursor::new(Arc::clone(book))).context("parsing the EPUB")?;
+        fs::create_dir_all(self.book_keeper.book_dir_by_id(hash))?;
+        let metadata = book.metadata();
+        let meta = BookMetadata {
+            authors: metadata.creators().map(|a| a.to_string()).collect(),
+            title: metadata.title().map(|t| t.to_string()),
+            path: path.clone(),
             file_type: book_file_type::Value::Epub as i32,
-            id: hash.to_string(),
+            id: hash.to_owned(),
             last_update_time: Some(Time::now().to_string()),
         };
-        self.book_keeper.set_book_metadata(hash, &metadata)?;
+        self.book_keeper.set_book_metadata(hash, &meta)?;
 
         // TODO: write a zero progress file for the book
 
-        let cover = book.manifest().cover_image();
-        if cover.is_some() {
-            let cover = cover.unwrap();
-            let cover_bytes = cover.read_bytes()?;
-            let thumbnail = self.resize_image_to_thumbnail(&cover_bytes)?;
-            self.book_keeper.set_book_thumbnail(hash, &thumbnail)?;
-        }
+        let cover = find_cover(&book);
+        let thumbnail = cover.as_ref().is_some_and(|(cover, found_by)| {
+            match self.write_thumbnail(hash, cover) {
+                Ok((cover_bytes, thumbnail_bytes)) => {
+                    debug!(
+                        path = %path,
+                        cover = %cover.href(),
+                        found_by,
+                        media_type = cover.media_type(),
+                        cover_bytes,
+                        thumbnail_bytes,
+                        "thumbnail written"
+                    );
+                    true
+                }
+                // A bad cover shouldn't cost the book its listing (or a known book its progress).
+                Err(e) => {
+                    warn!(
+                        path = %path,
+                        cover = %cover.href(),
+                        media_type = cover.media_type(),
+                        error = %format!("{e:#}"),
+                        "couldn't make a thumbnail, keeping the book without one"
+                    );
+                    false
+                }
+            }
+        });
 
-        Ok(())
+        let missing: Vec<&str> = [
+            ("title", meta.title.is_none()),
+            ("authors", meta.authors.is_empty()),
+            ("cover", cover.is_none()),
+            ("thumbnail", cover.is_some() && !thumbnail),
+        ]
+        .into_iter()
+        .filter_map(|(field, is_missing)| is_missing.then_some(field))
+        .collect();
+        info!(
+            path = %path,
+            id = hash,
+            title = ?meta.title,
+            authors = ?meta.authors,
+            cover = cover.is_some(),
+            thumbnail,
+            ?missing,
+            "book extracted"
+        );
+        Ok(meta)
+    }
+
+    /// Returns the cover's size and the thumbnail's, in bytes.
+    fn write_thumbnail(
+        &self,
+        hash: &str,
+        cover: &EpubManifestEntry,
+    ) -> anyhow::Result<(usize, usize)> {
+        let image = cover.read_bytes().context("reading the cover")?;
+        let thumbnail = self
+            .resize_image_to_thumbnail(&image)
+            .context("making the thumbnail")?;
+        self.book_keeper.set_book_thumbnail(hash, &thumbnail)?;
+        Ok((image.len(), thumbnail.len()))
     }
 
     /// Scales the whole cover down to fit the thumbnail box, never cropping or enlarging it.
-    /// CPU-heavy: call it inside `spawn_blocking`.
     fn resize_image_to_thumbnail(&self, image: &[u8]) -> anyhow::Result<Vec<u8>> {
         let src = DynamicImage::ImageRgb8(image::load_from_memory(image)?.into_rgb8());
         let (width, height) = (src.width() as f64, src.height() as f64);
@@ -148,17 +287,108 @@ impl EbookExtractor {
     }
 }
 
+/// The book's cover image and how it was found. Falls back for EPUBs that declare it wrongly:
+/// first the declared cover, then the image on the item `cover`, then the EPUB 2 cover `<meta>`
+/// read as a path instead of an id, then the image on the landmarks/guide cover page.
+fn find_cover<'a>(epub: &'a Epub) -> Option<(EpubManifestEntry<'a>, &'static str)> {
+    let manifest = epub.manifest();
+    if let Some(cover) = manifest.cover_image() {
+        return Some((cover, "declared"));
+    }
+    // Before the meta and the guide: some books point both at a placeholder put in front.
+    if let Some(cover) = manifest
+        .by_id("cover")
+        .and_then(|page| image_on_page(&manifest, page))
+    {
+        return Some((cover, "cover item"));
+    }
+    if let Some(cover) = epub
+        .metadata()
+        .by_property("cover")
+        .find_map(|meta| manifest.by_href(meta.value()))
+        .filter(|entry| entry.kind().is_image())
+    {
+        return Some((cover, "meta path"));
+    }
+    let landmarks = epub.toc().landmarks();
+    landmarks
+        .iter()
+        .flat_map(|root| root.flatten())
+        .find(|entry| entry.kind() == TocEntryKind::Cover)
+        .and_then(|entry| entry.manifest_entry())
+        .and_then(|page| image_on_page(&manifest, page))
+        .map(|cover| (cover, "landmark page"))
+}
+
+/// `page` itself when it's an image, else the first image the XHTML page shows.
+fn image_on_page<'a>(
+    manifest: &EpubManifest<'a>,
+    page: EpubManifestEntry<'a>,
+) -> Option<EpubManifestEntry<'a>> {
+    if page.kind().is_image() {
+        return Some(page);
+    }
+    let xhtml = page.read_str().ok()?;
+    let src = first_image_src(&xhtml)?;
+    manifest
+        .by_href(&resolve_href(page.href().as_str(), src))
+        .filter(|entry| entry.kind().is_image())
+}
+
+/// The target of the first `<img src>` or SVG `<image href>` / `xlink:href`.
+fn first_image_src(xhtml: &str) -> Option<&str> {
+    let start = ["<img", "<image"]
+        .iter()
+        .filter_map(|tag| xhtml.find(tag))
+        .min()?;
+    let tag = &xhtml[start..];
+    let tag = &tag[..tag.find('>')?];
+    ["src=", "href="].iter().find_map(|attr| {
+        let value = &tag[tag.find(attr)? + attr.len()..];
+        let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let value = &value[1..];
+        Some(&value[..value.find(quote)?])
+    })
+}
+
+/// Resolves `relative` against the absolute in-book path of the page it appears on.
+fn resolve_href(page: &str, relative: &str) -> String {
+    let mut parts: Vec<&str> = page.split('/').collect();
+    parts.pop();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            // Never above the book's root (the leading empty part).
+            ".." if parts.len() > 1 => {
+                parts.pop();
+            }
+            ".." => {}
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    Sha1::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs::File, time::UNIX_EPOCH};
 
     use super::*;
-    use crate::timeutil::Duration;
+    use shelf_utility::timeutil::Duration;
 
     /// 2025-10-26T04:45:00Z
     const MTIME: u64 = 1_761_453_900;
+    /// The SHA-1 of an empty file.
+    const EMPTY_SHA1: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
 
-    /// `unchanged_id` only looks at the file's mtime, so an empty file stands in for a book.
+    /// `predict_id_change_using_modified_time` and `refresh` only look at the file's mtime, so an empty file stands in for a book.
     fn book(nanos: u32) -> (tempfile::TempDir, EbookExtractor) {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("dune.epub");
@@ -166,7 +396,7 @@ mod tests {
             .unwrap()
             .set_modified(UNIX_EPOCH + Duration::new(MTIME, nanos))
             .unwrap();
-        let extractor = EbookExtractor::new(root.path(), &path).unwrap();
+        let extractor = EbookExtractor::new(BookKeeper::new(root.path()).unwrap(), &path).unwrap();
         (root, extractor)
     }
 
@@ -184,22 +414,137 @@ mod tests {
         let (_root, book) = book(500_000_000);
         let id = Some("abc".to_owned());
         // Written in the same second as the file: the stamp has no fraction to compare.
-        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T04:45:00Z"))).unwrap(), id);
-        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T05:00:00Z"))).unwrap(), id);
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known(
+                "dune.epub",
+                Some("2025-10-26T04:45:00Z")
+            ))
+            .unwrap(),
+            id
+        );
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known(
+                "dune.epub",
+                Some("2025-10-26T05:00:00Z")
+            ))
+            .unwrap(),
+            id
+        );
     }
 
     #[test]
     fn changed_when_modified_since() {
         let (_root, book) = book(0);
-        assert_eq!(book.unchanged_id(&known("dune.epub", Some("2025-10-26T04:44:59Z"))).unwrap(), None);
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known(
+                "dune.epub",
+                Some("2025-10-26T04:44:59Z")
+            ))
+            .unwrap(),
+            None
+        );
     }
 
     #[test]
     fn changed_when_path_or_stamp_differs() {
         let (_root, book) = book(0);
         let later = Some("2025-10-26T05:00:00Z");
-        assert_eq!(book.unchanged_id(&known("other.epub", later)).unwrap(), None);
-        assert_eq!(book.unchanged_id(&known("dune.epub", None)).unwrap(), None);
-        assert_eq!(book.unchanged_id(&known("dune.epub", Some("garbage"))).unwrap(), None);
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known("other.epub", later))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known("dune.epub", None))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&known("dune.epub", Some("garbage")))
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_without_force_refreshes_path_and_stamp_only() {
+        let (root, book) = book(0);
+        let keeper = BookKeeper::new(root.path()).unwrap();
+        fs::create_dir_all(keeper.book_dir_by_id(EMPTY_SHA1)).unwrap();
+        let old = BookMetadata {
+            title: Some("Dune".into()),
+            authors: vec!["Frank Herbert".into()],
+            id: EMPTY_SHA1.into(),
+            ..known("old/dune.epub", Some("2025-10-26T04:44:59Z"))
+        };
+        keeper.set_book_metadata(EMPTY_SHA1, &old).unwrap();
+
+        let book = book.read().unwrap();
+        let (hash, meta) = book.extract(false).unwrap();
+        let meta = meta.unwrap();
+
+        assert_eq!(hash.as_deref(), Some(EMPTY_SHA1));
+        assert_eq!(meta.path, "dune.epub");
+        assert_eq!((&meta.title, &meta.authors), (&old.title, &old.authors));
+        // The next startup can skip it.
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&meta)
+                .unwrap()
+                .as_deref(),
+            Some(EMPTY_SHA1)
+        );
+        assert_eq!(keeper.book_metadata(EMPTY_SHA1).unwrap(), Some(meta));
+    }
+
+    /// Deletes the book `book()` made and returns an extractor for its path, made afterwards.
+    fn gone(root: &tempfile::TempDir) -> EbookExtractor {
+        let keeper = BookKeeper::new(root.path()).unwrap();
+        let path = keeper.library_root().join("dune.epub");
+        fs::remove_file(&path).unwrap();
+        EbookExtractor::new(keeper, &path).unwrap()
+    }
+
+    #[test]
+    fn gone_book_returns_its_id_from_shelf() {
+        let (root, _) = book(0);
+        let keeper = BookKeeper::new(root.path()).unwrap();
+        fs::create_dir_all(keeper.book_dir_by_id(EMPTY_SHA1)).unwrap();
+        let meta = BookMetadata {
+            id: EMPTY_SHA1.into(),
+            ..known("dune.epub", None)
+        };
+        keeper.set_book_metadata(EMPTY_SHA1, &meta).unwrap();
+
+        let book = gone(&root);
+        assert_eq!(
+            book.predict_id_change_using_modified_time(&meta).unwrap(),
+            None
+        );
+        let (hash, meta) = book.read().unwrap().extract(false).unwrap();
+        assert_eq!((hash.as_deref(), meta), (Some(EMPTY_SHA1), None));
+    }
+
+    #[test]
+    fn finds_the_first_image_on_a_cover_page() {
+        let img = r#"<body><div><img alt="Image" src="../images/cover.jpg"/></div></body>"#;
+        assert_eq!(first_image_src(img), Some("../images/cover.jpg"));
+        let svg = r#"<svg><image width="600" xlink:href='cover.png'/></svg><img src="b.jpg"/>"#;
+        assert_eq!(first_image_src(svg), Some("cover.png"));
+        assert_eq!(first_image_src("<p>no image</p>"), None);
+    }
+
+    #[test]
+    fn resolves_hrefs_against_the_page() {
+        let page = "/OEBPS/Text/cover.xhtml";
+        assert_eq!(resolve_href(page, "../Images/a.jpg"), "/OEBPS/Images/a.jpg");
+        assert_eq!(resolve_href(page, "./a.jpg"), "/OEBPS/Text/a.jpg");
+        assert_eq!(resolve_href(page, "../../../a.jpg"), "/a.jpg");
+    }
+
+    #[test]
+    fn gone_book_without_metadata_has_no_id() {
+        let (root, _) = book(0);
+        let (hash, meta) = gone(&root).read().unwrap().extract(false).unwrap();
+        assert_eq!((hash, meta), (None, None));
     }
 }

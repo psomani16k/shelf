@@ -4,18 +4,20 @@ mod frontend;
 mod library;
 mod logging;
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-
+use crate::library::ServerLibrary;
 use anyhow::Context;
 use axum::{Router, middleware};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
 };
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{error, info};
-
-use crate::library::ServerLibrary;
 
 const LIBRARY_ROOT: &str = "/books";
 const BIND: &str = "0.0.0.0:8080";
@@ -32,7 +34,6 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    // Also starts the watcher, which keeps the library's metadata current while the server runs.
     let library = ServerLibrary::open(PathBuf::from(LIBRARY_ROOT), || {})
         .await
         .with_context(|| format!("couldn't open the library at {LIBRARY_ROOT}"))?;

@@ -4,7 +4,7 @@ use std::{io::Write, sync::Arc};
 
 use anyhow::{Context, anyhow};
 use serde::Serialize;
-use shelf_core::timeutil::Time;
+use shelf_utility::timeutil::Time;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;

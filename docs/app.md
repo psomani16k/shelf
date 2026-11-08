@@ -74,13 +74,13 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 
 ## Local libraries
 
-`LocalLibrary` wraps `BookLibrary` (see [library-format.md](library-format.md)) and holds a `rebuild_lock`, so a second rebuild waits for the first. Added with `add_local_library(path)`: the path is canonicalized and must be a folder; the name is the folder's name.
+`LocalLibrary` wraps `BookLibrary` (see [library-format.md](library-format.md)) and holds a `rebuild_lock`, so a second rebuild waits for the first. Added with `add_local_library(name, path)`: the name is checked first (`validate_name`), then the path is canonicalized and must be a folder. The add form pre-fills an empty name with the folder's name.
 
 ## Remote libraries
 
 `RemoteLibrary` (`libsrc/remote.rs`) implements `Library` over a `shelf-server`:
 
-- `add_remote_library(baseUrl)`: `http://` is prepended when there's no `://`; only http/https are accepted; name = host; cache dir = `<app cache dir>/remote/<host>-<port>` (Linux: `~/.cache/com.psomani16k.shelf/remote/...`). Nothing is contacted when adding or opening; the first request is what reaches the server.
+- `add_remote_library(name, baseUrl)`: the name is checked first, as for local libraries (the add form pre-fills an empty one with the host); `http://` is prepended when there's no `://`; only http/https are accepted; cache dir = `<app cache dir>/remote/<host>-<port>` (Linux: `~/.cache/com.psomani16k.shelf/remote/...`). Nothing is contacted when adding or opening; the first request is what reaches the server.
 - `api_call(req, path)`: POSTs JSON to `{base_url}/api{path}`. A non-2xx response becomes an error carrying `HttpStatus`, with the server's `ApiError.message` in the context; `to_library_error` maps a 404 to `LibraryError::NotFound`. An empty body (204) decodes as `null` → `()`.
 - `get_cover` / `get_book`: download `GET /api/books/{id}/{cover|file}` once into `<cache>/{cover|file}/<id>.{jpeg|epub}` (via a `.part-<pid>` temp file and rename), then return the cached path. IDs are content hashes, so a cached file never goes stale. The ID must be alphanumeric, so a server can't make the app write outside the cache.
 - `list_books` / `list_sub_directories` can't fail in the trait, so errors are logged at `warn` and an empty listing is returned. An unreachable server therefore looks like an empty library.

@@ -5,6 +5,7 @@
 | Path | Crate / package | What it is |
 |---|---|---|
 | `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. No Tauri, HTTP or prost dependencies. |
+| `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`). Used by `core` and the app. |
 | `crates/proto` | `shelf-proto` | Rust types generated from `proto/` at build time (protox → prost + pbjson). Output goes to `target/`, never committed. |
 | `crates/server` | `shelf-server` | axum HTTP server over one `BookLibrary`; embeds `frontend/dist`. |
 | `app/` | `app` (lib `app_lib`) | The Tauri 2 app (what Tauri usually calls `src-tauri`). |
@@ -66,12 +67,12 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 
 `BookLibrary::open(root, on_change)` (must run inside tokio):
 
-1. Deletes temp files left in `.shelf/` by a crash mid-write.
-2. Starts the filesystem watcher (before the sync, so nothing that changes during the sync is missed; its events queue in a channel).
-3. In `spawn_blocking`: runs the startup sync (`sync_library`, which only hashes new and modified books), then loads every `.shelf/books/*/metadata.json` into memory (`BookKeeper::all_book_metadata`).
-4. Spawns the `extractor` task, which drains the watcher channel, debounces each path for 5 s, re-syncs it, updates the in-memory metadata and calls `on_change`.
+1. Starts the filesystem watcher (before the sync, so nothing that changes during the sync is missed; its events queue in a channel).
+2. Runs the startup sync (`sync_library`, which only hashes new and modified books, one `spawn_blocking` job per book), then loads every `.shelf/books/*/metadata.json` into memory in `spawn_blocking` (`BookKeeper::all_book_metadata`).
+3. Deletes temp files left in `.shelf/` by a crash mid-write (`BookKeeper::clean_up_temp_files`). A failure here is logged at `warn` and doesn't stop the library opening.
+4. Spawns the extractor task (`receive_and_process_library_updates`, built on `shelf_utility::routines::Debounced`), which drains the watcher channel, debounces each path for 5 s, re-syncs it on the blocking pool, updates the in-memory metadata and calls `on_change`.
 
-`rebuild_index` runs the same sync with `force` (every book hashed) and swaps in the reloaded metadata. `BookLibrary` doesn't stop two rebuilds running at once; its wrappers (`ServerLibrary`, `LocalLibrary`) each hold a `rebuild_lock`, so a second rebuild waits for the first. `RemoteLibrary` has none, since the server's lock covers it. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
+`rebuild_index` runs the same sync with `force` (every book hashed and re-extracted) and swaps in the reloaded metadata. `BookLibrary` doesn't stop two rebuilds running at once; its wrappers (`ServerLibrary`, `LocalLibrary`) each hold a `rebuild_lock`, so a second rebuild waits for the first. `RemoteLibrary` has none, since the server's lock covers it. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
 
 `on_change` is a no-op in the server. In the app it emits the `library-changed` Tauri event, and the frontend refetches its folder listings.
 
@@ -79,5 +80,5 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 
 - **Proto is the schema, JSON is the wire.** Never binary protobuf. See [api.md](api.md).
 - **The frontend never sees file paths**, only book IDs. (The app's library picker is the one exception: it passes a chosen folder path *to* Rust.)
-- **tokio everywhere**; blocking or CPU-heavy work goes in `spawn_blocking`. The core also uses rayon for parallel extraction (see [known-issues.md](known-issues.md)).
+- **tokio everywhere**; blocking or CPU-heavy work goes in `spawn_blocking`, with `shelf_utility::routines` bounding how many jobs run at once (see [known-issues.md](known-issues.md) for the blocking `std::fs` exception).
 - **Errors are logged once**, where they cross the boundary: `crates/server/src/error.rs` for HTTP, `app/src/error.rs` for Tauri commands.

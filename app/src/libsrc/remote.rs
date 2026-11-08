@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use shelf_core::traits::{Library, LibraryError};
+use shelf_core::library::{Library, LibraryError};
 use shelf_proto::{
     api::{
         ApiError, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,

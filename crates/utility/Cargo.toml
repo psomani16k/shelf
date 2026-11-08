@@ -1,0 +1,15 @@
+[package]
+name = "shelf-utility"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros", "io-util"] }
+anyhow = { workspace = true }
+jiff = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
+tokio-stream = {workspace = true}
+
+[dev-dependencies]
+# test-util: `#[tokio::test(start_paused = true)]`
+tokio = { workspace = true, features = ["macros", "test-util"] }

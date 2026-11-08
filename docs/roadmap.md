@@ -1,6 +1,6 @@
 # Roadmap
 
-Everything planned but not built, as of 2026-10-26. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
+Everything planned but not built, as of 2026-11-02. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
 
 Rough priority within each section is top to bottom. Plan milestones are noted as (M*n*) where they came from one.
 
@@ -30,15 +30,19 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 
 - [x] **Faster startup:** done with `last_update_time` vs the file's mtime ([library-format.md](library-format.md#startup-sync)). Possible follow-up: also record the file's `size`, to catch a same-path replacement with an older mtime.
 - [ ] **Watcher flush cap:** flush a path at the latest 60 s after its first event, so a file that keeps changing still syncs.
-- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: `sync_path` checks `unchanged_id` first. A touch still does. (The TODO in `watcher.rs` about filtering event kinds is still there.)
-- [ ] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails (`write_atomic`).
+- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`BookLibrary::receive_and_process_library_updates`) checks `predict_id_change_using_modified_time` first. A touch still does. (The TODO in `watcher.rs` about filtering event kinds is still there.)
+- [ ] **Don't lose progress to a corrupt `metadata.json`:** `EbookExtractor::read` loads it with `book_metadata(&hash)?`, so an unparseable file fails the book before its ID is known, and the startup sync deletes its folder. Treat it as missing (log a `warn`) so the book is re-extracted instead.
+- [ ] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails (`write_atomic`). Together with the item above, a crash during *Rebuild index* can't cost a book its progress.
 - [ ] **Keep unknown fields** when rewriting `state.json`, `metadata.json` and `progress.json` (merge into raw JSON as `config.json` does).
 - [ ] **Don't delete unrecognised entries in `.shelf/books/`**, such as sync-tool conflict copies; only remove folders that are valid IDs for books that are gone.
 - [ ] **Keep progress across a book being briefly missing or edited** (e.g. don't delete a book's folder on the first startup it's missing; or derive the ID from the OPF `unique-identifier`, falling back to the file hash, as the plan proposed).
+- [ ] **Watcher: take a gone book's ID from the in-memory index.** `EbookExtractor::read` scans every `metadata.json` for a gone file's ID, and `rm -r` reports each file, so deleting a folder of 100 books in a 2,000-book library reads about 200,000 files. `IndexSync::sync_book` already has the book's index entry (looked up by path) when it calls `read`.
+- [ ] **Extraction concurrency:** measure the startup sync's two jobs per CPU against one (32 vs 16 on a 16-thread machine, and up to that many books in memory) and keep whichever is faster. Then share one cap (a `Semaphore` in `BookLibrary`) between the startup sync, *Rebuild index* and the watcher, which today each cap themselves.
 - [ ] Write a zero progress file at extraction (TODO in `ebook_ingest.rs`).
 - [ ] Make `list_books` / `list_sub_directories` fallible in the `Library` trait, so a remote library's network errors show as errors, not an empty folder.
-- [ ] Move rayon work onto tokio (`spawn_blocking`), per the "tokio everywhere" rule.
-- [ ] Fixture-based tests with 2–3 small public-domain EPUBs (one without a cover): extraction, ID stability across renames, progress round-trips, the watcher with `start_paused` (M1).
+- [x] Move rayon work onto tokio (`spawn_blocking`), per the "tokio everywhere" rule. Done: the startup sync uses `shelf_utility::routines::transform_concurrent_blocking`, and rayon is out of the workspace.
+- [ ] Fixture-based tests with 2–3 small public-domain EPUBs (one without a cover): extraction, ID stability across renames, progress round-trips, the watcher with `start_paused` (M1). Also each step of `find_cover` (a declared cover, the `cover` item's page, a `<meta>` holding a path, the landmarks page) and a cover that can't be decoded; tiny EPUBs built in memory with the `zip` crate as a dev-dependency would do.
+- [ ] Report to rbook: a `<creator xmlns="http://purl.org/dc/elements/1.1/">` (the Dublin Core namespace without the `dc:` prefix) isn't read as an author (seen in *PoC or GTFO, Volume 2*).
 
 ## App
 
@@ -80,9 +84,10 @@ Built today: interface theme (system/light/dark), reader theme (match interface/
 ## Packaging and project
 
 - [ ] Linux packages: AppImage and `.deb` via `cargo tauri build` (bundle targets are `all` but this hasn't been tried) (M7).
-- [ ] A top-level `README.md` with setup for all three modes (M7).
+- [x] A top-level `README.md` (what Shelf is, running the server, building the app) and `CONTRIBUTING.md` (getting started as a contributor) (M7).
 - [ ] Add `buf breaking` against the last release to the checks whenever `.proto` files change (`buf.yaml` already configures `FILE` rules).
 - [ ] A local check script running fmt, clippy, tests, `buf lint` and the frontend checks (no CI/CD for now; images are pushed by hand).
+- [ ] Document the `demo` crate (`crates/demo`) in [development.md](development.md): what it's for, `force_extract <root>` (a forced sync with JSON logs) and the `jq` filter for its output.
 - [ ] Optional end-to-end smoke test with Playwright against the web build: open a book, turn a page, reload, check the position.
 - [ ] Decide on the final app name before a wider release (see [decisions.md](decisions.md#risks)).
 

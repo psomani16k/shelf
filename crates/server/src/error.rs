@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use shelf_core::traits::LibraryError;
+use shelf_core::library::LibraryError;
 use shelf_proto::api::ApiError;
 use tracing::{debug, error};
 

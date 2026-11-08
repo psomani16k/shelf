@@ -1,3 +1,4 @@
+pub mod book_library;
 use std::{future::Future, path::PathBuf};
 
 use shelf_proto::{

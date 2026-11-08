@@ -2,6 +2,8 @@
 
 ## Setup
 
+New contributors: start with [CONTRIBUTING.md](../CONTRIBUTING.md), which covers prerequisites on any Linux distro. This section is the maintainer's own machine.
+
 Fedora 44, fish shell. Commands here avoid bash-only syntax (no heredocs, no `export`; chain with `; and`).
 
 ```fish
@@ -38,7 +40,7 @@ pnpm --dir frontend exec tsc -b
 
 `shelf-core` has pre-existing clippy warnings, so `--workspace -D warnings` fails on them. To lint just the app: `cargo clippy -p app --no-deps -- -D warnings`.
 
-Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with `tempfile`), `timeutil.rs` (RFC 3339 formatting and parsing) and `ebook_ingest.rs` (`unchanged_id` against files with a set mtime); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
+Rust tests: in `crates/core/src/` — `bookkeeper.rs` (config read and merge, leftover temp-file cleanup), `state.rs` (tokio tests with `tempfile`) and `ebook_ingest.rs` (`predict_id_change_using_modified_time` against files with a set mtime, `extract(false)` refreshing only `path` and the stamp, a gone book's ID found in `.shelf/`, and the cover page's image `src` and its path resolution), `routines/extractor.rs` (the startup sync's skipped, failed and removed counts, and a forced sync keeping the progress of a book that fails), `routines/index_sync.rs` (a renamed folder moving its books, a gone folder dropping only its own books, a gone non-book file changing nothing) and `watcher.rs` (which paths `is_relevant` lets through); in `crates/utility/src/` — `timeutil.rs` (RFC 3339 formatting and parsing) and `routines.rs` (result order, the `in_flight` cap, errors kept at their index, panics re-raised, for both the async and blocking variants); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
 
 ## Working with this user
 
@@ -52,7 +54,7 @@ Rust tests: in `crates/core/src/` — `config.rs`, `state.rs` (tokio tests with 
 
 ## Code conventions
 
-- **tokio everywhere**: async APIs, `tokio::spawn`, `tokio::sync`, `tokio::time`, `tokio::fs`. Blocking or CPU-heavy work (EPUB/ZIP parsing, hashing, image resizing) goes in `spawn_blocking`. Timing tests use `#[tokio::test(start_paused = true)]`. In `core`, get time from `crate::timeutil` (`crates/core/src/timeutil.rs`): `Instant`, `sleep`, `sleep_until` and `timeout` are tokio's monotonic clock, so a paused test controls them; use them for timeouts and debouncing. `Time` is a wall-clock timestamp (wraps `SystemTime`): `unix_nanos()` for things like unique file names, `Display` / `FromStr` for anything stored or shown: it writes RFC 3339 in UTC to the whole second (`2025-10-26T04:45:00Z`, sortable as text) and parses any RFC 3339 timestamp back, via `jiff`.
+- **tokio everywhere**: async APIs, `tokio::spawn`, `tokio::sync`, `tokio::time`, `tokio::fs`. Blocking or CPU-heavy work (EPUB/ZIP parsing, hashing, image resizing) goes in `spawn_blocking`. Timing tests use `#[tokio::test(start_paused = true)]`. In `core` and the app, get time from `shelf_utility::timeutil` (`crates/utility/src/timeutil.rs`): `Instant`, `sleep`, `sleep_until` and `timeout` are tokio's monotonic clock, so a paused test controls them; use them for timeouts and debouncing. `Time` is a wall-clock timestamp (wraps `SystemTime`): `unix_nanos()` for things like unique file names, `Display` / `FromStr` for anything stored or shown: it writes RFC 3339 in UTC to the whole second (`2025-10-26T04:45:00Z`, sortable as text) and parses any RFC 3339 timestamp back, via `jiff`.
 - **Errors**: `anyhow` inside, `LibraryError` at the `Library` boundary, logged once where they leave Rust (`crates/server/src/error.rs`, `app/src/error.rs`).
 - **Logging**: `tracing` with structured fields (`info!(book_id = %id, "progress saved")`). Libraries (`core`, `proto`) never install a subscriber. Never log passwords, tokens, `Authorization`/`Cookie` headers, or auth request bodies. Levels and log formats: see `CLAUDE.md`, [server.md](server.md) and [app.md](app.md#logging). Frontend code logs with `log` from `src/lib/log.ts`.
 - **On-disk data** goes only in `<library>/.shelf/`; app config, caches and logs go in the app's private dirs. Aim to preserve unknown JSON fields when rewriting files; today only `config.json` does (see [known-issues.md](known-issues.md)).

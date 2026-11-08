@@ -1,5 +1,5 @@
 use serde::Serialize;
-use shelf_core::traits::LibraryError;
+use shelf_core::library::LibraryError;
 use tracing::{debug, error};
 
 /// What a failed command rejects with: the same shape as the server's error responses.

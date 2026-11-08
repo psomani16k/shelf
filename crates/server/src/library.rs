@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use shelf_core::{
-    library::BookLibrary,
-    traits::{Library, LibraryError},
-};
+use shelf_core::library::{Library, LibraryError, book_library::BookLibrary};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,

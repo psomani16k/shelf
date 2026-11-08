@@ -27,6 +27,7 @@ tracing-subscriber = { workspace = true }
 
 shelf-core = { path = "../crates/core" }
 shelf-proto = { path = "../crates/proto" }
+shelf-utility = { path = "../crates/utility" }
 
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "~2.9"

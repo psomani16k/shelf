@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 use serde::Serialize;
-use shelf_core::traits::Library;
+use shelf_core::library::Library;
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -175,11 +175,7 @@ pub async fn remove_library(
 
 /// Resolves once the library is ready to browse; a local one syncs `.shelf/` first.
 #[tauri::command]
-pub async fn open_library(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<()> {
+pub async fn open_library(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
     Ok(state.open(&app, &name).await?)
 }
 

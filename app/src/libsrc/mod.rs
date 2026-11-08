@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use shelf_core::traits::{Library, LibraryError};
+use shelf_core::library::{Library, LibraryError};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
