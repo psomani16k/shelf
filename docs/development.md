@@ -32,15 +32,18 @@ Run from the repo root unless noted.
 
 ```fish
 cargo fmt; and cargo clippy --workspace -- -D warnings; and cargo test --workspace
+cargo clippy -p shelf-core --features s3 -- -D warnings; and cargo test -p shelf-core --features s3
 buf lint
 pnpm --dir frontend lint
 pnpm --dir frontend test
 pnpm --dir frontend exec tsc -b
 ```
 
+The `s3` feature (the S3 storage backend) is off by default, so the workspace commands don't build it; the second line does. Its `aws-lc-rs` dependency needs a C toolchain (`sudo dnf install cmake clang` if `aws-lc-sys` fails to build).
+
 `shelf-core` has pre-existing clippy warnings, so `--workspace -D warnings` fails on them. To lint just the app: `cargo clippy -p app --no-deps -- -D warnings`.
 
-Rust tests: in `crates/core/src/` — `bookkeeper.rs` (config read and merge, leftover temp-file cleanup), `state.rs` (tokio tests with `tempfile`) and `ebook_ingest.rs` (`predict_id_change_using_modified_time` against files with a set mtime, `extract(false)` refreshing only `path` and the stamp, a gone book's ID found in `.shelf/`, and the cover page's image `src` and its path resolution), `routines/extractor.rs` (the startup sync's skipped, failed and removed counts, and a forced sync keeping the progress of a book that fails), `routines/index_sync.rs` (a renamed folder moving its books, a gone folder dropping only its own books, a gone non-book file changing nothing) and `watcher.rs` (which paths `is_relevant` lets through); in `crates/utility/src/` — `timeutil.rs` (RFC 3339 formatting and parsing) and `routines.rs` (result order, the `in_flight` cap, errors kept at their index, panics re-raised, for both the async and blocking variants); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
+Rust tests: in `crates/core/src/` — `storage/mod.rs` (the config merge), `storage/local_storage.rs` (relative book listing, config read and merge, leftover temp-file cleanup), `storage/s3_storage.rs` (only with `--features s3`, against `object_store`'s `InMemory`: book listing, gone books, book data round trips and cleanup, state and config), `ebook_ingest.rs` (`predict_id_change_using_modified_time` against files with a set mtime, `extract(false)` refreshing only `path` and the stamp, a gone book's ID found in `.shelf/`, and the cover page's image `src` and its path resolution), `routines/extractor.rs` (the startup sync's skipped, failed and removed counts, and a forced sync keeping the progress of a book that fails), `routines/index_sync.rs` (a renamed folder moving its books, a gone folder dropping only its own books, a gone non-book file changing nothing) and `watcher.rs` (which paths `is_relevant` lets through); in `crates/utility/src/` — `timeutil.rs` (RFC 3339 formatting and parsing) and `routines.rs` (result order, the `in_flight` cap, errors kept at their index, panics re-raised, for both the async and blocking variants); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
 
 ## Working with this user
 
@@ -67,8 +70,8 @@ Rust tests: in `crates/core/src/` — `bookkeeper.rs` (config read and merge, le
 ### Add a library operation end to end
 
 1. **Schema**: request/response messages in `proto/apipb/*.proto`; register any new file in `crates/proto/build.rs`. `buf lint`.
-2. **Trait**: a method on `Library` in `crates/core/src/traits.rs`.
-3. **Core**: implement it on `BookLibrary` (`crates/core/src/library.rs`). Blocking file work through `with_keeper` / `spawn_blocking`.
+2. **Trait**: a method on `Library` in `crates/core/src/library/mod.rs`.
+3. **Core**: implement it on `BookLibrary` (`crates/core/src/library/book_library.rs`). Blocking file work through `with_storage` / `spawn_blocking`.
 4. **App**: forward it in `LocalLibrary` (`libsrc/local.rs`), implement it with `api_call` in `RemoteLibrary` (`libsrc/remote.rs`), add a `dispatch!` arm in `AnyLibrary` (`libsrc/mod.rs`).
 5. **Server**: forward it in `ServerLibrary` (`crates/server/src/library.rs`), then a handler and route in `crates/server/src/api.rs`.
 6. **App command**: a `#[tauri::command]` in `app/src/commands.rs`, added to `generate_handler!` in `app/src/lib.rs`.

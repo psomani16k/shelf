@@ -6,7 +6,10 @@ use shelf_utility::routines::transform_concurrent_blocking;
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 
-use crate::{bookkeeper::BookKeeper, ebook_ingest::EbookExtractor};
+use crate::{
+    ebook_ingest::EbookExtractor,
+    storage::{LibraryStorage, LocalLibraryStorage},
+};
 
 #[derive(Debug, Default)]
 /// What a sync found and did.
@@ -31,8 +34,8 @@ enum Synced {
 /// Brings `.shelf/` up to date with the book files, two books per CPU at a time. Unless `force`
 /// is set, books unchanged since their `last_update_time` aren't read, and known ones aren't
 /// re-extracted. Then deletes the `.shelf/books/` folders no file produced.
-pub async fn sync_library(keeper: &BookKeeper, force: bool) -> Result<SyncReport> {
-    let listing = keeper.clone();
+pub async fn sync_library(storage: &LocalLibraryStorage, force: bool) -> Result<SyncReport> {
+    let listing = storage.clone();
     let (mut stale, known, files) = spawn_blocking(move || {
         let known: HashMap<String, BookMetadata> = listing
             .all_book_metadata()?
@@ -48,8 +51,8 @@ pub async fn sync_library(keeper: &BookKeeper, force: bool) -> Result<SyncReport
     // Twice the CPUs: while one job waits on the disk, another can use its core.
     let in_flight = 2 * std::thread::available_parallelism().map_or(2, |n| n.get());
     let results = transform_concurrent_blocking(&files, in_flight, |_, file| {
-        let (keeper, known, file) = (keeper.clone(), known.clone(), file.clone());
-        move || sync_file(&keeper, &file, &known, force)
+        let (storage, known, file) = (storage.clone(), known.clone(), file.clone());
+        move || sync_file(&storage, &file, &known, force)
     })
     .await;
 
@@ -81,7 +84,7 @@ pub async fn sync_library(keeper: &BookKeeper, force: bool) -> Result<SyncReport
     }
 
     report.removed = stale.len();
-    let cleaner = keeper.clone();
+    let cleaner = storage.clone();
     spawn_blocking(move || cleaner.clean_up_hashes(stale)).await??;
     info!(?report, force, "library synced");
     Ok(report)
@@ -89,12 +92,12 @@ pub async fn sync_library(keeper: &BookKeeper, force: bool) -> Result<SyncReport
 
 /// Syncs one book file and returns its id. An `Err` means it couldn't be hashed. Blocking.
 fn sync_file(
-    keeper: &BookKeeper,
+    storage: &LocalLibraryStorage,
     file: &Path,
     known: &HashMap<String, BookMetadata>,
     force: bool,
 ) -> Result<Synced> {
-    let book = EbookExtractor::new(keeper.clone(), file)?;
+    let book = EbookExtractor::new(storage.clone(), file.to_path_buf());
     if !force
         && let Some(known) = known.get(&book.rel_path())
         && let Some(id) = book.predict_id_change_using_modified_time(known)?
@@ -125,53 +128,51 @@ mod tests {
     #[tokio::test]
     async fn sync_counts_skips_failures_and_stale_folders() {
         let root = tempfile::tempdir().unwrap();
-        let keeper = BookKeeper::new(root.path()).unwrap();
-        let library = keeper.library_root();
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let library = storage.library_root();
 
         // Known and unchanged: its stamp is later than its mtime (2025-10-26T04:45:00Z).
         File::create(library.join("a.epub"))
             .unwrap()
             .set_modified(UNIX_EPOCH + Duration::from_secs(1_761_453_900))
             .unwrap();
-        fs::create_dir_all(keeper.book_dir_by_id(EMPTY_SHA1)).unwrap();
+        fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
         let a = BookMetadata {
             path: "a.epub".into(),
             id: EMPTY_SHA1.into(),
             last_update_time: Some("2025-10-26T05:00:00Z".into()),
             ..Default::default()
         };
-        keeper.set_book_metadata(EMPTY_SHA1, &a).unwrap();
+        storage.set_book_metadata(EMPTY_SHA1, &a).unwrap();
         // New and not a valid EPUB.
         fs::write(library.join("bad.epub"), "not a zip").unwrap();
         // No file has this id any more.
-        fs::create_dir_all(keeper.book_dir_by_id(OTHER_ID)).unwrap();
+        fs::create_dir_all(storage.book_dir_by_id(OTHER_ID)).unwrap();
 
-        let report = sync_library(&keeper, false).await.unwrap();
+        let report = sync_library(&storage, false).await.unwrap();
 
         let counts = (report.books, report.skipped, report.hashed, report.failed, report.removed);
         assert_eq!(counts, (2, 1, 0, 1, 1));
-        assert!(keeper.book_dir_by_id(EMPTY_SHA1).exists());
-        assert!(!keeper.book_dir_by_id(OTHER_ID).exists());
+        assert!(storage.book_dir_by_id(EMPTY_SHA1).exists());
+        assert!(!storage.book_dir_by_id(OTHER_ID).exists());
     }
 
     #[tokio::test]
     async fn forced_sync_keeps_the_folder_of_a_book_that_fails() {
         let root = tempfile::tempdir().unwrap();
-        let keeper = BookKeeper::new(root.path()).unwrap();
-        let path = keeper.library_root().join("bad.epub");
-        fs::write(&path, "not a zip").unwrap();
-        let id = EbookExtractor::new(keeper.clone(), &path)
-            .unwrap()
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        fs::write(storage.library_root().join("bad.epub"), "not a zip").unwrap();
+        let id = EbookExtractor::new(storage.clone(), "bad.epub".into())
             .read()
             .unwrap()
             .hash()
             .unwrap()
             .to_owned();
-        let progress = keeper.book_dir_by_id(&id).join("progress.json");
-        fs::create_dir_all(keeper.book_dir_by_id(&id)).unwrap();
+        let progress = storage.book_dir_by_id(&id).join("progress.json");
+        fs::create_dir_all(storage.book_dir_by_id(&id)).unwrap();
         fs::write(&progress, "{}").unwrap();
 
-        let report = sync_library(&keeper, true).await.unwrap();
+        let report = sync_library(&storage, true).await.unwrap();
 
         assert_eq!((report.failed, report.removed), (1, 0));
         assert!(progress.exists());

@@ -9,7 +9,7 @@ A library is any folder. Shelf reads the `.epub` files in it (recursively) and w
 - Symlinks are skipped, both files and folders (`DirEntry::file_type` doesn't follow them), which also avoids loops.
 - Folder listings in the UI are derived from book paths, so a folder that contains no books (at any depth) never appears.
 
-Scanning is `BookKeeper::all_book_file_paths` (`crates/core/src/bookkeeper.rs`); the watcher applies the same rule in `LibraryWatcher::is_relevant` (`crates/core/src/watcher.rs`).
+Scanning is `LibraryStorage::all_book_file_paths` (`LocalLibraryStorage` in `crates/core/src/storage/local_storage.rs`), which returns paths relative to the library root; the watcher applies the same rule in `LibraryWatcher::is_relevant` (`crates/core/src/watcher.rs`).
 
 ## Book IDs
 
@@ -78,7 +78,7 @@ Names alone are never used to guess a cover, since books also have files like `b
 { "last_book_id": "3f786850e387550fdab836ed7e6dc881de23001b" }
 ```
 
-`set_state` reads the file into `State` first and only replaces `last_book_id`. That doesn't keep unknown fields: pbjson drops them on read, so a field written by a newer build is lost (the code comment in `library.rs` claims otherwise). `get_state` reports `last_book_id` as unset when that book is no longer in the library.
+`set_state` reads the file into `State` first and only replaces `last_book_id`. That doesn't keep unknown fields: pbjson drops them on read, so a field written by a newer build is lost (the code comment in `book_library.rs` claims otherwise). `get_state` reports `last_book_id` as unset when that book is no longer in the library.
 
 ### `config.json` (`configpb.Config`)
 
@@ -89,11 +89,15 @@ Names alone are never used to guess a cover, since books also have files like `b
 }
 ```
 
-Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`BookKeeper::update_config`, `crates/core/src/bookkeeper.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A mutex in `BookLibrary` serializes concurrent `set_config` calls. A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme).
+Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A mutex in `BookLibrary` serializes concurrent `set_config` calls. A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme).
 
 ### Writes
 
-`state.json` and `config.json` are written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>` in the same folder, `fsync`, then rename (`write_atomic`, `crates/core/src/state.rs`). Leftover temp files are deleted when a library opens, right after the startup sync (`BookKeeper::clean_up_temp_files`). `metadata.json`, `progress.json` and `thumbnail.jpeg` are currently written with a plain `fs::write` (see [known-issues.md](known-issues.md)).
+`state.json` and `config.json` are written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>` in the same folder, `fsync`, then rename (`write_atomic`, `crates/core/src/storage/local_storage.rs`). Leftover temp files are deleted when a library opens, right after the startup sync (`LocalLibraryStorage::clean_up_temp_files`). `metadata.json`, `progress.json` and `thumbnail.jpeg` are currently written with a plain `fs::write` (see [known-issues.md](known-issues.md)).
+
+### S3 storage
+
+`S3LibraryStorage` (`crates/core/src/storage/s3_storage.rs`, cargo feature `s3`, built on `object_store`) keeps the same layout under a key prefix in a bucket: books at `<prefix>/<path>`, data at `<prefix>/.shelf/…`, with the same scanning rules (dot-parts skipped, `.epub` case-insensitive). Credentials, region and endpoint come from the standard `AWS_*` env vars (`AWS_ENDPOINT` for MinIO or R2). Every write is a single PUT, which replaces an object whole, so there are no temp files, and `create_book_dir` and `clean_up_temp_files` do nothing. A book's mtime is its object's `last_modified`. The blocking trait methods wait on the tokio runtime the storage was created in, so they must run in `spawn_blocking`. It isn't wired into the server or app yet (see [known-issues.md](known-issues.md#s3-storage)).
 
 ## Startup sync
 
@@ -125,7 +129,7 @@ After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetad
 - Paths are filtered **before** queuing (`LibraryWatcher::is_relevant`): visible `.epub` paths, folders, and paths that are already gone (a gone path can't be checked, and it may have been a folder) pass, below the root only. Existing non-book files and anything under a dot-folder are dropped, so writes in `.shelf/` never trigger it.
 - Each path goes into an unbounded `tokio::sync::mpsc` channel.
 
-`BookLibrary::receive_and_process_library_updates` (`crates/core/src/library.rs`) debounces with `shelf_utility::routines::Debounced`: each path fires **5 s after its last event**; a new event for the same path resets its timer. There is no 60 s upper bound yet ([roadmap](roadmap.md#library-core)). When a path fires, its sync job (`IndexSync::sync_path`, `crates/core/src/routines/index_sync.rs`) runs on tokio's blocking pool, at most one job per CPU (each job holds a whole book in memory while it runs):
+`BookLibrary::receive_and_process_library_updates` (`crates/core/src/library/book_library.rs`) debounces with `shelf_utility::routines::Debounced`: each path fires **5 s after its last event**; a new event for the same path resets its timer. There is no 60 s upper bound yet ([roadmap](roadmap.md#library-core)). When a path fires, its sync job (`IndexSync::sync_path`, `crates/core/src/routines/index_sync.rs`) runs on tokio's blocking pool, at most one job per CPU (each job holds a whole book in memory while it runs):
 
 - Folder exists → every `.epub` under it, at any depth, goes through the book cases below, one after another. A book that fails logs a `warn` and the rest carry on. This is how a renamed, moved or copied-in folder is picked up: inotify reports the folder, not the books inside it. On a rename, each book's hash matches its existing `.shelf/books/<id>/`, so only its `path` is rewritten.
 - Path is gone and isn't an `.epub` → treated as a folder moved away or deleted: every entry whose `path` starts with `<path>/` is removed from memory.

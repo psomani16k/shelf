@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    io::Cursor,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{io::Cursor, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use fast_image_resize::Resizer;
@@ -17,7 +12,7 @@ use sha1::{Digest, Sha1};
 use shelf_proto::bookkeeping::{BookMetadata, book_file_type};
 use tracing::{debug, info, warn};
 
-use crate::bookkeeper::BookKeeper;
+use crate::storage::{LibraryStorage, LocalLibraryStorage};
 use shelf_utility::timeutil::Time;
 
 /// Only the book's path is known; `read` loads the book.
@@ -37,7 +32,7 @@ pub enum Cached {
 
 /// Blocking throughout: use it inside `spawn_blocking`.
 pub struct EbookExtractor<S = Uncached> {
-    book_keeper: BookKeeper,
+    storage: LocalLibraryStorage,
     relative_path: PathBuf,
     state: S,
 }
@@ -48,13 +43,13 @@ impl<S> EbookExtractor<S> {
         self.relative_path.to_string_lossy().into_owned()
     }
 
-    fn path(&self) -> PathBuf {
-        self.book_keeper.library_root().join(&self.relative_path)
-    }
-
-    /// The file's modified time, at the precision `last_update_time` is stored with.
-    fn modified(&self) -> anyhow::Result<Time> {
-        Ok(Time::from(fs::metadata(self.path())?.modified()?).whole_seconds())
+    /// The file's modified time, at the precision `last_update_time` is stored with. `None` if
+    /// the file is gone.
+    fn modified(&self) -> anyhow::Result<Option<Time>> {
+        Ok(self
+            .storage
+            .book_modified(&self.relative_path)?
+            .map(Time::whole_seconds))
     }
 
     /// `known`'s id when it describes this file and the file hasn't been modified since
@@ -63,48 +58,51 @@ impl<S> EbookExtractor<S> {
         &self,
         known: &BookMetadata,
     ) -> anyhow::Result<Option<String>> {
-        if known.path != self.rel_path() || known.id.is_empty() || !self.path().exists() {
+        if known.path != self.rel_path() || known.id.is_empty() {
             return Ok(None);
         }
-        Ok(self.stamp_covers_mtime(known)?.then(|| known.id.clone()))
+        let Some(modified) = self.modified()? else {
+            return Ok(None);
+        };
+        Ok(stamp_covers(known, modified).then(|| known.id.clone()))
     }
 
     fn stamp_covers_mtime(&self, known: &BookMetadata) -> anyhow::Result<bool> {
-        // Missing in metadata from before the field existed; hashing once adds it.
-        let Some(updated) = known
-            .last_update_time
-            .as_deref()
-            .and_then(|t| t.parse::<Time>().ok())
-        else {
-            return Ok(false);
-        };
-        Ok(self.modified()? <= updated)
+        let modified = self.modified()?.context("the book is gone")?;
+        Ok(stamp_covers(known, modified))
     }
 }
 
+/// Whether `known` was written no earlier than the file's (whole-second) `modified` time.
+fn stamp_covers(known: &BookMetadata, modified: Time) -> bool {
+    // Missing in metadata from before the field existed; hashing once adds it.
+    let Some(updated) = known
+        .last_update_time
+        .as_deref()
+        .and_then(|t| t.parse::<Time>().ok())
+    else {
+        return false;
+    };
+    modified <= updated
+}
+
 impl EbookExtractor<Uncached> {
-    pub fn new(book_keeper: BookKeeper, book: &Path) -> anyhow::Result<Self> {
-        // A gone file can't be canonicalized; the watcher's paths already are.
-        let relative_path = if book.exists() {
-            book_keeper.book_cleaned_path(book)?
-        } else {
-            book.strip_prefix(book_keeper.library_root())?.to_path_buf()
-        };
-        Ok(Self {
-            book_keeper,
+    /// `relative_path` is relative to the library root.
+    pub fn new(storage: LocalLibraryStorage, relative_path: PathBuf) -> Self {
+        Self {
+            storage,
             relative_path,
             state: Uncached,
-        })
+        }
     }
 
     /// Reads and hashes the book, and loads its `metadata.json` if it has one. For a gone file,
     /// scans every `metadata.json` for the id that still has its path.
     pub fn read(self) -> anyhow::Result<EbookExtractor<Cached>> {
-        let path = self.path();
-        let state = if path.exists() {
-            let book: Arc<[u8]> = fs::read(path)?.into();
+        let state = if let Some(book) = self.storage.read_book(&self.relative_path)? {
+            let book: Arc<[u8]> = book.into();
             let hash = sha1_hex(&book);
-            let metadata = self.book_keeper.book_metadata(&hash)?;
+            let metadata = self.storage.book_metadata(&hash)?;
             Cached::Present {
                 book,
                 hash,
@@ -113,7 +111,7 @@ impl EbookExtractor<Uncached> {
         } else {
             let rel_path = self.rel_path();
             let hash = self
-                .book_keeper
+                .storage
                 .all_book_metadata()?
                 .into_iter()
                 .find(|m| m.path == rel_path)
@@ -121,7 +119,7 @@ impl EbookExtractor<Uncached> {
             Cached::Gone { hash }
         };
         Ok(EbookExtractor {
-            book_keeper: self.book_keeper,
+            storage: self.storage,
             relative_path: self.relative_path,
             state,
         })
@@ -179,7 +177,7 @@ impl EbookExtractor<Cached> {
             changed = true;
         }
         if changed {
-            self.book_keeper.set_book_metadata(hash, &meta)?;
+            self.storage.set_book_metadata(hash, &meta)?;
         }
         Ok(meta)
     }
@@ -188,7 +186,7 @@ impl EbookExtractor<Cached> {
         let path = self.rel_path();
         debug!(path = %path, id = hash, bytes = book.len(), "full extraction started");
         let book = Epub::read(Cursor::new(Arc::clone(book))).context("parsing the EPUB")?;
-        fs::create_dir_all(self.book_keeper.book_dir_by_id(hash))?;
+        self.storage.create_book_dir(hash)?;
         let metadata = book.metadata();
         let meta = BookMetadata {
             authors: metadata.creators().map(|a| a.to_string()).collect(),
@@ -198,7 +196,7 @@ impl EbookExtractor<Cached> {
             id: hash.to_owned(),
             last_update_time: Some(Time::now().to_string()),
         };
-        self.book_keeper.set_book_metadata(hash, &meta)?;
+        self.storage.set_book_metadata(hash, &meta)?;
 
         // TODO: write a zero progress file for the book
 
@@ -263,7 +261,7 @@ impl EbookExtractor<Cached> {
         let thumbnail = self
             .resize_image_to_thumbnail(&image)
             .context("making the thumbnail")?;
-        self.book_keeper.set_book_thumbnail(hash, &thumbnail)?;
+        self.storage.set_book_thumbnail(hash, &thumbnail)?;
         Ok((image.len(), thumbnail.len()))
     }
 
@@ -378,7 +376,10 @@ fn sha1_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, time::UNIX_EPOCH};
+    use std::{
+        fs::{self, File},
+        time::UNIX_EPOCH,
+    };
 
     use super::*;
     use shelf_utility::timeutil::Duration;
@@ -396,7 +397,8 @@ mod tests {
             .unwrap()
             .set_modified(UNIX_EPOCH + Duration::new(MTIME, nanos))
             .unwrap();
-        let extractor = EbookExtractor::new(BookKeeper::new(root.path()).unwrap(), &path).unwrap();
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let extractor = EbookExtractor::new(storage, "dune.epub".into());
         (root, extractor)
     }
 
@@ -469,15 +471,15 @@ mod tests {
     #[test]
     fn extract_without_force_refreshes_path_and_stamp_only() {
         let (root, book) = book(0);
-        let keeper = BookKeeper::new(root.path()).unwrap();
-        fs::create_dir_all(keeper.book_dir_by_id(EMPTY_SHA1)).unwrap();
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
         let old = BookMetadata {
             title: Some("Dune".into()),
             authors: vec!["Frank Herbert".into()],
             id: EMPTY_SHA1.into(),
             ..known("old/dune.epub", Some("2025-10-26T04:44:59Z"))
         };
-        keeper.set_book_metadata(EMPTY_SHA1, &old).unwrap();
+        storage.set_book_metadata(EMPTY_SHA1, &old).unwrap();
 
         let book = book.read().unwrap();
         let (hash, meta) = book.extract(false).unwrap();
@@ -493,27 +495,26 @@ mod tests {
                 .as_deref(),
             Some(EMPTY_SHA1)
         );
-        assert_eq!(keeper.book_metadata(EMPTY_SHA1).unwrap(), Some(meta));
+        assert_eq!(storage.book_metadata(EMPTY_SHA1).unwrap(), Some(meta));
     }
 
     /// Deletes the book `book()` made and returns an extractor for its path, made afterwards.
     fn gone(root: &tempfile::TempDir) -> EbookExtractor {
-        let keeper = BookKeeper::new(root.path()).unwrap();
-        let path = keeper.library_root().join("dune.epub");
-        fs::remove_file(&path).unwrap();
-        EbookExtractor::new(keeper, &path).unwrap()
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        fs::remove_file(storage.library_root().join("dune.epub")).unwrap();
+        EbookExtractor::new(storage, "dune.epub".into())
     }
 
     #[test]
     fn gone_book_returns_its_id_from_shelf() {
         let (root, _) = book(0);
-        let keeper = BookKeeper::new(root.path()).unwrap();
-        fs::create_dir_all(keeper.book_dir_by_id(EMPTY_SHA1)).unwrap();
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
         let meta = BookMetadata {
             id: EMPTY_SHA1.into(),
             ..known("dune.epub", None)
         };
-        keeper.set_book_metadata(EMPTY_SHA1, &meta).unwrap();
+        storage.set_book_metadata(EMPTY_SHA1, &meta).unwrap();
 
         let book = gone(&root);
         assert_eq!(

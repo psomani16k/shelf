@@ -12,12 +12,19 @@ sha1 = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
 
 shelf-proto = { path = "../proto" }
 shelf-utility = { path = "../utility" }
 
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 rbook = { version = "0.7.12", default-features = false, features = ["threadsafe", "prelude"] }
+
+[features]
+# The S3 backend. Off by default: `aws` pulls in aws-lc-rs, which nothing else builds yet.
+s3 = ["dep:object_store", "object_store/aws", "dep:futures"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

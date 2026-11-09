@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher, recommended_watcher};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
-use crate::bookkeeper::is_epub;
+use crate::storage::is_epub;
 
 pub struct LibraryWatcher {
     inner: RecommendedWatcher,

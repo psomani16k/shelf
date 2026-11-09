@@ -7,7 +7,7 @@ Problems and risks in what's built, checked against the code on 2026-11-02. Plan
 - **Progress is deleted with a missing book.** The startup sync removes every `.shelf/books/<id>/` folder that no file produced, `progress.json` included. A book that's temporarily absent at startup (a sync tool halfway through, an unmounted folder) loses its progress. Editing a book's bytes changes its ID, which has the same effect.
 - **Unrecognised entries in `.shelf/books/` are deleted.** Every entry there is treated as a book ID, so a sync-tool conflict copy of a book folder is removed by the startup sync.
 - **A corrupt `metadata.json` deletes its book's progress.** `EbookExtractor::read` fails on an unparseable `metadata.json` before the book's ID is known, so the startup sync treats the ID as unproduced and deletes `.shelf/books/<id>/`, `progress.json` included. A half-written file from a crash mid-write (see below) is enough.
-- **Not all writes are atomic.** `state.json` and `config.json` use `write_atomic`; `metadata.json`, `progress.json` and `thumbnail.jpeg` use plain `fs::write` (`crates/core/src/bookkeeper.rs`). A crash or a sync tool can see a half-written progress file; a corrupt one is read as "no progress" with a warning.
+- **Not all writes are atomic.** `state.json` and `config.json` use `write_atomic`; `metadata.json`, `progress.json` and `thumbnail.jpeg` use plain `fs::write` (`crates/core/src/storage/local_storage.rs`). A crash or a sync tool can see a half-written progress file; a corrupt one is read as "no progress" with a warning.
 - **Unknown fields are kept only in `config.json`.** pbjson drops unknown fields on read, so rewriting `state.json` (`set_state`) or `metadata.json` (a moved book) loses fields from a newer build. The comment in `BookLibrary::set_state` says the opposite.
 - **`last_update_time` limits** (it's the time this device last hashed the book, compared with the file's mtime):
   - `metadata.json` differs per device, since each writes its own clock. Two devices hashing the same book around the same time can leave sync-conflict copies in `.shelf/books/<id>/` (harmless: only `metadata.json` is read).
@@ -49,3 +49,11 @@ Problems and risks in what's built, checked against the code on 2026-11-02. Plan
 - Unused proto: the `FolderListing` message in `bookkeeperpb/metadata.proto`; `apipb/cover.proto` is empty (and not in `build.rs`).
 - `app/Cargo.toml` still has template metadata (`description = "A Tauri App"`, `authors = ["you"]`).
 - `frontend/README.md` is the Vite template's README.
+
+## S3 storage
+
+`S3LibraryStorage` (`crates/core/src/storage/s3_storage.rs`) isn't used yet ([roadmap](roadmap.md#library-core)). Once it is:
+
+- **No watcher.** Object stores send no change events, so books added or removed in the bucket only show up at the next startup sync or *Rebuild index*.
+- **Startup costs requests per book:** one HEAD for its mtime and one GET for its `metadata.json`, on top of the LIST calls. A book that has to be hashed is downloaded whole.
+- **Covers and books are buffered in memory** (`FileContent::Bytes`), with no range requests.

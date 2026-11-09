@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use shelf_core::{
-    bookkeeper::BookKeeper,
+    storage::LocalLibraryStorage,
     routines::extractor::{SyncReport, sync_library},
 };
 
@@ -10,7 +10,7 @@ command! {
     /// does: every book is re-extracted into `<root>/.shelf/`, and folders no book produced
     /// are deleted, progress included.
     pub async fn force_extract(&self, root: PathBuf) -> anyhow::Result<SyncReport> {
-        let keeper = tokio::task::spawn_blocking(move || BookKeeper::new(&root)).await??;
-        sync_library(&keeper, true).await
+        let storage = tokio::task::spawn_blocking(move || LocalLibraryStorage::new(&root)).await??;
+        sync_library(&storage, true).await
     }
 }

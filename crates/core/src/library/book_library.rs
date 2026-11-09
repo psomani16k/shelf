@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use shelf_proto::{
     api::{
@@ -21,15 +21,14 @@ use tokio::sync::{Mutex, RwLock, mpsc::UnboundedReceiver};
 use tracing::{debug, info, warn};
 
 use crate::{
-    bookkeeper::BookKeeper,
+    storage::{FileContent, LibraryStorage, LocalLibraryStorage},
     library::{Library, LibraryError},
     routines::{extractor::sync_library, index_sync::IndexSync},
-    state::{read_state, write_state},
     watcher::LibraryWatcher,
 };
 
 pub struct BookLibrary {
-    keeper: BookKeeper,
+    storage: LocalLibraryStorage,
     metadata: Arc<RwLock<Vec<BookMetadata>>>,
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
     config_lock: Mutex<()>,
@@ -46,21 +45,21 @@ impl BookLibrary {
         let (mut watcher, recv) = LibraryWatcher::initialize(&root)?;
         watcher.watch().await?;
         // Events that arrive during the sync wait in `recv` until the extractor starts.
-        let keeper = {
+        let storage = {
             let root = root.clone();
-            tokio::task::spawn_blocking(move || BookKeeper::new(&root)).await??
+            tokio::task::spawn_blocking(move || LocalLibraryStorage::new(&root)).await??
         };
-        sync_library(&keeper, false).await?;
-        let listing = keeper.clone();
+        sync_library(&storage, false).await?;
+        let listing = storage.clone();
         let metadata = tokio::task::spawn_blocking(move || listing.all_book_metadata()).await??;
         info!(root = %root.display(), books = metadata.len(), "library opened");
 
-        if let Err(e) = keeper.clean_up_temp_files().await {
+        if let Err(e) = storage.clean_up_temp_files().await {
             warn!(error = %e, "couldn't remove leftover temp files");
         }
 
         let library = Self {
-            keeper,
+            storage,
             metadata: Arc::new(RwLock::new(metadata)),
             config_lock: Mutex::new(()),
             _watcher: watcher,
@@ -76,7 +75,7 @@ impl BookLibrary {
         recv: UnboundedReceiver<PathBuf>,
         on_change: impl Fn() + Send + Sync + 'static,
     ) {
-        let sync = IndexSync::new(self.keeper.clone(), self.metadata.clone());
+        let sync = IndexSync::new(self.storage.clone(), self.metadata.clone());
         let job = move |path: PathBuf| match sync.sync_path(&path) {
             Ok(true) => {
                 info!(path = ?path, "synced");
@@ -93,13 +92,13 @@ impl BookLibrary {
         self.metadata.read().await.iter().any(|m| m.id == id)
     }
 
-    /// Runs blocking `BookKeeper` file I/O off the async worker threads.
-    async fn with_keeper<T: Send + 'static>(
+    /// Runs blocking `LocalLibraryStorage` file I/O off the async worker threads.
+    async fn with_storage<T: Send + 'static>(
         &self,
-        f: impl FnOnce(BookKeeper) -> Result<T> + Send + 'static,
+        f: impl FnOnce(LocalLibraryStorage) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let keeper = self.keeper.clone();
-        tokio::task::spawn_blocking(move || f(keeper)).await?
+        let storage = self.storage.clone();
+        tokio::task::spawn_blocking(move || f(storage)).await?
     }
 }
 
@@ -156,30 +155,27 @@ impl Library for BookLibrary {
         if !self.has_book(id).await {
             return Err(LibraryError::NotFound);
         }
-        let path = self.keeper.book_thumbnail_path(id);
-        let exists = tokio::fs::try_exists(&path)
-            .await
-            .with_context(|| format!("couldn't check {}", path.display()))?;
         // A book without a cover image has no thumbnail.
-        if exists {
-            Ok(path)
-        } else {
-            Err(LibraryError::NotFound)
-        }
+        local_path(self.storage.book_thumbnail(id).await?)
     }
 
     async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
-        let metadata = self.metadata.read().await;
-        let book = metadata
+        // Copied out, so a slow fetch doesn't hold up index writes.
+        let path = self
+            .metadata
+            .read()
+            .await
             .iter()
             .find(|m| m.id == id)
-            .ok_or(LibraryError::NotFound)?;
+            .ok_or(LibraryError::NotFound)?
+            .path
+            .clone();
         // `path` comes from synced `.shelf/` data: an absolute path or `..` would escape the library.
-        let rel = Path::new(&book.path);
+        let rel = Path::new(&path);
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
-            return Err(anyhow!("book {id} has an unsafe path: {}", book.path).into());
+            return Err(anyhow!("book {id} has an unsafe path: {path}").into());
         }
-        Ok(self.keeper.library_root().join(rel))
+        local_path(self.storage.book_file(rel).await?)
     }
 
     async fn get_progress(
@@ -191,7 +187,7 @@ impl Library for BookLibrary {
         }
 
         let id = req.id.clone();
-        let epub_progress = match self.with_keeper(move |k| k.book_progress(&id)).await {
+        let epub_progress = match self.with_storage(move |s| s.book_progress(&id)).await {
             Ok(progress) => progress.and_then(|p| p.epub_progress).map(|e| e.cfi),
             Err(e) => {
                 warn!(id = %req.id, error = %e, "unreadable progress file");
@@ -216,13 +212,13 @@ impl Library for BookLibrary {
             file_type: book_file_type::Value::Epub as i32,
             epub_progress: Some(EpubProgress { cfi }),
         };
-        self.with_keeper(move |k| k.set_book_progress(&req.id, progress))
+        self.with_storage(move |s| s.set_book_progress(&req.id, progress))
             .await?;
         Ok(())
     }
 
     async fn get_state(&self, _req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
-        let state = read_state(self.keeper.library_root()).await?;
+        let state = self.storage.read_state().await?;
         let last_book_id = match state.last_book_id {
             Some(id) if self.has_book(&id).await => Some(id),
             _ => None,
@@ -237,30 +233,41 @@ impl Library for BookLibrary {
             return Err(LibraryError::NotFound);
         }
         // Read first, so fields this server doesn't know about survive the write.
-        let mut state = read_state(self.keeper.library_root()).await?;
+        let mut state = self.storage.read_state().await?;
         state.last_book_id = req.last_book_id;
-        write_state(self.keeper.library_root(), &state).await?;
+        self.storage.write_state(&state).await?;
         Ok(())
     }
 
     async fn get_config(&self) -> Result<Config, LibraryError> {
-        Ok(self.keeper.read_config().await?)
+        Ok(self.storage.read_config().await?)
     }
 
     async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
         let _guard = self.config_lock.lock().await;
-        Ok(self.keeper.update_config(&patch).await?)
+        Ok(self.storage.update_config(&patch).await?)
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
-        let report = sync_library(&self.keeper, true).await?;
-        let metadata = self.with_keeper(|k| k.all_book_metadata()).await?;
+        let report = sync_library(&self.storage, true).await?;
+        let metadata = self.with_storage(|s| s.all_book_metadata()).await?;
         *self.metadata.write().await = metadata;
         Ok(RebuildIndexResponse {
             books: report.books as u32,
             failed: report.failed as u32,
             removed: report.removed as u32,
         })
+    }
+}
+
+/// `Library` hands out paths for now, so only storage with local files can serve covers and books.
+fn local_path(content: Option<FileContent>) -> Result<PathBuf, LibraryError> {
+    match content {
+        Some(FileContent::Local(path)) => Ok(path),
+        Some(FileContent::Bytes(_)) => {
+            Err(anyhow!("storage without local files can't serve covers or books yet").into())
+        }
+        None => Err(LibraryError::NotFound),
     }
 }
 

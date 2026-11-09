@@ -21,3 +21,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 # No time zone database: only UTC timestamps are needed.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+bytes = "1"
+futures = "0.3"
+# Features are picked per crate: `aws` brings reqwest and aws-lc-rs.
+object_store = { version = "0.14", default-features = false }
