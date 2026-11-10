@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { Navigate, useLocation, useNavigate, useParams } from "react-router"
 import { setConfig } from "@/api"
 import { ScreenHeader } from "@/components/ScreenHeader"
+import { ChoiceRow } from "@/components/settings/ChoiceRow"
 import {
   type Group,
   type Section,
@@ -11,13 +12,6 @@ import {
   VISIBLE_SECTIONS,
 } from "@/components/settings/sections"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import type { Config } from "@/gen/configpb/config_pb"
 import { useBackButton } from "@/lib/backButton"
 import { LIBRARY_CONFIG_KEY, useLibraryConfig } from "@/lib/useAppearance"
@@ -157,8 +151,12 @@ export function Settings() {
 }
 
 function SectionSettings({ section }: { section: Section }) {
-  if (section.content) return <section.content />
-  return <ConfigSettings groups={section.groups} />
+  return (
+    <>
+      {section.groups && <ConfigSettings groups={section.groups} />}
+      {section.content && <section.content />}
+    </>
+  )
 }
 
 /** Settings stored in the library's config, one `Select` each. */
@@ -208,37 +206,14 @@ function SettingRow({
   config: Config
   onChange: (value: number) => void
 }) {
-  const disabled = setting.disabled?.(config) ?? false
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6",
-        disabled && "opacity-60",
-      )}
-    >
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{setting.label}</p>
-        <p className="text-sm text-muted-foreground">{setting.description}</p>
-      </div>
-      <Select
-        items={setting.choices}
-        value={setting.read(config) ?? 0}
-        disabled={disabled}
-        onValueChange={(value) => {
-          if (value !== null) onChange(value)
-        }}
-      >
-        <SelectTrigger className="w-full shrink-0 sm:w-44" aria-label={setting.label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {setting.choices.map((choice) => (
-            <SelectItem key={choice.value} value={choice.value}>
-              {choice.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <ChoiceRow
+      label={setting.label}
+      description={setting.description}
+      choices={setting.choices}
+      value={setting.read(config) ?? 0}
+      disabled={setting.disabled?.(config) ?? false}
+      onChange={onChange}
+    />
   )
 }

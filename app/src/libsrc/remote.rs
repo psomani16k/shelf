@@ -6,7 +6,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use shelf_core::library::{Library, LibraryError};
+use shelf_core::{
+    library::{Library, LibraryError},
+    storage::FileContent,
+};
 use shelf_proto::{
     api::{
         ApiError, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -200,15 +203,17 @@ impl Library for RemoteLibrary {
             })
     }
 
-    async fn get_cover(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.cached_file(id, "cover", "jpeg")
             .await
+            .map(FileContent::Local)
             .map_err(to_library_error)
     }
 
-    async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_book(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.cached_file(id, "file", "epub")
             .await
+            .map(FileContent::Local)
             .map_err(to_library_error)
     }
 

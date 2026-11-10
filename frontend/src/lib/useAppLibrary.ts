@@ -7,6 +7,7 @@ import {
   removeLibrary,
   selectLibrary,
 } from "@/api/app"
+import { UI_SCALE_KEY } from "@/lib/uiScale"
 
 /** App only: the libraries this device knows and which one is open. */
 
@@ -33,11 +34,13 @@ export function nameTaken(libraries: LibraryInfo[] | undefined, name: string): b
 }
 
 /**
- * Everything cached came from the previous library: its books, last book, covers and config.
- * Dropping it makes the next library load its own, and `AppFlow` opens it.
+ * Everything cached, except the library list and the interface scale, came from the previous
+ * library: its books, last book, covers and config. Dropping it makes the next library load its
+ * own, and `AppFlow` opens it.
  */
 function resetLibraryCache(queryClient: QueryClient) {
-  queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== LIBRARIES_KEY[0] })
+  const device = [LIBRARIES_KEY[0], UI_SCALE_KEY[0]]
+  queryClient.removeQueries({ predicate: (q) => !device.includes(q.queryKey[0] as string) })
   return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })
 }
 

@@ -12,15 +12,23 @@ const LIBRARIES_KEY: &str = "libraries";
 const CURRENT_KEY: &str = "current";
 /// How many log files to keep, the one being written included.
 const LOG_FILES_KEY: &str = "log_files";
+/// The interface's size, in percent.
+const UI_SCALE_KEY: &str = "ui_scale";
 
 pub const DEFAULT_LOG_FILES: u32 = 5;
 pub const MAX_LOG_FILES: u32 = 50;
+
+pub const DEFAULT_UI_SCALE: u32 = 100;
+pub const MIN_UI_SCALE: u32 = 80;
+pub const MAX_UI_SCALE: u32 = 150;
+pub const UI_SCALE_STEP: u32 = 10;
 
 #[derive(Deserialize, Serialize)]
 pub struct AppData {
     libraries: Vec<LibrarySource>,
     current: Option<String>,
     log_files: u32,
+    ui_scale: u32,
     /// What `load` had to fall back on. It runs before logging starts, so the caller logs these.
     #[serde(skip)]
     load_problems: Vec<String>,
@@ -54,10 +62,23 @@ impl AppData {
                     DEFAULT_LOG_FILES
                 }),
         };
+        let ui_scale = match store.get(UI_SCALE_KEY) {
+            None => DEFAULT_UI_SCALE,
+            Some(json) => serde_json::from_value(json.clone())
+                .ok()
+                .and_then(|n| validate_ui_scale(n).ok())
+                .unwrap_or_else(|| {
+                    load_problems.push(format!(
+                        "interface scale {json} isn't valid, using {DEFAULT_UI_SCALE}"
+                    ));
+                    DEFAULT_UI_SCALE
+                }),
+        };
         Ok(Self {
             libraries,
             current,
             log_files,
+            ui_scale,
             load_problems,
         })
     }
@@ -71,6 +92,7 @@ impl AppData {
         store.set(LIBRARIES_KEY, serde_json::to_value(&self.libraries)?);
         store.set(CURRENT_KEY, serde_json::to_value(&self.current)?);
         store.set(LOG_FILES_KEY, self.log_files);
+        store.set(UI_SCALE_KEY, self.ui_scale);
         store.save().context("couldn't save app data")?;
         Ok(())
     }
@@ -110,6 +132,15 @@ impl AppData {
         Ok(())
     }
 
+    pub fn ui_scale(&self) -> u32 {
+        self.ui_scale
+    }
+
+    pub fn set_ui_scale(&mut self, percent: u32) -> Result<()> {
+        self.ui_scale = validate_ui_scale(percent)?;
+        Ok(())
+    }
+
     pub fn remove_library(&mut self, name: &str) -> Option<LibrarySource> {
         let index = self.libraries.iter().position(|l| l.name() == name)?;
         if self.current.as_deref() == Some(name) {
@@ -125,6 +156,14 @@ pub fn validate_log_files(n: u32) -> Result<u32> {
         "Keep between 1 and {MAX_LOG_FILES} log files"
     );
     Ok(n)
+}
+
+pub fn validate_ui_scale(percent: u32) -> Result<u32> {
+    ensure!(
+        (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&percent) && percent % UI_SCALE_STEP == 0,
+        "Scale must be {MIN_UI_SCALE}–{MAX_UI_SCALE}% in steps of {UI_SCALE_STEP}"
+    );
+    Ok(percent)
 }
 
 /// The trimmed name, if it's non-empty and no other library has it (ignoring case).
@@ -176,5 +215,15 @@ mod tests {
         assert_eq!(validate_log_files(1).unwrap(), 1);
         assert_eq!(validate_log_files(MAX_LOG_FILES).unwrap(), MAX_LOG_FILES);
         assert!(validate_log_files(MAX_LOG_FILES + 1).is_err());
+    }
+
+    #[test]
+    fn ui_scale_must_be_a_step_in_range() {
+        assert!(validate_ui_scale(MIN_UI_SCALE - UI_SCALE_STEP).is_err());
+        assert_eq!(validate_ui_scale(MIN_UI_SCALE).unwrap(), MIN_UI_SCALE);
+        assert_eq!(validate_ui_scale(120).unwrap(), 120);
+        assert!(validate_ui_scale(125).is_err());
+        assert_eq!(validate_ui_scale(MAX_UI_SCALE).unwrap(), MAX_UI_SCALE);
+        assert!(validate_ui_scale(MAX_UI_SCALE + UI_SCALE_STEP).is_err());
     }
 }

@@ -49,6 +49,12 @@ export type Insets = { top: number; right: number; bottom: number; left: number 
 /** Space taken by the status bar, navigation bar and cutout, in CSS px. Zero on desktops. */
 export const systemInsets = () => invokeCommand<Insets>("system_insets")
 
+/** The interface's size on this device, in percent. */
+export const uiScale = () => invokeCommand<number>("ui_scale")
+
+/** 80 to 150 in steps of 10, else a 400. Resolves with the saved value. */
+export const setUiScale = (percent: number) => invokeCommand<number>("set_ui_scale", { percent })
+
 export type LogSettings = {
   /** How many log files are kept, the one being written included. */
   keep_files: number

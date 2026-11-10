@@ -151,15 +151,18 @@ impl Library for BookLibrary {
         }
     }
 
-    async fn get_cover(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
         if !self.has_book(id).await {
             return Err(LibraryError::NotFound);
         }
         // A book without a cover image has no thumbnail.
-        local_path(self.storage.book_thumbnail(id).await?)
+        self.storage
+            .book_thumbnail(id)
+            .await?
+            .ok_or(LibraryError::NotFound)
     }
 
-    async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_book(&self, id: &str) -> Result<FileContent, LibraryError> {
         // Copied out, so a slow fetch doesn't hold up index writes.
         let path = self
             .metadata
@@ -175,7 +178,10 @@ impl Library for BookLibrary {
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
             return Err(anyhow!("book {id} has an unsafe path: {path}").into());
         }
-        local_path(self.storage.book_file(rel).await?)
+        self.storage
+            .book_file(rel)
+            .await?
+            .ok_or(LibraryError::NotFound)
     }
 
     async fn get_progress(
@@ -257,17 +263,6 @@ impl Library for BookLibrary {
             failed: report.failed as u32,
             removed: report.removed as u32,
         })
-    }
-}
-
-/// `Library` hands out paths for now, so only storage with local files can serve covers and books.
-fn local_path(content: Option<FileContent>) -> Result<PathBuf, LibraryError> {
-    match content {
-        Some(FileContent::Local(path)) => Ok(path),
-        Some(FileContent::Bytes(_)) => {
-            Err(anyhow!("storage without local files can't serve covers or books yet").into())
-        }
-        None => Err(LibraryError::NotFound),
     }
 }
 

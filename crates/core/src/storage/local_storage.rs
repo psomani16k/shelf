@@ -1,21 +1,26 @@
 use std::{
     collections::HashSet,
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context, Result};
 use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
 use shelf_utility::timeutil::Time;
-use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
 use super::{FileContent, LibraryStorage, is_epub};
 
-/// Marks a temp file from `write_atomic`: `.<target name>.tmp-<pid>-<nanos>`.
+/// Marks a temp file from `write_atomic`: `.<target name>.tmp-<pid>-<nanos>-<seq>`.
 const TMP_MARKER: &str = ".tmp-";
+
+/// Tells apart temp files that concurrent writes create in the same nanosecond.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A library in a folder on this machine, with its data in `<root>/.shelf/`.
 #[derive(Debug, Clone)]
@@ -66,6 +71,29 @@ impl LocalLibraryStorage {
 
     pub fn state_path(&self) -> PathBuf {
         self.shelf_file_path("state.json")
+    }
+
+    /// Writes a temp file and renames it over `path`, so no one ever sees half a file. The temp
+    /// file sits directly in `.shelf/`: on the same filesystem, and where the cleanup looks.
+    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        let name = path.file_name().context("no file name")?.to_string_lossy();
+        let tmp = self.shelf_file_path(&format!(
+            ".{name}{TMP_MARKER}{}-{}-{}",
+            std::process::id(),
+            Time::now().unix_nanos(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed),
+        ));
+
+        let result = (|| {
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            fs::rename(&tmp, path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result.with_context(|| format!("couldn't write {}", path.display()))
     }
 
     fn walk(&self, dir: &Path, res: &mut HashSet<PathBuf>) -> Result<()> {
@@ -147,8 +175,7 @@ impl LibraryStorage for LocalLibraryStorage {
 
     fn set_book_metadata(&self, hash: &str, metadata: &BookMetadata) -> Result<()> {
         let meta_file = self.book_dir_by_id(hash).join("metadata.json");
-        fs::write(meta_file, serde_json::to_string_pretty(metadata)?)?;
-        Ok(())
+        self.write_atomic(&meta_file, serde_json::to_string_pretty(metadata)?.as_bytes())
     }
 
     fn create_book_dir(&self, hash: &str) -> Result<()> {
@@ -168,8 +195,7 @@ impl LibraryStorage for LocalLibraryStorage {
 
     fn set_book_progress(&self, hash: &str, progress: BookProgress) -> Result<()> {
         let progress_file = self.book_dir_by_id(hash).join("progress.json");
-        fs::write(progress_file, serde_json::to_string_pretty(&progress)?)?;
-        Ok(())
+        self.write_atomic(&progress_file, serde_json::to_string_pretty(&progress)?.as_bytes())
     }
 
     async fn book_thumbnail(&self, hash: &str) -> Result<Option<FileContent>> {
@@ -181,8 +207,7 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     fn set_book_thumbnail(&self, hash: &str, thumbnail: &[u8]) -> Result<()> {
-        fs::write(self.thumbnail_path(hash), thumbnail)?;
-        Ok(())
+        self.write_atomic(&self.thumbnail_path(hash), thumbnail)
     }
 
     fn clean_up_hashes(&self, hashes: HashSet<String>) -> Result<()> {
@@ -201,7 +226,8 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     async fn write_shelf_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
-        write_atomic(&self.shelf_file_path(name), bytes).await
+        let (storage, path, bytes) = (self.clone(), self.shelf_file_path(name), bytes.to_vec());
+        tokio::task::spawn_blocking(move || storage.write_atomic(&path, &bytes)).await?
     }
 
     async fn clean_up_temp_files(&self) -> Result<()> {
@@ -221,31 +247,6 @@ impl LibraryStorage for LocalLibraryStorage {
         }
         Ok(())
     }
-}
-
-/// Writes a hidden temp file beside `path` and renames it over `path`, so a crash or a sync tool
-/// never sees half a file. The temp file must be on the same filesystem for the rename to be
-/// atomic, which is why it can't go in the OS temp dir.
-async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("no parent folder")?;
-    let name = path.file_name().context("no file name")?.to_string_lossy();
-    let tmp = dir.join(format!(
-        ".{name}{TMP_MARKER}{}-{}",
-        std::process::id(),
-        Time::now().unix_nanos()
-    ));
-
-    let result = async {
-        let mut file = tokio::fs::File::create(&tmp).await?;
-        file.write_all(bytes).await?;
-        file.sync_all().await?;
-        tokio::fs::rename(&tmp, path).await
-    }
-    .await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&tmp).await;
-    }
-    Ok(result?)
 }
 
 #[cfg(test)]
@@ -324,6 +325,39 @@ mod tests {
         let stored: Value =
             serde_json::from_str(&fs::read_to_string(storage.config_path()).unwrap()).unwrap();
         assert_eq!(stored, json!({"future": 1}));
+    }
+
+    #[test]
+    fn book_data_writes_leave_no_temp_files() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        let id = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+        storage.create_book_dir(id).unwrap();
+        let meta = BookMetadata {
+            id: id.into(),
+            ..Default::default()
+        };
+
+        storage.set_book_metadata(id, &meta).unwrap();
+        storage.set_book_metadata(id, &meta).unwrap();
+        storage.set_book_progress(id, BookProgress::default()).unwrap();
+        storage.set_book_thumbnail(id, b"jpeg").unwrap();
+
+        assert_eq!(storage.book_metadata(id).unwrap(), Some(meta));
+        assert_eq!(fs::read(storage.thumbnail_path(id)).unwrap(), b"jpeg");
+        let names = |dir: PathBuf| {
+            let mut v: Vec<_> = fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(root.path().join(".shelf")), ["books"]);
+        assert_eq!(
+            names(storage.book_dir_by_id(id)),
+            ["metadata.json", "progress.json", "thumbnail.jpeg"]
+        );
     }
 
     #[tokio::test]

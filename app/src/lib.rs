@@ -41,6 +41,8 @@ pub fn run() {
             commands::rebuild_index,
             commands::get_cover,
             commands::get_book_file,
+            commands::ui_scale,
+            commands::set_ui_scale,
             logging::log_settings,
             logging::set_log_files,
             logging::list_log_files,

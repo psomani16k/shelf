@@ -17,7 +17,7 @@ A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtr
 
 - Moving or renaming a file keeps its ID, so progress follows it.
 - Editing a file (new bytes) gives it a new ID; its old progress is dropped at the next startup sync.
-- Two identical copies of a file share one ID and one `.shelf/books/<id>/` folder; the metadata's `path` points at whichever copy was synced last.
+- Two identical copies of a file share one ID and one `.shelf/books/<id>/` folder; the metadata's `path` points at whichever copy was synced last, and only that copy is listed.
 - IDs are 40 alphanumeric characters. `RemoteLibrary` relies on that to use them as cache file names safely.
 
 ## `.shelf/` layout
@@ -34,7 +34,7 @@ A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtr
     config.json          Config: library settings (reader and UI), partially updated by set_config
 ```
 
-All files are pretty-printed JSON using the **proto JSON shape**: snake_case keys, enums by name. The Rust types are the generated proto types (`shelf_proto::bookkeeping`, `::state`, `::config`) serialized with pbjson, which ignores unknown fields when reading. So only `config.json` (merged as raw JSON) keeps fields this build doesn't know; rewriting the other files drops them.
+All files except the thumbnail are pretty-printed JSON using the **proto JSON shape**: snake_case keys, enums by name. The Rust types are the generated proto types (`shelf_proto::bookkeeping`, `::state`, `::config`) serialized with pbjson, which ignores unknown fields when reading. So only `config.json` (merged as raw JSON) keeps fields this build doesn't know; rewriting the other files drops them.
 
 ### `metadata.json` (`bookkeeperpb.BookMetadata`)
 
@@ -72,13 +72,15 @@ Names alone are never used to guess a cover, since books also have files like `b
 { "file_type": "EPUB", "epub_progress": { "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)" } }
 ```
 
+An unreadable file is logged at `warn` and reads as no progress.
+
 ### `state.json` (`statepb.State`)
 
 ```json
 { "last_book_id": "3f786850e387550fdab836ed7e6dc881de23001b" }
 ```
 
-`set_state` reads the file into `State` first and only replaces `last_book_id`. That doesn't keep unknown fields: pbjson drops them on read, so a field written by a newer build is lost (the code comment in `book_library.rs` claims otherwise). `get_state` reports `last_book_id` as unset when that book is no longer in the library.
+`set_state` reads the file into `State` first and only replaces `last_book_id`. That doesn't keep unknown fields: pbjson drops them on read, so a field written by a newer build is lost (the code comment in `book_library.rs` claims otherwise). `set_state` with an ID that isn't in the library is `NotFound`. `get_state` reports `last_book_id` as unset when that book is no longer in the library. A missing or unparseable file reads as the default state (no last book).
 
 ### `config.json` (`configpb.Config`)
 
@@ -89,15 +91,15 @@ Names alone are never used to guess a cover, since books also have files like `b
 }
 ```
 
-Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A mutex in `BookLibrary` serializes concurrent `set_config` calls. A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme).
+Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A stored file that doesn't parse as a JSON object is logged at `warn` and replaced by the patch. A mutex in `BookLibrary` serializes concurrent `set_config` calls. A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme). `developer.logging` (`max_mobile_files`, `max_desktop_files`) is in the schema, but no code reads or writes it.
 
 ### Writes
 
-`state.json` and `config.json` are written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>` in the same folder, `fsync`, then rename (`write_atomic`, `crates/core/src/storage/local_storage.rs`). Leftover temp files are deleted when a library opens, right after the startup sync (`LocalLibraryStorage::clean_up_temp_files`). `metadata.json`, `progress.json` and `thumbnail.jpeg` are currently written with a plain `fs::write` (see [known-issues.md](known-issues.md)).
+Every file Shelf writes (`state.json`, `config.json`, and each book's `metadata.json`, `progress.json` and `thumbnail.jpeg`) is written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>-<seq>` directly in `.shelf/`, `fsync`, then a rename over the target (`LocalLibraryStorage::write_atomic`, `crates/core/src/storage/local_storage.rs`). A rename is atomic within one filesystem, so the temp file can't go in the OS temp dir. Keeping every temp file directly in `.shelf/`, even for a book's files, lets the cleanup find them without listing each book's folder. `<seq>` is a per-process counter, so concurrent writes in the same nanosecond don't share a temp file. Leftover temp files are deleted when a library opens, after the startup sync (`LocalLibraryStorage::clean_up_temp_files`).
 
 ### S3 storage
 
-`S3LibraryStorage` (`crates/core/src/storage/s3_storage.rs`, cargo feature `s3`, built on `object_store`) keeps the same layout under a key prefix in a bucket: books at `<prefix>/<path>`, data at `<prefix>/.shelf/…`, with the same scanning rules (dot-parts skipped, `.epub` case-insensitive). Credentials, region and endpoint come from the standard `AWS_*` env vars (`AWS_ENDPOINT` for MinIO or R2). Every write is a single PUT, which replaces an object whole, so there are no temp files, and `create_book_dir` and `clean_up_temp_files` do nothing. A book's mtime is its object's `last_modified`. The blocking trait methods wait on the tokio runtime the storage was created in, so they must run in `spawn_blocking`. It isn't wired into the server or app yet (see [known-issues.md](known-issues.md#s3-storage)).
+`S3LibraryStorage` (`crates/core/src/storage/s3_storage.rs`, cargo feature `s3`, built on `object_store`) keeps the same layout under a key prefix in a bucket: books at `<prefix>/<path>`, data at `<prefix>/.shelf/…`, with the same scanning rules (dot-parts skipped, `.epub` case-insensitive). Credentials, region and endpoint come from the standard `AWS_*` env vars (`AWS_ENDPOINT` for MinIO or R2). Every write is a single PUT, which replaces an object whole, so there are no temp files, and `create_book_dir` and `clean_up_temp_files` do nothing. `book_file` and `book_thumbnail` fetch the whole object and return `FileContent::Bytes`. `S3LibraryStorage::with_store` takes any `object_store` backend (tests use `InMemory`). A book's mtime is its object's `last_modified`. The blocking trait methods wait on the tokio runtime the storage was created in, so they must run in `spawn_blocking`. It isn't wired into the server or app yet (see [known-issues.md](known-issues.md#s3-storage)).
 
 ## Startup sync
 
@@ -107,11 +109,11 @@ Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "no
 2. Load every `metadata.json`, keyed by `path`.
 3. For every book file:
    - **Skip hashing** (`EbookExtractor::predict_id_change_using_modified_time`) when a `metadata.json` has this `path`, a non-empty `id`, and a `last_update_time` no earlier than the file's mtime (both compared to the whole second). The stored `id` is used as is.
-   - Otherwise read and SHA-1 the whole file (`EbookExtractor::read`, which also loads `.shelf/books/<id>/metadata.json` if there is one), then `extract(force)`:
+   - Otherwise read and SHA-1 the whole file (`EbookExtractor::read`, which also loads `.shelf/books/<id>/metadata.json` if there is one; one it can't read or parse is logged at `warn` and treated as missing, so the book is fully extracted again and its folder, progress included, is kept), then `extract(force)`:
      - metadata exists and `force` is off: set `path`, `id` and `last_update_time` in it if they changed, and write it only then (the stamp is refreshed when the file's mtime has passed it, so a touched but identical file is hashed once, not on every start);
-     - otherwise: create the folder, parse the EPUB with `rbook` from the bytes already read, write `metadata.json` (with `last_update_time`) and the thumbnail.
-4. Delete every `.shelf/books/<id>/` folder whose ID no file produced. **This deletes that book's progress too.**
-5. Log `library synced` with `books`, `hashed` (read and synced successfully), `skipped`, `failed` and `removed` counts.
+     - otherwise: parse the EPUB with `rbook` from the bytes already read, then create the folder and write `metadata.json` (with `last_update_time`) and the thumbnail.
+4. Delete every `.shelf/books/<id>/` folder whose ID no file produced (a folder that can't be deleted is skipped silently). **This deletes that book's progress too.**
+5. Log `library synced` with `books`, `hashed` (read and synced successfully), `skipped`, `failed` and `removed` counts, and `force`.
 
 A file that fails (for example half-copied) is logged at `warn` and retried on the next watcher event or startup. A file that was hashed but couldn't be extracted (an EPUB rbook can't parse) still counts as producing its ID, so its `.shelf/books/<id>/` folder and progress are kept; the folder is only created once the EPUB has parsed. Only a file that can't be read at all leaves its ID unproduced.
 

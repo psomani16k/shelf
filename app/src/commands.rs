@@ -1,8 +1,6 @@
-use std::path::Path;
-
 use anyhow::{Context, ensure};
 use serde::Serialize;
-use shelf_core::library::Library;
+use shelf_core::{library::Library, storage::FileContent};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -153,6 +151,26 @@ pub async fn select_library(
     Ok(())
 }
 
+/// The interface's size on this device, in percent.
+#[tauri::command]
+pub async fn ui_scale(state: State<'_, AppState>) -> Result<u32> {
+    Ok(state.data.lock().await.ui_scale())
+}
+
+/// 80 to 150 in steps of 10, else a 400.
+#[tauri::command]
+pub async fn set_ui_scale(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    percent: u32,
+) -> Result<u32> {
+    let mut data = state.data.lock().await;
+    data.set_ui_scale(percent).map_err(CommandError::invalid)?;
+    data.save(&app)?;
+    tracing::info!(percent, "interface scale changed");
+    Ok(percent)
+}
+
 /// Forgets the library on this device; its folder and `.shelf/` data are untouched.
 /// Closes it first if it's the open one.
 #[tauri::command]
@@ -241,21 +259,24 @@ pub async fn rebuild_index(state: State<'_, AppState>) -> Result<RebuildIndexRes
 /// `http://` dev server page, so `<img src>` never worked in `cargo tauri dev` on Linux.
 #[tauri::command]
 pub async fn get_cover(state: State<'_, AppState>, id: String) -> Result<Response> {
-    let path = state.library().await?.get_cover(&id).await?;
-    raw_file(&path).await
+    let cover = state.library().await?.get_cover(&id).await?;
+    raw_file(cover).await
 }
 
 /// The EPUB as raw bytes.
 #[tauri::command]
 pub async fn get_book_file(state: State<'_, AppState>, id: String) -> Result<Response> {
-    let path = state.library().await?.get_book(&id).await?;
-    raw_file(&path).await
+    let book = state.library().await?.get_book(&id).await?;
+    raw_file(book).await
 }
 
 /// `invoke` hands raw bytes to JS as an ArrayBuffer, not a JSON array of numbers.
-async fn raw_file(path: &Path) -> Result<Response> {
-    let bytes = tokio::fs::read(path)
-        .await
-        .with_context(|| format!("couldn't read {}", path.display()))?;
+async fn raw_file(content: FileContent) -> Result<Response> {
+    let bytes = match content {
+        FileContent::Local(path) => tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("couldn't read {}", path.display()))?,
+        FileContent::Bytes(bytes) => Vec::from(bytes),
+    };
     Ok(Response::new(bytes))
 }

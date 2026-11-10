@@ -31,7 +31,10 @@ type Props = {
   left: Panel
   /** Leave out to disable the right panel, its edge swipe included. */
   right?: Panel
+  /** Covers the top of `children`. */
   header: ReactNode
+  /** Slides the header up out of view. */
+  headerHidden?: boolean
   children: ReactNode
 }
 
@@ -42,7 +45,15 @@ const progressOf = (open: DrawerSide | null) => (open === "left" ? 1 : open === 
  * landscape. `--p` runs from -1 (right open) to 1 (left open) and drives every transform, so a
  * drag updates one CSS variable instead of re-rendering.
  */
-export function SlideDrawer({ open, onOpenChange, left, right, header, children }: Props) {
+export function SlideDrawer({
+  open,
+  onOpenChange,
+  left,
+  right,
+  header,
+  headerHidden = false,
+  children,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const leftRef = useRef<HTMLElement>(null)
   const rightRef = useRef<HTMLElement>(null)
@@ -170,13 +181,11 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
       {/* Absolute children fill this box, which the safe-area padding keeps clear of the system bars. */}
       <div className="relative size-full">
       <div
-        className={`absolute inset-0 flex flex-col ${moves}`}
+        // Clips the hidden header, which would otherwise show in the status bar's padding.
+        className={`absolute inset-0 flex flex-col overflow-hidden ${moves}`}
         style={{ transform: pushed }}
         inert={open !== null}
       >
-        <div className="touch-pan-y" {...dragHandlers}>
-          {header}
-        </div>
         <div className="relative min-h-0 flex-1">
           {children}
           {!open && (
@@ -185,6 +194,13 @@ export function SlideDrawer({ open, onOpenChange, left, right, header, children 
           {!open && right && (
             <div className="absolute inset-y-0 right-0 z-10 w-4 touch-pan-y" {...dragHandlers} />
           )}
+        </div>
+        <div
+          className={`absolute inset-x-0 top-0 z-20 touch-pan-y bg-background transition-transform duration-200 ease-out motion-reduce:transition-none ${headerHidden ? "-translate-y-full" : ""}`}
+          inert={headerHidden}
+          {...dragHandlers}
+        >
+          {header}
         </div>
       </div>
 

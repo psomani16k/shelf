@@ -10,10 +10,10 @@ The same operations exist as HTTP routes (`shelf-server`) and as Tauri commands 
   - Enums travel as their names (`"PAGINATED"`).
   - Unknown fields are ignored on decode, on both sides.
   - Avoid 64-bit integer fields: proto3 JSON sends them as strings.
-- **Enums live in wrapper messages** (`ReaderFlow.Value`) so their values stay plain names like `LIGHT` rather than `READER_FLOW_LIGHT`. `buf.yaml` disables the lint rules that would object.
+- **Enums live in wrapper messages** (`ReaderFlow.Value`) so their values stay plain names like `PAGINATED` rather than `READER_FLOW_PAGINATED`. `buf.yaml` disables the lint rules that would object.
 - **Raw bytes exception:** covers and EPUB files are sent as raw bytes, not JSON.
 - **Changing the schema:** edit `.proto` files only, never renumber or reuse a field number, then rebuild (Rust regenerates on `cargo build`; the frontend on `pnpm dev`/`build`/`test`). Run `buf lint`.
-- **Registering a new file:** `crates/proto/build.rs` has an explicit list of `.proto` files. Add new ones there. (`proto/apipb/cover.proto` is empty and isn't in the list.)
+- **Registering a new file:** `crates/proto/build.rs` has an explicit list of `.proto` files. Add new ones there. (`proto/apipb/cover.proto` is empty and isn't in the list.) `library.proto` also defines `CreateDirectoryRequest`, `CreateDirectoryResponse` and `UploadEbookRequest`, which no route or command uses.
 
 ## HTTP routes (`crates/server/src/api.rs`)
 
@@ -36,10 +36,11 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 
 Notes:
 - `directory_path` is relative to the library root, `""` is the root; leading and trailing slashes are trimmed. Books are sorted by title (else file name), folders by name, both case-insensitively.
-- `/cover` and `/file` use tower-http `ServeFile` (Range, `Last-Modified`, content type) and add `Cache-Control: no-store`.
+- `/cover` and `/file` add `Cache-Control: no-store`. A local file (`FileContent::Local`) goes through tower-http `ServeFile` (Range, `Last-Modified`, content type); bytes (`FileContent::Bytes`, from storage without local files, such as S3, which isn't wired up) are sent whole as `image/jpeg` / `application/epub+zip`, with no Range support. A book still in the index whose file is gone from disk gets `ServeFile`'s 404 with an empty body.
 - `set_progress` without `epub_progress` is a no-op `204`.
+- `get_state` returns a `last_book_id` that's no longer in the library as unset.
 - `/library/rebuild` answers only when the rebuild is done, which takes as long as reading every book file. A second rebuild waits for the first.
-- Every non-API path is the SPA (`crates/server/src/frontend.rs`). Unknown `/api/*` paths return a JSON 404.
+- Every non-API path is the SPA (`crates/server/src/frontend.rs`). Unknown `/api/*` paths return a JSON 404. A known path with the wrong method gets axum's `405` with an empty body.
 
 ### Errors
 
@@ -47,7 +48,7 @@ Failures return an `ApiError` body `{ "message": "…" }`:
 
 | Cause | Status | Message |
 |---|---|---|
-| `LibraryError::NotFound` (unknown book ID, book without a cover, unknown API path) | 404 | `not found` |
+| `LibraryError::NotFound` (unknown book ID, including `set_state`'s `last_book_id`; book without a cover; unknown API path) | 404 | `not found` |
 | `LibraryError::Internal` | 500 | `internal error` (details only in the server log) |
 | Malformed JSON body | axum's default 4xx rejection (plain text, not `ApiError`) | — |
 
@@ -73,7 +74,7 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `get_cover` | `{ id }` | `ArrayBuffer` (JPEG) |
 | `get_book_file` | `{ id }` | `ArrayBuffer` (EPUB) |
 
-`get_cover` / `get_book_file` read the whole file and return `tauri::ipc::Response::new(bytes)`, which reaches JS as an `ArrayBuffer`. A custom URI scheme (`cover://`) was tried first and dropped: WebKitGTK doesn't dispatch custom-scheme subresource loads from a page served over `http://` (the Vite dev server), so covers never loaded in `cargo tauri dev` on Linux.
+`get_cover` / `get_book_file` read the whole file (or take the bytes, for storage without local files) and return `tauri::ipc::Response::new(bytes)`, which reaches JS as an `ArrayBuffer`. A custom URI scheme (`cover://`) was tried first and dropped: WebKitGTK doesn't dispatch custom-scheme subresource loads from a page served over `http://` (the Vite dev server), so covers never loaded in `cargo tauri dev` on Linux.
 
 ### Library management
 
@@ -86,7 +87,16 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `remove_library` | `{ name }` | `null` | Forgets it on this device; closes it if open; nothing in the library is deleted |
 | `open_library` | `{ name }` | `null` | Resolves after a local library's startup sync |
 
-Names are required and unique ignoring case. An empty or duplicate name, an unreadable folder or a malformed URL rejects with status 400.
+Names are trimmed, required and unique ignoring case. An empty or duplicate name, an unreadable folder or a malformed URL rejects with status 400. An unknown name passed to `select_library`, `remove_library` or `open_library` rejects with status 500.
+
+### Interface scale
+
+App only (`app/src/commands.rs`). Per device, in the app data; see [app.md](app.md#stored-data).
+
+| Command | Args | Resolves to | Notes |
+|---|---|---|---|
+| `ui_scale` | none | a number, in percent | 100 unless changed |
+| `set_ui_scale` | `{ percent }` | the saved number | 80 to 150 in steps of 10, else a 400 |
 
 ### Logs
 
@@ -122,4 +132,4 @@ The frontend's `invokeCommand` (`frontend/src/api/tauri.ts`) turns rejections in
 
 | Event | Payload | When |
 |---|---|---|
-| `library-changed` | `null` | A local library's watcher synced a book (added, changed, moved or removed). Remote libraries never emit it. |
+| `library-changed` | `null` | A local library's watcher sync changed the index (a book or folder added, changed, moved or removed), once per synced path. Remote libraries never emit it. |

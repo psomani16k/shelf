@@ -1,5 +1,5 @@
 pub mod book_library;
-use std::{future::Future, path::PathBuf};
+use std::future::Future;
 
 use shelf_proto::{
     api::{
@@ -9,6 +9,8 @@ use shelf_proto::{
     },
     config::Config,
 };
+
+use crate::storage::FileContent;
 
 #[derive(Debug)]
 pub enum LibraryError {
@@ -30,11 +32,12 @@ pub trait Library {
         req: ListDirectoriesRequest,
     ) -> impl Future<Output = ListDirectoriesResponse> + Send;
 
-    /// Where the book's thumbnail JPEG is, so callers can stream it.
-    fn get_cover(&self, id: &str) -> impl Future<Output = Result<PathBuf, LibraryError>> + Send;
+    /// The book's thumbnail JPEG: a local file callers can stream, or its bytes.
+    fn get_cover(&self, id: &str)
+    -> impl Future<Output = Result<FileContent, LibraryError>> + Send;
 
-    /// Where the book's file is, so callers can stream it.
-    fn get_book(&self, id: &str) -> impl Future<Output = Result<PathBuf, LibraryError>> + Send;
+    /// The book's EPUB: a local file callers can stream, or its bytes.
+    fn get_book(&self, id: &str) -> impl Future<Output = Result<FileContent, LibraryError>> + Send;
 
     fn get_progress(
         &self,

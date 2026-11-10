@@ -1,6 +1,6 @@
 # Roadmap
 
-Everything planned but not built, as of 2026-11-02. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
+Everything planned but not built, as of 2026-11-09. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
 
 Rough priority within each section is top to bottom. Plan milestones are noted as (M*n*) where they came from one.
 
@@ -30,15 +30,15 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 
 - [x] **Faster startup:** done with `last_update_time` vs the file's mtime ([library-format.md](library-format.md#startup-sync)). Possible follow-up: also record the file's `size`, to catch a same-path replacement with an older mtime.
 - [ ] **Watcher flush cap:** flush a path at the latest 60 s after its first event, so a file that keeps changing still syncs.
-- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`BookLibrary::receive_and_process_library_updates`) checks `predict_id_change_using_modified_time` first. A touch still does. (The TODO in `watcher.rs` about filtering event kinds is still there.)
-- [ ] **Don't lose progress to a corrupt `metadata.json`:** `EbookExtractor::read` loads it with `book_metadata(&hash)?`, so an unparseable file fails the book before its ID is known, and the startup sync deletes its folder. Treat it as missing (log a `warn`) so the book is re-extracted instead.
-- [ ] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails (`write_atomic`). Together with the item above, a crash during *Rebuild index* can't cost a book its progress.
+- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`BookLibrary::receive_and_process_library_updates`) checks `predict_id_change_using_modified_time` first. A touch still does.
+- [x] **Don't lose progress to a corrupt `metadata.json`:** `EbookExtractor::read` treats one it can't read as missing (with a `warn`), so the book is extracted again and its folder kept ([library-format.md](library-format.md#startup-sync)).
+- [x] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails too ([library-format.md](library-format.md#writes)). Together with the item above, a crash during *Rebuild index* can't cost a book its progress.
 - [ ] **Keep unknown fields** when rewriting `state.json`, `metadata.json` and `progress.json` (merge into raw JSON as `config.json` does).
 - [ ] **Don't delete unrecognised entries in `.shelf/books/`**, such as sync-tool conflict copies; only remove folders that are valid IDs for books that are gone.
 - [ ] **Keep progress across a book being briefly missing or edited** (e.g. don't delete a book's folder on the first startup it's missing; or derive the ID from the OPF `unique-identifier`, falling back to the file hash, as the plan proposed).
 - [ ] **Watcher: take a gone book's ID from the in-memory index.** `EbookExtractor::read` scans every `metadata.json` for a gone file's ID, and `rm -r` reports each file, so deleting a folder of 100 books in a 2,000-book library reads about 200,000 files. `IndexSync::sync_book` already has the book's index entry (looked up by path) when it calls `read`.
 - [ ] **Extraction concurrency:** measure the startup sync's two jobs per CPU against one (32 vs 16 on a 16-thread machine, and up to that many books in memory) and keep whichever is faster. Then share one cap (a `Semaphore` in `BookLibrary`) between the startup sync, *Rebuild index* and the watcher, which today each cap themselves.
-- [ ] **Wire up S3 libraries.** `S3LibraryStorage` is written and tested but unused. Left: a dispatch enum over the storage backends (the trait returns `impl Future`, so no `dyn`), used by `BookLibrary`, `EbookExtractor`, `IndexSync` and `sync_library`; `Library::get_cover` / `get_book` returning `FileContent` instead of a `PathBuf` (the server and the app's commands serve `Bytes` directly); `BookLibrary::open` skipping the watcher for S3; and configuration (server env var, maybe an app library kind).
+- [ ] **Wire up S3 libraries.** `S3LibraryStorage` is written and tested but unused. Left: a dispatch enum over the storage backends (the trait returns `impl Future`, so no `dyn`), used by `BookLibrary`, `EbookExtractor`, `IndexSync` and `sync_library`; `BookLibrary::open` skipping the watcher for S3; and configuration (server env var, maybe an app library kind).
 - [ ] Write a zero progress file at extraction (TODO in `ebook_ingest.rs`).
 - [ ] Make `list_books` / `list_sub_directories` fallible in the `Library` trait, so a remote library's network errors show as errors, not an empty folder.
 - [x] Move rayon work onto tokio (`spawn_blocking`), per the "tokio everywhere" rule. Done: the startup sync uses `shelf_utility::routines::transform_concurrent_blocking`, and rayon is out of the workspace.
@@ -62,11 +62,12 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 - [ ] **Library search** by title or author; **sort** by recently read, title or author; a refresh button or pull-to-refresh.
 - [ ] **Book details**: language, description, publisher, published date (extracted to `metadata.json`, a details view).
 - [ ] **Library info**: optional `.shelf/library.json` (`{ "name": … }`) and an "About / library info" section in Settings (name, book count).
-- [ ] **Reader**: chapter name and percentage display; an auto-hiding top bar; tap zones to turn pages; PageUp/PageDown/Space.
+- [x] **Reader bars**: chapter name and percentage in a bottom bar; the header and bottom bar auto-hide while reading ([frontend.md](frontend.md#home-and-reading)).
+- [ ] **Reader input**: tap zones to turn pages; PageUp/PageDown/Space turning pages when paginated (today they only hide the bars).
 
 ## Theming and reading customization
 
-Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all in the library's `config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`).
+Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all in the library's `config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`). Reader zoom is per device, in `localStorage` (`frontend/src/lib/readerZoom.ts`). The app's interface scale is per device, in the app data (`frontend/src/lib/uiScale.ts`), and the book's zoom is multiplied by it.
 
 - [ ] **Decide where each preference lives** before adding more. Colours and layout suit the library config (the same on every device); size-like ones (font size, line height, margins) differ between a phone and a laptop and probably belong per device (app store / `localStorage`). Record the choice in [decisions.md](decisions.md).
 - [ ] **More reader themes**: sepia, a low-contrast warm "night" theme, and pure black for OLED screens. New `ReaderTheme` enum values (append, never renumber), with `PALETTE` in `appearance.ts` becoming a table of themes and `readerCss` handling each.
@@ -76,7 +77,7 @@ Built today: interface theme (system/light/dark), reader theme (match interface/
   - line height and paragraph spacing;
   - justification and hyphenation;
   - a *Use publisher's styles* toggle: off overrides the book's fonts and spacing, on leaves them alone.
-- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings.
+- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* popup has zoom (per device, `lib/readerZoom.ts`).
 - [ ] **Dark-theme images**: an option to dim images in dark themes, so a white illustration doesn't flash.
 - [ ] **Interface accent colour**, and an interface theme that follows the reader theme (so sepia reading gets a matching drawer and settings).
 - [ ] App only: **keep the screen on** while reading.
@@ -88,7 +89,7 @@ Built today: interface theme (system/light/dark), reader theme (match interface/
 - [x] A top-level `README.md` (what Shelf is, running the server, building the app) and `CONTRIBUTING.md` (getting started as a contributor) (M7).
 - [ ] Add `buf breaking` against the last release to the checks whenever `.proto` files change (`buf.yaml` already configures `FILE` rules).
 - [ ] A local check script running fmt, clippy, tests, `buf lint` and the frontend checks (no CI/CD for now; images are pushed by hand).
-- [ ] Document the `demo` crate (`crates/demo`) in [development.md](development.md): what it's for, `force_extract <root>` (a forced sync with JSON logs) and the `jq` filter for its output.
+- [x] Document the `demo` crate (`crates/demo`): what it's for, its functions and a `jq` filter for its output ([development.md](development.md#the-demo-crate)).
 - [ ] Optional end-to-end smoke test with Playwright against the web build: open a book, turn a page, reload, check the position.
 - [ ] Decide on the final app name before a wider release (see [decisions.md](decisions.md#risks)).
 

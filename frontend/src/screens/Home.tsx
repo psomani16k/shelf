@@ -24,6 +24,8 @@ export function Home() {
   const [title, setTitle] = useState("")
   const [toc, setToc] = useState<TocItem[]>([])
   const [tocId, setTocId] = useState<number>()
+  // The header and the reader's bottom bar; reading hides them, a tap brings them back.
+  const [bars, setBars] = useState(true)
   const readerRef = useRef<ReaderHandle>(null)
   const navigate = useNavigate()
   const settingsOpen = useMatch(`${SETTINGS_PATH}/*`) !== null
@@ -42,6 +44,7 @@ export function Home() {
         setTitle("")
         setToc([])
         setTocId(undefined)
+        setBars(true)
       }
       queryClient.setQueryData(["state"], create(GetStateResponseSchema, { lastBookId: id }))
       setDrawer(null)
@@ -82,6 +85,7 @@ export function Home() {
           open={drawer}
           onOpenChange={setDrawer}
           header={header}
+          headerHidden={bookId !== undefined && !bars}
           left={{
             label: "Library",
             content: (
@@ -136,6 +140,8 @@ export function Home() {
               }}
               onLocation={setTocId}
               onOpenLibrary={openLibrary}
+              bars={bars}
+              onBarsChange={setBars}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">

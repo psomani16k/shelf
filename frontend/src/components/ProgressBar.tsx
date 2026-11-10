@@ -1,4 +1,5 @@
 import type { Ref } from "react"
+import { cn } from "cn"
 
 type Props = {
   label: string
@@ -6,10 +7,13 @@ type Props = {
   fraction?: number
   /** The fill element, for updating `transform: scaleX(…)` on every frame without a render. */
   fillRef?: Ref<HTMLDivElement>
+  /** `header`: the UI's background and a foreground fill, whatever the reader's colours. */
+  variant?: "default" | "header"
 }
 
 /** A 3px position bar. */
-export function ProgressBar({ label, fraction = 0, fillRef }: Props) {
+export function ProgressBar({ label, fraction = 0, fillRef, variant = "default" }: Props) {
+  const header = variant === "header"
   return (
     <div
       role="progressbar"
@@ -17,11 +21,11 @@ export function ProgressBar({ label, fraction = 0, fillRef }: Props) {
       aria-valuemin={0}
       aria-valuemax={1}
       aria-valuenow={fraction}
-      className="h-[3px] w-full shrink-0 bg-border"
+      className={cn("h-[3px] w-full shrink-0", header ? "bg-background" : "bg-border")}
     >
       <div
         ref={fillRef}
-        className="h-full origin-left bg-primary"
+        className={cn("h-full origin-left", header ? "bg-foreground" : "bg-primary")}
         style={{ transform: `scaleX(${fraction})` }}
       />
     </div>

@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -7,7 +7,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use shelf_core::library::{Library, LibraryError};
+use shelf_core::{
+    library::{Library, LibraryError},
+    storage::FileContent,
+};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -109,8 +112,8 @@ async fn cover(
     Path(id): Path<String>,
     req: Request,
 ) -> Result<Response, ApiErrorResponse> {
-    let path = library.get_cover(&id).await?;
-    Ok(serve_file(path, req).await)
+    let cover = library.get_cover(&id).await?;
+    Ok(serve(cover, "image/jpeg", req).await)
 }
 
 async fn file(
@@ -118,14 +121,20 @@ async fn file(
     Path(id): Path<String>,
     req: Request,
 ) -> Result<Response, ApiErrorResponse> {
-    let path = library.get_book(&id).await?;
-    Ok(serve_file(path, req).await)
+    let book = library.get_book(&id).await?;
+    Ok(serve(book, "application/epub+zip", req).await)
 }
 
-/// `ServeFile` streams the file and handles `Range`, `Last-Modified` and the content type.
-async fn serve_file(path: PathBuf, req: Request) -> Response {
-    let Ok(response) = ServeFile::new(path).oneshot(req).await;
-    let mut response = response.into_response();
+/// A local file goes through `ServeFile`, which streams it and handles `Range`, `Last-Modified`
+/// and the content type. Bytes are sent whole, as `mime`.
+async fn serve(content: FileContent, mime: &'static str, req: Request) -> Response {
+    let mut response = match content {
+        FileContent::Local(path) => {
+            let Ok(response) = ServeFile::new(path).oneshot(req).await;
+            response.into_response()
+        }
+        FileContent::Bytes(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+    };
     // No browser caching for now: a regenerated thumbnail keeps its URL.
     response
         .headers_mut()

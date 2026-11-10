@@ -4,8 +4,8 @@
 
 | Path | Crate / package | What it is |
 |---|---|---|
-| `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. All reads and writes of book files and `.shelf/` go through the `LibraryStorage` trait (`crates/core/src/storage/`), which takes book paths relative to the library root. The parsing rules for `state.json` and `config.json` are default methods on the trait, so every backend shares them. Backends: `LocalLibraryStorage` (a folder on this machine; callers name it directly, no generics or `dyn` yet) and `S3LibraryStorage` (`storage/s3_storage.rs`, behind the `s3` cargo feature, not wired into the server or app yet; see [library-format.md](library-format.md#s3-storage)). No Tauri, HTTP or prost dependencies. |
-| `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`). Used by `core` and the app. |
+| `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. All reads and writes of book files and `.shelf/` go through the `LibraryStorage` trait (`crates/core/src/storage/`), which takes book paths relative to the library root. The parsing rules for `state.json` and `config.json` are default methods on the trait, so every backend shares them. Backends: `LocalLibraryStorage` (a folder on this machine; callers name it directly, no generics or `dyn` yet) and `S3LibraryStorage` (`storage/s3_storage.rs`, behind the `s3` cargo feature, not wired into the server or app yet; see [library-format.md](library-format.md#s3-storage)). No Tauri or prost dependencies, and no HTTP ones except `object_store`'s client under the `s3` feature. |
+| `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`, and `Debounced`, a per-item debounce over a channel). Used by `core` and the app. |
 | `crates/proto` | `shelf-proto` | Rust types generated from `proto/` at build time (protox → prost + pbjson). Output goes to `target/`, never committed. |
 | `crates/server` | `shelf-server` | axum HTTP server over one `BookLibrary`; embeds `frontend/dist`. |
 | `app/` | `app` (lib `app_lib`) | The Tauri 2 app (what Tauri usually calls `src-tauri`). |
@@ -25,8 +25,8 @@ Everything the UI can do to a library is one method on `shelf_core::library::Lib
 |---|---|
 | `list_books(ListBooksRequest)` | `ListBooksResponse` (infallible) |
 | `list_sub_directories(ListDirectoriesRequest)` | `ListDirectoriesResponse` (infallible) |
-| `get_cover(id)` | `PathBuf` of the thumbnail JPEG |
-| `get_book(id)` | `PathBuf` of the EPUB |
+| `get_cover(id)` | the thumbnail JPEG as a `FileContent`: a local path callers can stream, or bytes |
+| `get_book(id)` | the EPUB as a `FileContent` |
 | `get_progress` / `set_progress` | progress as an EPUB CFI string |
 | `get_state` / `set_state` | the last book opened |
 | `get_config` / `set_config(patch)` | library settings; `set_config` merges a partial patch and returns the whole config |
@@ -41,7 +41,7 @@ Four implementations:
 | `BookLibrary` | `crates/core/src/library/book_library.rs` | A folder on disk plus its `.shelf/`. Not used directly: the server and the app's local libraries wrap it. |
 | `ServerLibrary` | `crates/server/src/library.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time. |
 | `LocalLibrary` | `app/src/libsrc/local.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time and remembers a display name. |
-| `RemoteLibrary` | `app/src/libsrc/remote.rs` | HTTP calls to a `shelf-server`, with covers and EPUBs cached on disk so it can hand out `PathBuf`s like the local one. |
+| `RemoteLibrary` | `app/src/libsrc/remote.rs` | HTTP calls to a `shelf-server`, with covers and EPUBs cached on disk and handed out as `FileContent::Local` paths, like the local one. |
 
 On the frontend the same surface is the `Backend` type (`frontend/src/api/types.ts`), implemented by `httpBackend` (fetch) and `tauriBackend` (`invoke`). See [frontend.md](frontend.md).
 
@@ -68,11 +68,11 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 `BookLibrary::open(root, on_change)` (must run inside tokio):
 
 1. Starts the filesystem watcher (before the sync, so nothing that changes during the sync is missed; its events queue in a channel).
-2. Runs the startup sync (`sync_library`, which only hashes new and modified books, one `spawn_blocking` job per book), then loads every `.shelf/books/*/metadata.json` into memory in `spawn_blocking` (`LibraryStorage::all_book_metadata`).
+2. Runs the startup sync (`sync_library`, which only hashes new and modified books, one `spawn_blocking` job per book, two per CPU at a time), then loads every `.shelf/books/*/metadata.json` into memory in `spawn_blocking` (`LibraryStorage::all_book_metadata`).
 3. Deletes temp files left in `.shelf/` by a crash mid-write (`LocalLibraryStorage::clean_up_temp_files`). A failure here is logged at `warn` and doesn't stop the library opening.
-4. Spawns the extractor task (`receive_and_process_library_updates`, built on `shelf_utility::routines::Debounced`), which drains the watcher channel, debounces each path for 5 s, re-syncs it on the blocking pool, updates the in-memory metadata and calls `on_change`.
+4. Spawns the extractor task (`receive_and_process_library_updates`, built on `shelf_utility::routines::Debounced`), which drains the watcher channel, debounces each path for 5 s, re-syncs it on the blocking pool (one job per CPU at most), updates the in-memory metadata and calls `on_change` if the index changed.
 
-`rebuild_index` runs the same sync with `force` (every book hashed and re-extracted) and swaps in the reloaded metadata. `BookLibrary` doesn't stop two rebuilds running at once; its wrappers (`ServerLibrary`, `LocalLibrary`) each hold a `rebuild_lock`, so a second rebuild waits for the first. `RemoteLibrary` has none, since the server's lock covers it. Dropping the `BookLibrary` drops the watcher, which closes the channel and ends the extractor task. Details in [library-format.md](library-format.md).
+`rebuild_index` runs the same sync with `force` (every book hashed and re-extracted) and swaps in the reloaded metadata. `BookLibrary` doesn't stop two rebuilds running at once; its wrappers (`ServerLibrary`, `LocalLibrary`) each hold a `rebuild_lock`, so a second rebuild waits for the first. `RemoteLibrary` has none, since the server's lock covers it. Dropping the `BookLibrary` drops the watcher, which closes the channel; the extractor task then runs the paths still waiting out their 5 s and ends. Details in [library-format.md](library-format.md).
 
 `on_change` is a no-op in the server. In the app it emits the `library-changed` Tauri event, and the frontend refetches its folder listings.
 

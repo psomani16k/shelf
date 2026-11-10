@@ -102,7 +102,12 @@ impl EbookExtractor<Uncached> {
         let state = if let Some(book) = self.storage.read_book(&self.relative_path)? {
             let book: Arc<[u8]> = book.into();
             let hash = sha1_hex(&book);
-            let metadata = self.storage.book_metadata(&hash)?;
+            // Failing here would leave the id unproduced, and the startup sync would delete the
+            // book's folder, progress included. Missing means it's extracted again instead.
+            let metadata = self.storage.book_metadata(&hash).unwrap_or_else(|e| {
+                warn!(id = %hash, error = %format!("{e:#}"), "unreadable metadata, extracting again");
+                None
+            });
             Cached::Present {
                 book,
                 hash,

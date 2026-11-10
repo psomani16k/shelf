@@ -11,7 +11,7 @@
 | `logging/mod.rs` | `init` (the `tracing` subscriber) and the log commands |
 | `logging/files.rs` | `LogFiles`: one log file per app start, pruned to the newest N |
 | `state.rs` | `AppState`: the stored library list and the currently open library (opened by name) |
-| `app_data.rs` | `AppData`: the library list, the current library's name and the log-file count, persisted with tauri-plugin-store (`app_data.json`); `validate_name`, `validate_log_files` |
+| `app_data.rs` | `AppData`: the library list, the current library's name, the log-file count and the interface scale, persisted with tauri-plugin-store (`app_data.json`); `validate_name`, `validate_log_files`, `validate_ui_scale` |
 | `commands.rs` | Library management commands and the `Library` passthroughs |
 | `error.rs` | `CommandError { status, message }`, the only place command errors are logged; `CommandError::invalid` for 400s |
 | `native.rs` | The `shelf` plugin: storage permission, folder picker, system insets (Android) |
@@ -40,7 +40,7 @@ Tauri commands are like Go HTTP handlers registered on a mux: `#[tauri::command]
 
 ```rust
 pub struct AppState {
-    pub data: tokio::sync::Mutex<AppData>,            // the stored libraries, the current name, the log-file count
+    pub data: tokio::sync::Mutex<AppData>,            // the stored libraries, the current name, the log-file count, the interface scale
     library: tokio::sync::Mutex<Option<Arc<AnyLibrary>>>, // the open one
 }
 ```
@@ -51,13 +51,15 @@ pub struct AppState {
 - `select_library(name)` makes a library current without opening it; the frontend's open query does that.
 - `open_library(name)` → `AppState::open`: clones that `LibrarySource`, builds it, and replaces the open library. The `on_change` it passes emits the `library-changed` event. For a local library, building runs `BookLibrary::open`, so the command resolves only after the startup sync. Dropping the previous `Arc` stops its watcher.
 - Passthrough commands get the library with `state.library()`, which errors with "no library is open" before `open_library`.
+- `get_cover` / `get_book_file` return raw bytes (`ipc::Response`, an `ArrayBuffer` in JS; see [api.md](api.md)): a `FileContent::Local` path is read with `tokio::fs::read`, `FileContent::Bytes` is sent as is.
 - `remove_library(name)` forgets the library on this device (its folder or server is untouched), clears `current` if it was current, and closes it if it's the open one (`AppState::open_name`).
 
 ## Stored data
 
 `AppData` lives in the app's private data directory, never in a library:
 
-- Store file `app_data.json`, keys `libraries` and `current` (the name of the library to open on start), via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
+- Store file `app_data.json`, keys `libraries`, `current` (the name of the library to open on start) `log_files` (see [Logging](#logging)) and `ui_scale`, via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
+- `ui_scale` is the interface's size on this device in percent: 80 to 150 in steps of 10, default 100 (`validate_ui_scale`). An unreadable or invalid stored value falls back to 100, with a warning. Commands `ui_scale` and `set_ui_scale` in `commands.rs`; the frontend side is in [frontend.md](frontend.md#settings-and-appearance).
 - Each entry is a serde externally tagged `LibrarySource`:
 
 ```json
@@ -66,11 +68,12 @@ pub struct AppState {
     { "Local": { "root": "/storage/emulated/0/Books", "name": "Books" } },
     { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "NAS" } }
   ],
-  "current": "NAS"
+  "current": "NAS",
+  "log_files": 5
 }
 ```
 
-A missing or unreadable list loads as empty (with a warning) rather than blocking the app. Libraries from before names were required already had one (the folder name or host), so they load unchanged. Two remote libraries on the same server share one download cache, since it's keyed by content hash.
+A missing list loads as empty, and so does an unreadable one, with a warning, rather than blocking the app. An unreadable `current` loads as unset. Libraries from before names were required already had one (the folder name or host), so they load unchanged. Two remote libraries on the same server share one download cache, since it's keyed by content hash.
 
 ## Local libraries
 
@@ -82,7 +85,7 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 
 - `add_remote_library(name, baseUrl)`: the name is checked first, as for local libraries (the add form pre-fills an empty one with the host); `http://` is prepended when there's no `://`; only http/https are accepted; cache dir = `<app cache dir>/remote/<host>-<port>` (Linux: `~/.cache/com.psomani16k.shelf/remote/...`). Nothing is contacted when adding or opening; the first request is what reaches the server.
 - `api_call(req, path)`: POSTs JSON to `{base_url}/api{path}`. A non-2xx response becomes an error carrying `HttpStatus`, with the server's `ApiError.message` in the context; `to_library_error` maps a 404 to `LibraryError::NotFound`. An empty body (204) decodes as `null` → `()`.
-- `get_cover` / `get_book`: download `GET /api/books/{id}/{cover|file}` once into `<cache>/{cover|file}/<id>.{jpeg|epub}` (via a `.part-<pid>` temp file and rename), then return the cached path. IDs are content hashes, so a cached file never goes stale. The ID must be alphanumeric, so a server can't make the app write outside the cache.
+- `get_cover` / `get_book`: download `GET /api/books/{id}/{cover|file}` once into `<cache>/{cover|file}/<id>.{jpeg|epub}` (via a `.<id>.<ext>.part-<pid>` temp file in the same folder, renamed when complete and deleted if the download fails), then return the cached path (`FileContent::Local`). IDs are content hashes, so a cached file never goes stale. The ID must be alphanumeric, so a server can't make the app write outside the cache.
 - `list_books` / `list_sub_directories` can't fail in the trait, so errors are logged at `warn` and an empty listing is returned. An unreachable server therefore looks like an empty library.
 - The client has a 10 s connect timeout and no overall timeout. The cache is never evicted and isn't deleted when the library is removed.
 
@@ -103,7 +106,7 @@ A missing or unreadable list loads as empty (with a warning) rather than blockin
 - Changing N takes effect at once: `set_log_files` saves it through `AppState`'s `AppData`, then `set_keep` prunes to the new count.
 - The writer uses blocking `std::fs`, because `tracing` writers are synchronous; it's an exception to "tokio everywhere". Write errors go to `eprintln!` and the line is dropped, since logging them would loop.
 
-**Commands** (`logging/mod.rs`; see [api.md](api.md#logs)): `log_settings`, `set_log_files`, `list_log_files` (each file's name, size, start time and last write, newest first), `copy_logs` (the last 256 KiB, starting at a whole line, onto the clipboard), `save_logs` (every file oldest first into one) and `save_log_file` (one file, by a name from the list; anything that isn't a `shelf-<time>.log` name is refused with a 400, so it can't reach outside the log folder). Both saves use the dialog plugin's save picker (the suggested name has its colons removed, which Android's shared storage doesn't allow), read the logs after it closes, and write through `tauri-plugin-fs`. The UI is *Settings → Developer options → Logs* ([frontend.md](frontend.md#settings-and-appearance)).
+**Commands** (`logging/mod.rs`; see [api.md](api.md#logs)): `log_settings` (the count and the maximum, 50), `set_log_files`, `list_log_files` (the log folder, then each file's name, size, start time, last write and whether it's the current one, newest first), `copy_logs` (the last 256 KiB, starting at a whole line, onto the clipboard), `save_logs` (every file oldest first into one) and `save_log_file` (one file, by a name from the list; anything that isn't a `shelf-<time>.log` name is refused with a 400, so it can't reach outside the log folder). Both saves use the dialog plugin's save picker (the suggested name has its colons removed, which Android's shared storage doesn't allow), read the logs after it closes, and write through `tauri-plugin-fs`. The UI is *Settings → Developer options → Logs* ([frontend.md](frontend.md#settings-and-appearance)).
 
 ## Android
 
@@ -122,7 +125,7 @@ SDK levels: `minSdk 24`, `compileSdk`/`targetSdk 37`. Debug builds get the appli
 
 ### The `shelf` plugin
 
-`native.rs` registers the Kotlin class `ShelfPlugin` on Android (`register_android_plugin("com.psomani16k.shelf", "ShelfPlugin")`) and exposes four commands (see [api.md](api.md)). Each Android call goes through `PluginHandle::run_mobile_plugin`, which blocks until Kotlin resolves (for a picker, until the user is done), so it runs in `spawn_blocking`. On other platforms the commands return desktop answers without native code.
+`native.rs` registers the Kotlin class `ShelfPlugin` on Android (`register_android_plugin("com.psomani16k.shelf", "ShelfPlugin")`) and exposes four commands (see [api.md](api.md)). Each Android call goes through `PluginHandle::run_mobile_plugin`, which blocks until Kotlin resolves (for a picker, until the user is done), so it runs in `spawn_blocking`. On other platforms they answer without native code: storage is always granted, insets are zero, and `pick_folder` rejects (desktops use the dialog plugin's picker).
 
 `ShelfPlugin.kt`:
 

@@ -10,6 +10,7 @@ import {
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
 import { IS_TAURI } from "@/lib/platform"
+import { InterfaceSection } from "./InterfaceSection"
 import { LibrarySection } from "./LibrarySection"
 import { LogsSection } from "./LogsSection"
 
@@ -29,16 +30,16 @@ export type Setting = {
 export type Group = { label?: string; settings: Setting[] }
 
 /**
- * Either one per `Config` field, in the same nesting, or a `content` component for settings
- * that don't live in the library config (actions, and app-only settings behind `IS_TAURI`).
- * `appOnly` sections aren't shown on the web.
+ * `groups` are `Config` fields, in the same nesting. `content` is a component for settings that
+ * don't live in the library config (actions, and app-only settings behind `IS_TAURI`), shown
+ * after the groups. `appOnly` sections aren't shown on the web.
  */
 export type Section = {
   slug: "reader" | "ui" | "library" | "developer"
   label: string
   icon: LucideIcon
   appOnly?: true
-} & ({ groups: Group[]; content?: never } | { content: ComponentType; groups?: never })
+} & ({ groups: Group[]; content?: ComponentType } | { content: ComponentType; groups?: never })
 
 /** In size order; the enum's numbers put MEDIUM first only because it's the default. */
 const MARGIN_CHOICES = [
@@ -148,6 +149,7 @@ export const SECTIONS: Section[] = [
         ],
       },
     ],
+    content: InterfaceSection,
   },
   { slug: "library", label: "Library", icon: LibraryBig, content: LibrarySection },
   {

@@ -27,7 +27,7 @@ New here? The repo's [README](../README.md) says what Shelf does and how to run 
 | [development.md](development.md) | Setting up, running, testing, conventions, and how the user likes to work |
 | [known-issues.md](known-issues.md) | Bugs, risks and cleanups in what's built |
 
-## Status (2026-11-02)
+## Status (2026-11-09)
 
 Working end to end:
 - Web UI served by `shelf-server`, image published by hand to `ghcr.io/psomani16k/shelf`.

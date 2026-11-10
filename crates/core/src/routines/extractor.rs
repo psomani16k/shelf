@@ -177,4 +177,22 @@ mod tests {
         assert_eq!((report.failed, report.removed), (1, 0));
         assert!(progress.exists());
     }
+
+    #[tokio::test]
+    async fn corrupt_metadata_keeps_the_folder_and_extracts_again() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        File::create(storage.library_root().join("a.epub")).unwrap();
+        let dir = storage.book_dir_by_id(EMPTY_SHA1);
+        fs::create_dir_all(&dir).unwrap();
+        // Half a file, as a crash mid-write would leave it.
+        fs::write(dir.join("metadata.json"), r#"{"path": "a.ep"#).unwrap();
+        fs::write(dir.join("progress.json"), "{}").unwrap();
+
+        let report = sync_library(&storage, false).await.unwrap();
+
+        // An empty file isn't an EPUB, so extracting it again fails, but its id is known.
+        assert_eq!((report.failed, report.removed), (1, 0));
+        assert!(dir.join("progress.json").exists());
+    }
 }

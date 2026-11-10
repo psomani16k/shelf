@@ -33,7 +33,7 @@ All logs go to stdout as one JSON object per line (`tracing-subscriber` with `.j
 
 - Every line has `timestamp`, `level`, `target`, `message` (`fields.*` flattened to the top level).
 - Lines emitted while handling a request carry a `span` object with that request's `request_id`.
-- **Access log**: one line per `/api` request with `target: "access"` and fields `request_id`, `method`, `path`, `status`, `latency_ms`, `req_bytes`, `resp_bytes`, `client_ip`, `user_agent`. Request IDs come from tower-http (`SetRequestIdLayer` + `PropagateRequestIdLayer`, header `x-request-id`, UUIDs).
+- **Access log**: one line per `/api` request with `target: "access"` and fields `request_id`, `method`, `path`, `status`, `latency_ms`, `req_bytes`, `resp_bytes`, `client_ip`, `user_agent`. Request IDs come from tower-http (`SetRequestIdLayer` + `PropagateRequestIdLayer`, header `x-request-id`, UUIDs). `req_bytes` is the request's `Content-Length`; `resp_bytes` is the body's exact size, else its `Content-Length`; either is `0` when unknown. `latency_ms` is a float.
 - `client_ip` is the direct TCP peer; behind a proxy it's the proxy's address (`X-Forwarded-For` isn't read).
 - Static frontend requests aren't access-logged.
 
@@ -49,7 +49,7 @@ docker logs shelf | jq 'select(.target == "access")'
 2. **server**: `rust:1.99.1-slim-trixie`; copies the workspace (including `app/`, only so Cargo can resolve the workspace) and the built `frontend/dist`; `cargo build --release --locked -p shelf-server` with cache mounts for the registry and `target/`.
 3. **runtime**: `debian:trixie-slim`, the binary only, runs as **uid/gid 1000**, `VOLUME /books`, `EXPOSE 8080`.
 
-`.dockerignore` excludes `target`, `node_modules`, `frontend/dist`, `frontend/src/gen`, `app/gen` and `.git`.
+`.dockerignore` excludes `.git`, `.claude`, `target`, `**/node_modules`, `frontend/dist`, `frontend/src/gen` and `app/gen`.
 
 The library folder mounted at `/books` must be writable by uid 1000, because the server writes `.shelf/` into it.
 
@@ -84,7 +84,7 @@ services:
     container_name: shelf
     restart: unless-stopped
     ports: ["8080:8080"]
-    volumes: ["./books:/books"]       # must be writable by uid 1000
+    volumes: ["~/notes/books:/books"] # must be writable by uid 1000
     environment: { RUST_LOG: info }
     logging:                          # json-file never rotates by default
       driver: json-file
@@ -96,7 +96,7 @@ docker compose pull; and docker compose up -d
 docker compose logs -f shelf
 ```
 
-If `./books` doesn't exist, Docker creates it owned by root and the server can't write `.shelf/`. Create it first, or `sudo chown 1000:1000 books`.
+If the host folder doesn't exist, Docker creates it owned by root and the server can't write `.shelf/`. Create it first, or `sudo chown 1000:1000` it. Adjust the volume to where the books are.
 
 ## Running locally without Docker
 

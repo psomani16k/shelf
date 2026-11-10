@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use shelf_core::library::{Library, LibraryError, book_library::BookLibrary};
+use shelf_core::{
+    library::{Library, LibraryError, book_library::BookLibrary},
+    storage::FileContent,
+};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -39,11 +42,11 @@ impl Library for ServerLibrary {
         self.lib.list_sub_directories(req).await
     }
 
-    async fn get_cover(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.lib.get_cover(id).await
     }
 
-    async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_book(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.lib.get_book(id).await
     }
 

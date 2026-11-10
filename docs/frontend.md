@@ -18,13 +18,13 @@ Stack: React 19, Vite 8, TypeScript 6, Tailwind CSS v4, shadcn/ui on Base UI (No
 | `components/Reader.tsx` | foliate-js wrapper: open at saved position, input handling, progress saving |
 | `components/LibraryPanel.tsx` | Folder/book grid with breadcrumb; in the app, the library switcher above its bottom bar |
 | `components/TocPanel.tsx` | Table of contents tree |
-| `components/SlideDrawer.tsx` | Two-sided drawer that follows the finger; drives transforms through one CSS variable `--p` |
+| `components/SlideDrawer.tsx` | Two-sided drawer that follows the finger; drives transforms through one CSS variable `--p`. Touch and pen only: a drag starts from a 16px strip at either edge, the header, or an open panel or its scrim, and `lib/settle.ts` decides from position and flick speed whether it ends open. Escape, the scrim and Android back close it. Its header covers the top of the page and slides away with `headerHidden` |
 | `components/BookCover.tsx` | Cover in a 2:3 box with a blurred backdrop; icon when there's no cover |
-| `components/CenteredScreen.tsx`, `ScreenHeader.tsx`, `ProgressBar.tsx` | Shared pieces: a full-screen centred layout (with `safe-area`), the 48px title bar at the top of a screen, a 3px position bar |
+| `components/CenteredScreen.tsx`, `ScreenHeader.tsx`, `ProgressBar.tsx` | Shared pieces: a full-screen centred layout (with `safe-area`), the 48px title bar at the top of a screen, a 3px position bar (the `header` variant uses the UI's background and foreground colours) |
 | `components/ChooseFolder.tsx` | App-only folder picker button (dialog plugin on desktop, `pick_folder` on Android) |
-| `components/settings/` | `sections.ts` (settings definitions), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere), `LogsSection.tsx` (app only: log-file count, copy, save) |
-| `components/ui/` | shadcn components (button, input, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
-| `lib/` | Hooks and pure logic (appearance, gestures, TOC, progress saving, platform flags, app libraries in `useAppLibrary.ts`, logging in `log.ts`, the Android back button in `backButton.ts`) |
+| `components/settings/` | `sections.ts` (settings definitions), `ChoiceRow.tsx` (a label and description beside a `Select`), `InterfaceSection.tsx` (app only: the interface scale), `LibrarySection.tsx` (library list in the app, *Rebuild index* everywhere), `LogsSection.tsx` (app only: log-file count, copy, save) |
+| `components/ui/` | shadcn components (button, input, popover, select, sheet). Add more with `pnpm dlx shadcn@latest add <name>` from `frontend/` |
+| `lib/` | Hooks and pure logic (appearance, foliate-js layout and page turns in `foliate.ts`, gestures, drawer settling, TOC, book titles, progress saving, reader zoom, the interface scale in `uiScale.ts`, platform flags, app libraries in `useAppLibrary.ts`, logging in `log.ts`, the Android back button in `backButton.ts`) |
 | `gen/` | Generated proto code. Git-ignored, never hand-edit |
 | `foliate-js.d.ts` | Types for the parts of foliate-js that Shelf uses |
 
@@ -56,7 +56,7 @@ export const IS_TAURI = isTauri()                                         // ins
 export const IS_ANDROID = IS_TAURI && /android/i.test(navigator.userAgent)
 ```
 
-Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, the library switcher in the library slideover, the library list in Settings → Library, the *Developer options* settings section, forwarding logs to Rust, the folder picker, the storage-permission step and the back button on Android.
+Evaluated once at load. This is the switch for app-specific behaviour. Current uses: backend choice, the router, `AppFlow`, system insets, the library switcher in the library slideover, the library list in Settings → Library, the interface scale (Settings → Interface and the reader), the *Developer options* settings section, forwarding logs to Rust, the folder picker, the storage-permission step and the back button on Android.
 
 ## App flow (`App.tsx`, app only)
 
@@ -79,18 +79,21 @@ Switching, adding, and removing the open library all call `resetLibraryCache`: i
 - **State**: `["state"]` → `getState`. `lastBookId` is the open book. Picking a book calls `setState` and writes the result into the cache.
 - **Library drawer** (left): `LibraryPanel` with queries `["dirs", folder]` and `["books", folder]`. The current folder is in memory only.
 - **Contents drawer** (right): only when a book is open.
-- **Reader**: query `["open-book", id]` loads the file and the saved progress together (progress is read once, when the book opens; nothing refetches it while reading). foliate's `View` opens a `File` (it needs a name ending in `.epub`), then `init({ lastLocation: cfi })`.
+- **Reader**: query `["open-book", id]` loads the file and the saved progress together (progress is read once, when the book opens; nothing refetches it while reading). foliate's `View` opens a `File` (it needs a name ending in `.epub`), then `init({ lastLocation: cfi, showTextStart: true })`.
 - **Progress**: `progressSaver` saves the CFI 2 s after page turns stop, and flushes immediately on `pagehide`, when the page becomes hidden, and on unmount. On the web the flush uses `fetch(..., { keepalive: true })` so it survives the tab closing; IPC has no equivalent and ignores it.
-- **Input**: paginated — foliate handles swipes; arrows and buttons turn pages. Scrolled — native scroll with a section progress bar; horizontal swipe, horizontal wheel, arrows or buttons change section. Buttons float at the sides for mouse users, sit in a footer on touch screens when paginated, and are hidden when scrolled on touch.
-- **Settings** is a route (`/settings/:section?`) rendered over Home, which stays mounted (`inert`) behind it.
+- **Input**: paginated — foliate handles swipes; ← → and the buttons turn pages. Scrolled — native scroll with a 3px section line under the header instead of a scrollbar; a one-finger horizontal swipe (not while pinch-zoomed), horizontal wheel, ← → or the buttons change section. Keys, swipes and the wheel are ignored while a drawer or settings is open. Buttons float at the sides for mouse users and are always in the bottom bar.
+- **Bars**: the header (`SlideDrawer`'s `header`, which covers the top of the page) and the reader's bottom bar (the 3px book line along its top edge, then ‹, the current chapter, % through the book, the zoom button, ›) float over the book, so showing or hiding them never re-lays it out. `Home` holds whether they show (`bars`), starting shown and reset when another book opens. The header hides only while a book is open. Reading hides them: a touch that moves 10px or more, the wheel in scrolled mode, a reading key (arrows, Page Up/Down, Space) outside a control, or a floating button. A tap or click on the page (not on a link, not ending a text selection) toggles them. The bar's own buttons leave them up. While hidden, the 3px lines stay at the edges: the section line moves from under the header to the top edge, the book line to the bottom edge; the book's padding keeps text clear of them. The lines use the UI's background and foreground colours, so they show whatever the reader's colours.
+- **Zoom** (`lib/readerZoom.ts`): the bar's *Aa* button opens a popup with −, the level, + and reset, stepping 10% at a time from 50% to 200%. A level saved under older steps snaps to the nearest one (`snapZoom`). It's per device, like browser zoom, so it's kept in `localStorage` (`shelf.reader-zoom`, falling back to 100% when storage is blocked) rather than the library's config. `readerCss` sets CSS `zoom` on each page's `<body>` (not `<html>`, whose columns foliate sizes in px), so text and spacing scale and the book re-lays out. The zoom applied is the interface scale times this level, rounded to a hundredth, so the popup's % is relative to the interface. Images, videos and top-level SVGs get the inverse zoom, because foliate caps their height to the page in px and a zoomed body would push them past it: they keep their size, fitted to the page. The popup closes with the bars, since taps inside the book's iframes don't reach its outside-click check.
+- **Settings** is a route (`/settings/:section?`) rendered over Home, which stays mounted (`inert`) behind it. Escape closes it, unless an open select took the Escape.
 
 ## Settings and appearance
 
 - `["library-config"]` → `getConfig`, read once; `setConfig` results are written straight into that cache.
 - `resolveAppearance` (`lib/appearance.ts`) turns `Config` into concrete values; unset fields mean the proto zero value. `useAppearance` also toggles the `dark` class on `<html>`.
-- `components/settings/sections.ts` defines sections. A section is either `groups` of `Setting`s (each bound to a `Config` field via `read`/`patch`, shown as a `Select`) or a `content` component for settings that aren't in the library config. *Library* (`LibrarySection.tsx`) is shown everywhere: *Rebuild index* for all, and, only when `IS_TAURI`, the list of libraries (red remove icon per row, *Add library* at the bottom). App-only settings go behind `IS_TAURI` inside a section's component, with their hooks in a separate component so the web never calls app commands.
+- `components/settings/sections.ts` defines sections. A section has `groups` of `Setting`s (each bound to a `Config` field via `read`/`patch`, shown as a `ChoiceRow`), a `content` component for settings that aren't in the library config, or both (`content` renders after the groups). *Library* (`LibrarySection.tsx`) is shown everywhere: *Rebuild index* for all (on success it invalidates `["dirs"]`, `["books"]` and `["state"]`, since IDs can change), and, only when `IS_TAURI`, the list of libraries (red remove icon per row, *Add library* at the bottom). App-only settings go behind `IS_TAURI` inside a section's component, with their hooks in a separate component so the web never calls app commands.
 - A section marked `appOnly` (today *Developer options*, slug `developer`, `CodeXml` icon) is left out of `VISIBLE_SECTIONS`, which `Settings.tsx` renders, so the web never shows it or calls its commands.
 - *Developer options* (`LogsSection.tsx`), under a *Logs* heading: *Log files to keep*, a number field (1 to `max_keep_files`) saved on Enter or when the field loses focus, with an inline error for anything else (query `["log-settings"]`); *Copy logs* and *Save logs…*; and *Files*, every log file newest first (query `["log-files"]`, refetched after the count changes), shown by the time span it covers (start to last write) and its size, with the file name small underneath, a save button per row (`save_log_file`), and the folder on desktop. The count is stored on the device, not in the library config.
+- **Interface scale** (`lib/uiScale.ts`, app only): Settings → Interface → *This device* → *Scale*, 80–150% in 10% steps (`InterfaceSection.tsx`). It's stored in the app data on the device (`ui_scale` / `set_ui_scale`), not in the library config. It sets the root font size (`<html style="font-size: 120%">`). Tailwind and shadcn size in rem, so the whole UI scales, while px borders, the 3px lines, the `--inset-*` safe-area padding and viewport units don't. CSS `zoom` on the root would scale viewport units too, and Tauri's webview zoom doesn't work on Android. `main.tsx` awaits `loadUiScale` before the first render, so nothing paints at 100% first, and seeds `["ui-scale"]`, which a library switch keeps. `useUiScale()` gives the factor (1 on the web). The reader multiplies its zoom by it and widens the floating buttons' text inset (`BUTTON_INSET`) to match.
 - Library settings live in the library's `.shelf/config.json`, so they're shared by every device using that library.
 
 ## Logging (`lib/log.ts`)
@@ -131,7 +134,7 @@ pnpm --dir frontend exec tsc -b
 pnpm --dir frontend build
 ```
 
-Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `backButton.test.ts`, `gestures.test.ts`, `log.test.ts`, `progressSaver.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
+Tests: `api/http.test.ts` (wire format, errors, ID escaping), `lib/appearance.test.ts`, `backButton.test.ts`, `gestures.test.ts`, `log.test.ts`, `progressSaver.test.ts`, `readerZoom.test.ts`, `settle.test.ts`, `toc.test.ts`. Linting is Oxlint, not ESLint.
 
 ## Favicon
 

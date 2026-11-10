@@ -43,7 +43,22 @@ The `s3` feature (the S3 storage backend) is off by default, so the workspace co
 
 `shelf-core` has pre-existing clippy warnings, so `--workspace -D warnings` fails on them. To lint just the app: `cargo clippy -p app --no-deps -- -D warnings`.
 
-Rust tests: in `crates/core/src/` — `storage/mod.rs` (the config merge), `storage/local_storage.rs` (relative book listing, config read and merge, leftover temp-file cleanup), `storage/s3_storage.rs` (only with `--features s3`, against `object_store`'s `InMemory`: book listing, gone books, book data round trips and cleanup, state and config), `ebook_ingest.rs` (`predict_id_change_using_modified_time` against files with a set mtime, `extract(false)` refreshing only `path` and the stamp, a gone book's ID found in `.shelf/`, and the cover page's image `src` and its path resolution), `routines/extractor.rs` (the startup sync's skipped, failed and removed counts, and a forced sync keeping the progress of a book that fails), `routines/index_sync.rs` (a renamed folder moving its books, a gone folder dropping only its own books, a gone non-book file changing nothing) and `watcher.rs` (which paths `is_relevant` lets through); in `crates/utility/src/` — `timeutil.rs` (RFC 3339 formatting and parsing) and `routines.rs` (result order, the `in_flight` cap, errors kept at their index, panics re-raised, for both the async and blocking variants); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
+Rust tests: in `crates/core/src/` — `storage/mod.rs` (the config merge), `storage/local_storage.rs` (relative book listing, config read and merge, book-data writes leaving no temp files, leftover temp-file cleanup), `storage/s3_storage.rs` (only with `--features s3`, against `object_store`'s `InMemory`: book listing, gone books, book data round trips and cleanup, state and config), `ebook_ingest.rs` (`predict_id_change_using_modified_time` against files with a set mtime, `extract(false)` refreshing only `path` and the stamp, a gone book's ID found in `.shelf/`, and the cover page's image `src` and its path resolution), `routines/extractor.rs` (the startup sync's skipped, failed and removed counts, and a forced sync keeping the progress of a book that fails, a corrupt `metadata.json` keeping its folder), `routines/index_sync.rs` (a renamed folder moving its books, a gone folder dropping only its own books, a gone non-book file changing nothing) and `watcher.rs` (which paths `is_relevant` lets through); in `crates/utility/src/` — `timeutil.rs` (RFC 3339 formatting and parsing), `routines/concurrency.rs` (result order, the `in_flight` cap, errors kept at their index, panics re-raised, for both the async and blocking variants) and `routines/debounced.rs` (a repeat resetting its item's timer, separate timers per item, pending items running after the channel closes, the blocking variant's job cap); in `app/src/` — `app_data.rs` (library name and log-file count validation) and `logging/files.rs` (start-time names, pruning to N without touching the current file, listing, reading one file by name only, export). None yet for the server.
+
+## The `demo` crate
+
+`crates/demo` is a small binary for running `core` and `utility` routines by hand against a real folder. `cargo run -p demo` with no arguments lists its functions:
+
+- `force_extract <root>`: runs the startup sync with `force` on `<root>`, as *Rebuild index* does. Every book is re-extracted into `<root>/.shelf/`, and folders no book produced are deleted, progress included. Prints the `SyncReport`.
+- `debounce <delay> <blocking>`: replays a scripted burst of file events through `Debounced` with a `<delay>`-second debounce, on the blocking pool when `<blocking>` is `true`.
+
+Logs go to stdout as JSON lines with the server's flags (`RUST_LOG`, default `info,shelf_core=debug`), followed by the return value printed with `{:?}`. To see only warnings, such as failed extractions:
+
+```fish
+cargo run -p demo -- force_extract <root> | jq -R 'fromjson? | select(.level == "WARN")'
+```
+
+A new function is a file in `src/commands/` holding one `command!` method, added to `commands!(…)` in `src/commands/mod.rs`. Arguments are parsed with `FromStr`.
 
 ## Working with this user
 

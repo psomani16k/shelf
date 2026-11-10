@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use shelf_core::library::{Library, LibraryError, book_library::BookLibrary};
+use shelf_core::{
+    library::{Library, LibraryError, book_library::BookLibrary},
+    storage::FileContent,
+};
 use shelf_proto::{
     api::{
         GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -77,11 +80,11 @@ impl Library for LocalLibrary {
         self.book_library.list_sub_directories(req).await
     }
 
-    async fn get_cover(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.book_library.get_cover(id).await
     }
 
-    async fn get_book(&self, id: &str) -> Result<PathBuf, LibraryError> {
+    async fn get_book(&self, id: &str) -> Result<FileContent, LibraryError> {
         self.book_library.get_book(id).await
     }
 

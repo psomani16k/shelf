@@ -79,13 +79,13 @@ The UI works only with book IDs, through one `Backend` interface with an HTTP an
 | Metadata cache outside the library, keyed by path/size/mtime | Metadata in `.shelf/books/<id>/`, so it's extracted once and syncs. Startup skips hashing a book whose mtime isn't newer than its `last_update_time` (the time this device last hashed it), at the cost of `metadata.json` differing per device |
 | Progress at `.shelf/progress/<id>.json` with `fraction`, `chapter`, `updated`, `device` | `.shelf/books/<id>/progress.json` with the CFI only |
 | Hand-written serde structs for on-disk files, preserving unknown fields | The generated proto types, via pbjson. Only `config.json` keeps unknown fields |
-| Atomic writes staged in `.shelf/tmp/` | Temp file next to the target, then rename (same filesystem, nothing to ignore in sync tools). Only `state.json` and `config.json` so far |
-| Reader preferences per device (localStorage / app store) | Library-wide in `.shelf/config.json`. Per-device preferences are on the roadmap |
+| Atomic writes staged in `.shelf/tmp/` | A hidden temp file directly in `.shelf/`, then a rename over the target (same filesystem, no extra folder for sync tools to ignore). Every `.shelf/` file |
+| Reader preferences per device (localStorage / app store) | Library-wide in `.shelf/config.json`, except two per-device ones: reader zoom (`localStorage`, like browser zoom) and the app's interface scale (`AppData`, app only). The scale sets the root font size, since the UI is sized in rem: CSS `zoom` would also scale viewport units, and webview zoom doesn't work on Android. Other per-device preferences are on the roadmap |
 | `ProgressChanged` events, resume toast, "jump to newer position" | Dropped: one device at a time |
 | App in Server mode uses the frontend's `HttpBackend` with bearer tokens | The app's Rust `RemoteLibrary` talks to the server; the frontend always uses `tauriBackend` in the app |
 | REST routes like `GET /api/books`, `PUT /api/books/{id}/progress` | `POST` routes with JSON bodies, one per `Library` method, mirrored by Tauri commands ([api.md](api.md)) |
 | Watcher debounce ~500 ms, events `BooksChanged` / `ProgressChanged` | 5 s per path; a single `library-changed` event |
-| A `LibraryFs` trait so Android SAF could be added later | Plain paths; SAF only if Play Store distribution ever matters |
+| A `LibraryFs` trait so Android SAF could be added later | A `LibraryStorage` trait (`crates/core/src/storage/`) with book paths relative to the root, for a local folder and S3. No SAF backend; only if Play Store distribution ever matters |
 | Android folder as a typed path | A native folder picker in `ShelfPlugin.kt` |
 | Server binary with a config file, bound to localhost behind Tailscale/Caddy | Docker image, `/books` and `0.0.0.0:8080` hard-coded, no config file yet |
 | `.shelf/` created on first write, so browsing doesn't modify the library | Opening a library extracts metadata into `.shelf/` straight away |

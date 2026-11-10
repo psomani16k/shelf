@@ -140,14 +140,24 @@ const PALETTE = {
 
 export const readerBackground = (scheme: Scheme) => PALETTE[scheme].background
 
-/** Styles for each book page. Dark mode overrides the book's own colours so no text is lost. */
-export function readerCss(scheme: Scheme, { pageMarginRight = 0 } = {}): string {
+/**
+ * Styles for each book page. Dark mode overrides the book's own colours so no text is lost.
+ * `zoom` scales the body, not `<html>`, whose columns foliate sizes in px. Images undo it:
+ * foliate caps their height to the page in px, which zoom would scale past the page.
+ */
+export function readerCss(scheme: Scheme, { pageMarginRight = 0, zoom = 1 } = {}): string {
   const { background, text } = PALETTE[scheme]
-  const base = `
+  let base = `
     html { color-scheme: ${scheme}; color: ${text}; background: ${background} !important; }
     html { margin-right: ${pageMarginRight}px !important; }
     body { background: transparent !important; color: inherit !important; }
   `
+  if (zoom !== 1) {
+    base += `
+    body { zoom: ${zoom} !important; }
+    img, video, svg:not(svg svg) { zoom: ${+(1 / zoom).toFixed(4)} !important; }
+  `
+  }
   if (scheme === "light") return base
   return `${base}
     body *:not(a, a *) { color: inherit !important; background-color: transparent !important; }
