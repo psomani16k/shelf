@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package apipb;
+
+// In order: each role can do everything the ones before it can, so a check is `role >= needed`.
+// Never renumber: the order is the numbers.
+message Role {
+  enum Value {
+    BANNED = 0; // can only sign in to be told so; the value when "role" is left out
+    READER = 1; // read books and keep their own progress
+    EDITOR = 2; // add and delete books
+    ADMIN = 3; // rebuild the index, approve sign-ups, change readers', editors' and banned users' roles
+    OWNER = 4; // also make, change and ban admins; given or taken only by editing data.json
+  }
+}
+
+message User {
+  string username = 1;
+  Role.Value role = 2;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  // Sent as `Authorization: Bearer <token>` on every later request.
+  string token = 1;
+  User user = 2;
+}
+
+message LogoutRequest {}
+
+message LogoutResponse {}
+
+// Also signs out every other session of the user.
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {}
+
+// Asks for an account; an admin approves it and picks the role.
+message SignUpRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message SignUpResponse {}
+
+// A pending sign-up, as an admin sees it. The password is never sent.
+message UserRequest {
+  string id = 1;
+  string username = 2;
+  // RFC 3339.
+  string created = 3;
+  // A user already has the name, so it can only be denied.
+  bool taken = 4;
+}
+
+message ListUserRequestsRequest {}
+
+message ListUserRequestsResponse {
+  repeated UserRequest requests = 1;
+}
+
+message ApproveUserRequestRequest {
+  string id = 1;
+  Role.Value role = 2;
+}
+
+message ApproveUserRequestResponse {}
+
+message DenyUserRequestRequest {
+  string id = 1;
+}
+
+message DenyUserRequestResponse {}
+
+// Every user, by name.
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  // Keyed by username; every user has one.
+  map<string, UserScope> scopes = 2;
+}
+
+// A user's part of the library; serverpb.ServerUser has the rules.
+message UserScope {
+  // A folder path relative to the library; "" is all of it.
+  string library_root = 1;
+  // Globs relative to `library_root`.
+  repeated string books = 2;
+}
+
+// Banning also signs the user out everywhere.
+message SetUserRoleRequest {
+  string username = 1;
+  Role.Value role = 2;
+}
+
+message SetUserRoleResponse {}
+
+// Applies from the user's next request. Admins set readers', editors' and banned users' scopes,
+// owners admins' too; nobody sets their own or an owner's.
+message SetUserScopeRequest {
+  string username = 1;
+  UserScope scope = 2;
+}
+
+message SetUserScopeResponse {}

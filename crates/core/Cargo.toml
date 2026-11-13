@@ -9,6 +9,7 @@ tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros", "i
 tracing = { workspace = true }
 anyhow = { workspace = true }
 sha1 = { workspace = true }
+globset = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true }

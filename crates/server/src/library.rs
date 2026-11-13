@@ -1,15 +1,10 @@
 use std::path::PathBuf;
 
-use shelf_core::{
-    library::{Library, LibraryError, book_library::BookLibrary},
-    storage::FileContent,
+use shelf_core::library::{
+    Library, LibraryError, book_library::BookLibrary, scope::Scope, view::LibraryView,
 };
 use shelf_proto::{
-    api::{
-        GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
-        ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
-    },
+    api::{CleanUpProgressResponse, GetConfigRequest, RebuildIndexResponse, SetConfigRequest},
     config::Config,
 };
 use tokio::sync::Mutex;
@@ -31,54 +26,28 @@ impl ServerLibrary {
             rebuild_lock: Mutex::new(()),
         })
     }
-}
 
-impl Library for ServerLibrary {
-    async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
-        self.lib.list_books(req).await
+    /// One user's part of the library. Everything that touches books goes through it.
+    pub fn view<'a>(&'a self, scope: &'a Scope) -> LibraryView<'a> {
+        self.lib.view(scope)
     }
 
-    async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
-        self.lib.list_sub_directories(req).await
+    pub async fn get_config(&self, req: GetConfigRequest) -> Result<Config, LibraryError> {
+        self.lib.get_config(req).await
     }
 
-    async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
-        self.lib.get_cover(id).await
+    pub async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
+        self.lib.set_config(req).await
     }
 
-    async fn get_book(&self, id: &str) -> Result<FileContent, LibraryError> {
-        self.lib.get_book(id).await
-    }
-
-    async fn get_progress(
-        &self,
-        req: GetProgressRequest,
-    ) -> Result<GetProgressResponse, LibraryError> {
-        self.lib.get_progress(req).await
-    }
-
-    async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
-        self.lib.set_progress(req).await
-    }
-
-    async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
-        self.lib.get_state(req).await
-    }
-
-    async fn set_state(&self, req: SetStateRequest) -> Result<(), LibraryError> {
-        self.lib.set_state(req).await
-    }
-
-    async fn get_config(&self) -> Result<Config, LibraryError> {
-        self.lib.get_config().await
-    }
-
-    async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
-        self.lib.set_config(patch).await
-    }
-
-    async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
+    /// The whole library, whoever asks.
+    pub async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
         let _guard = self.rebuild_lock.lock().await;
         self.lib.rebuild_index().await
+    }
+
+    /// The whole library, whoever asks.
+    pub async fn clean_up_progress(&self) -> Result<CleanUpProgressResponse, LibraryError> {
+        self.lib.clean_up_progress().await
     }
 }

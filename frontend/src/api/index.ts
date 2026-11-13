@@ -4,7 +4,7 @@ import { tauriBackend } from "./tauri"
 import type { Backend } from "./types"
 
 export { ApiError } from "./error"
-export type { Backend } from "./types"
+export type { Backend, DeleteItems } from "./types"
 
 /** The one backend this build talks to: Tauri commands in the app, HTTP in a browser. */
 export const api: Backend = IS_TAURI ? tauriBackend : httpBackend
@@ -19,6 +19,22 @@ export const {
   getConfig,
   setConfig,
   rebuildIndex,
+  cleanUpProgress,
   getCover,
   getBookFile,
+  uploadBook,
+  createDirectory,
+  deleteItems,
+  login,
+  logout,
+  me,
+  changePassword,
+  signUp,
+  listUserRequests,
+  approveUserRequest,
+  denyUserRequest,
+  listUsers,
+  setUserRole,
+  setUserScope,
+  listScopeDirectories,
 } = api

@@ -5,17 +5,22 @@ import { BrowserRouter, MemoryRouter } from "react-router"
 import { onLibraryChanged, openLibrary } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
 import { IS_TAURI } from "@/lib/platform"
+import { useSignedOut } from "@/lib/session"
 import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { useSystemInsets } from "@/lib/useSystemInsets"
 import { Home } from "@/screens/Home"
+import { Login } from "@/screens/Login"
 import { OpenFailed } from "@/screens/OpenFailed"
 import { PickLibrary } from "@/screens/PickLibrary"
 import { Syncing } from "@/screens/Syncing"
 
 export default function App() {
-  return IS_TAURI ? (
-    <AppFlow />
-  ) : (
+  return IS_TAURI ? <AppFlow /> : <WebFlow />
+}
+
+function WebFlow() {
+  if (useSignedOut()) return <Login />
+  return (
     <BrowserRouter>
       <Home />
     </BrowserRouter>
@@ -38,6 +43,7 @@ function AppFlow() {
 
   const libraries = useLibraries()
   const current = useCurrentLibrary()
+  const signedOut = useSignedOut()
   const open = useQuery({
     queryKey: ["open-library", current?.name],
     queryFn: () => openLibrary(current!.name),
@@ -62,6 +68,9 @@ function AppFlow() {
   if (open.isPending) return <Syncing />
   if (open.isError) {
     return <OpenFailed library={current} error={open.error} onRetry={() => void open.refetch()} />
+  }
+  if (current.kind === "remote" && (!current.signed_in || signedOut)) {
+    return <Login library={current} />
   }
   return (
     // In memory, and keyed, so each library starts at "/" and no URL survives a switch.

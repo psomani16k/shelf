@@ -2,6 +2,9 @@ version: v2
 clean: true
 inputs:
   - directory: proto
+    # Server-only (it holds passwords); the frontend never needs its types.
+    exclude_paths:
+      - proto/serverpb
 plugins:
   - local: frontend/node_modules/.bin/protoc-gen-es
     out: frontend/src/gen

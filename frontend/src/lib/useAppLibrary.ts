@@ -7,7 +7,9 @@ import {
   removeLibrary,
   selectLibrary,
 } from "@/api/app"
+import { setSignedOut } from "@/lib/session"
 import { UI_SCALE_KEY } from "@/lib/uiScale"
+import { uploads } from "@/lib/uploads"
 
 /** App only: the libraries this device knows and which one is open. */
 
@@ -35,10 +37,13 @@ export function nameTaken(libraries: LibraryInfo[] | undefined, name: string): b
 
 /**
  * Everything cached, except the library list and the interface scale, came from the previous
- * library: its books, last book, covers and config. Dropping it makes the next library load its
- * own, and `AppFlow` opens it.
+ * library (or user): its books, last book, covers and config. Dropping it makes the next one
+ * load its own, and `AppFlow` opens it. Files still waiting to upload would go to the next
+ * library, so they're dropped too. Whether it needs a login comes from its `signed_in`.
  */
-function resetLibraryCache(queryClient: QueryClient) {
+export function resetLibraryCache(queryClient: QueryClient) {
+  uploads.dropQueued()
+  setSignedOut(false)
   const device = [LIBRARIES_KEY[0], UI_SCALE_KEY[0]]
   queryClient.removeQueries({ predicate: (q) => !device.includes(q.queryKey[0] as string) })
   return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })

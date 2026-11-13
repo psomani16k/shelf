@@ -1,19 +1,31 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleMinus, LoaderCircle, Plus } from "lucide-react"
 import { type ReactNode, useState } from "react"
-import { rebuildIndex } from "@/api"
+import { cleanUpProgress, rebuildIndex } from "@/api"
 import { AddLibraryForm } from "@/components/AddLibraryForm"
 import { RemoveLibraryConfirm } from "@/components/RemoveLibraryConfirm"
 import { Button } from "@/components/ui/button"
 import { IS_TAURI } from "@/lib/platform"
 import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
+import { usePermissions } from "@/lib/useMe"
 
-/** The libraries on this device (app only) and rebuilding the open one's index. */
+/** The libraries on this device (app only), and rebuilding and cleaning up the open one. */
 export function LibrarySection() {
+  const { canAdmin } = usePermissions()
   return (
     <div className="flex flex-col gap-4">
       {IS_TAURI && <Libraries />}
-      <RebuildIndex />
+      {canAdmin && (
+        <>
+          <RebuildIndex />
+          <CleanUpProgress />
+        </>
+      )}
+      {!canAdmin && !IS_TAURI && (
+        <p className="text-sm text-muted-foreground">
+          Rebuilding the index and cleaning up progress need an admin.
+        </p>
+      )}
     </div>
   )
 }
@@ -109,6 +121,50 @@ function RebuildIndex() {
         {rebuild.isPending && <LoaderCircle className="animate-spin" />}
         {rebuild.isPending ? "Rebuilding…" : "Rebuild"}
       </Button>
+    </Row>
+  )
+}
+
+function CleanUpProgress() {
+  const [confirming, setConfirming] = useState(false)
+  const clean = useMutation({ mutationFn: cleanUpProgress, onSettled: () => setConfirming(false) })
+  const removed = clean.data?.books
+
+  return (
+    <Row
+      title="Clean up progress"
+      description={
+        confirming
+          ? "Delete it? This can't be undone."
+          : "Deletes the saved reading progress, for every user, of books that are no longer in the library. A book added back afterwards starts from the beginning."
+      }
+      status={
+        removed !== undefined && `Removed the progress of ${removed} book${removed === 1 ? "" : "s"}.`
+      }
+      error={clean.isError && String(clean.error)}
+    >
+      {confirming ? (
+        <div className="flex shrink-0 gap-2">
+          <Button variant="ghost" onClick={() => setConfirming(false)} disabled={clean.isPending}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={() => clean.mutate()} disabled={clean.isPending}>
+            {clean.isPending && <LoaderCircle className="animate-spin" />}
+            Delete
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          className="shrink-0"
+          onClick={() => {
+            clean.reset()
+            setConfirming(true)
+          }}
+        >
+          Clean up
+        </Button>
+      )}
     </Row>
   )
 }

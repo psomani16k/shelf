@@ -56,7 +56,7 @@ export function Home() {
 
   const header = (
     <ScreenHeader
-      title={title || "Shelf"}
+      title={(bookId && title) || "Shelf"}
       start={
         <Button variant="ghost" size="icon" onClick={openLibrary} aria-label="Open library">
           <PanelLeft />

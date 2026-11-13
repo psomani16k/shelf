@@ -19,8 +19,8 @@ pub const DEFAULT_LOG_FILES: u32 = 5;
 pub const MAX_LOG_FILES: u32 = 50;
 
 pub const DEFAULT_UI_SCALE: u32 = 100;
-pub const MIN_UI_SCALE: u32 = 80;
-pub const MAX_UI_SCALE: u32 = 150;
+pub const MIN_UI_SCALE: u32 = 50;
+pub const MAX_UI_SCALE: u32 = 200;
 pub const UI_SCALE_STEP: u32 = 10;
 
 #[derive(Deserialize, Serialize)]
@@ -120,6 +120,16 @@ impl AppData {
         let name = validate_name(&self.libraries, source.name())?;
         self.libraries.push(source);
         self.current = Some(name);
+        Ok(())
+    }
+
+    /// Stores (or with `None` forgets) a remote library's login key.
+    pub fn set_remote_token(&mut self, name: &str, token: Option<String>) -> Result<()> {
+        match self.libraries.iter_mut().find(|l| l.name() == name) {
+            Some(LibrarySource::Remote(builder)) => builder.set_token(token),
+            Some(LibrarySource::Local(_)) => bail!("{name} is a local library, with no accounts"),
+            None => bail!("there's no library called {name}"),
+        }
         Ok(())
     }
 

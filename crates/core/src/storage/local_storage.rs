@@ -12,12 +12,15 @@ use std::{
 use anyhow::{Context, Result};
 use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
 use shelf_utility::timeutil::Time;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{FileContent, LibraryStorage, is_epub};
 
 /// Marks a temp file from `write_atomic`: `.<target name>.tmp-<pid>-<nanos>-<seq>`.
 const TMP_MARKER: &str = ".tmp-";
+
+/// Marks a book being written by `add_book`: `.<name>.part-<pid>-<seq>`, next to the target.
+const UPLOAD_MARKER: &str = ".part-";
 
 /// Tells apart temp files that concurrent writes create in the same nanosecond.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -65,12 +68,18 @@ impl LocalLibraryStorage {
         self.root.join(".shelf").join(name)
     }
 
-    pub fn config_path(&self) -> PathBuf {
-        self.shelf_file_path("config.json")
+    pub fn config_path(&self, user: &str) -> PathBuf {
+        self.shelf_file_path(&super::config_file(user))
     }
 
-    pub fn state_path(&self) -> PathBuf {
-        self.shelf_file_path("state.json")
+    pub fn state_path(&self, user: &str) -> PathBuf {
+        self.shelf_file_path(&super::state_file(user))
+    }
+
+    fn progress_path(&self, hash: &str, user: &str) -> PathBuf {
+        self.book_dir_by_id(hash)
+            .join("progress")
+            .join(format!("{user}.json"))
     }
 
     /// Writes a temp file and renames it over `path`, so no one ever sees half a file. The temp
@@ -129,6 +138,68 @@ impl LibraryStorage for LocalLibraryStorage {
         Ok(self.root.join(path).is_dir())
     }
 
+    fn sub_folders(&self, dir: &Path) -> Result<Vec<String>> {
+        let entries = match fs::read_dir(self.root.join(dir)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut folders = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Symlinked folders aren't followed, as in the scanner's walk.
+            if !name.starts_with('.') && entry.file_type()?.is_dir() {
+                folders.push(name);
+            }
+        }
+        Ok(folders)
+    }
+
+    fn add_book(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        let target = self.root.join(path);
+        let name = path.file_name().context("no file name")?.to_string_lossy();
+        // A dot-file next to the target, which the scanner and the watcher skip.
+        let tmp = target.with_file_name(format!(
+            ".{name}{UPLOAD_MARKER}{}-{}",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed),
+        ));
+        let result = (|| {
+            let mut file = fs::File::create_new(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            fs::rename(&tmp, &target)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result.with_context(|| format!("couldn't write {}", path.display()))
+    }
+
+    fn create_folder(&self, path: &Path) -> Result<()> {
+        fs::create_dir(self.root.join(path))
+            .with_context(|| format!("couldn't create {}", path.display()))
+    }
+
+    fn delete_book_file(&self, path: &Path) -> Result<()> {
+        match fs::remove_file(self.root.join(path)) {
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("couldn't delete {}", path.display()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn delete_folder(&self, path: &Path) -> Result<()> {
+        match fs::remove_dir_all(self.root.join(path)) {
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("couldn't delete {}", path.display()))
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn book_modified(&self, path: &Path) -> Result<Option<Time>> {
         match fs::metadata(self.root.join(path)) {
             Ok(meta) => Ok(Some(Time::from(meta.modified()?))),
@@ -183,8 +254,8 @@ impl LibraryStorage for LocalLibraryStorage {
         Ok(())
     }
 
-    fn book_progress(&self, hash: &str) -> Result<Option<BookProgress>> {
-        let progress_file = self.book_dir_by_id(hash).join("progress.json");
+    fn book_progress(&self, hash: &str, user: &str) -> Result<Option<BookProgress>> {
+        let progress_file = self.progress_path(hash, user);
         if progress_file.exists() {
             let p = fs::read_to_string(&progress_file)?;
             let p = serde_json::from_str(&p)?;
@@ -193,8 +264,9 @@ impl LibraryStorage for LocalLibraryStorage {
         Ok(None)
     }
 
-    fn set_book_progress(&self, hash: &str, progress: BookProgress) -> Result<()> {
-        let progress_file = self.book_dir_by_id(hash).join("progress.json");
+    fn set_book_progress(&self, hash: &str, user: &str, progress: BookProgress) -> Result<()> {
+        let progress_file = self.progress_path(hash, user);
+        fs::create_dir_all(self.book_dir_by_id(hash).join("progress"))?;
         self.write_atomic(&progress_file, serde_json::to_string_pretty(&progress)?.as_bytes())
     }
 
@@ -210,11 +282,45 @@ impl LibraryStorage for LocalLibraryStorage {
         self.write_atomic(&self.thumbnail_path(hash), thumbnail)
     }
 
-    fn clean_up_hashes(&self, hashes: HashSet<String>) -> Result<()> {
+    fn clean_up_books(&self, hashes: HashSet<String>) -> Result<usize> {
+        let mut cleaned = 0;
         for hash in hashes {
-            let _ = fs::remove_dir_all(self.book_dir_by_id(&hash));
+            let mut deleted = false;
+            for file in [self.book_dir_by_id(&hash).join("metadata.json"), self.thumbnail_path(&hash)] {
+                match fs::remove_file(&file) {
+                    Ok(()) => deleted = true,
+                    Err(e) if e.kind() == ErrorKind::NotFound => {}
+                    Err(e) => warn!(id = %hash, error = %e, "couldn't delete stale book data"),
+                }
+            }
+            cleaned += usize::from(deleted);
         }
-        Ok(())
+        Ok(cleaned)
+    }
+
+    fn clean_up_progress(&self, keep: &HashSet<String>) -> Result<usize> {
+        let books = self.books_dir();
+        let entries = match fs::read_dir(&books) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let mut deleted = 0;
+        for entry in entries {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            let dir = entry.path();
+            // An error checking for `metadata.json` keeps the folder.
+            let has_metadata = dir.join("metadata.json").try_exists().unwrap_or(true);
+            if keep.contains(&id) || !entry.file_type()?.is_dir() || has_metadata {
+                continue;
+            }
+            match fs::remove_dir_all(&dir) {
+                Ok(()) => deleted += 1,
+                Err(e) => warn!(id, error = %e, "couldn't delete a removed book's progress"),
+            }
+        }
+        Ok(deleted)
     }
 
     async fn read_shelf_file(&self, name: &str) -> Result<Option<String>> {
@@ -227,7 +333,13 @@ impl LibraryStorage for LocalLibraryStorage {
 
     async fn write_shelf_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
         let (storage, path, bytes) = (self.clone(), self.shelf_file_path(name), bytes.to_vec());
-        tokio::task::spawn_blocking(move || storage.write_atomic(&path, &bytes)).await?
+        tokio::task::spawn_blocking(move || {
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            storage.write_atomic(&path, &bytes)
+        })
+        .await?
     }
 
     async fn clean_up_temp_files(&self) -> Result<()> {
@@ -252,7 +364,7 @@ impl LibraryStorage for LocalLibraryStorage {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use shelf_proto::config::Config;
+    use shelf_proto::{config::Config, state::State};
 
     use super::*;
 
@@ -285,11 +397,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sub_folders_skip_dot_folders_and_files() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        for dir in ["a/inner", "b", ".hidden"] {
+            fs::create_dir_all(root.path().join(dir)).unwrap();
+        }
+        fs::write(root.path().join("c.epub"), "").unwrap();
+
+        let mut folders = storage.sub_folders(Path::new("")).unwrap();
+        folders.sort();
+        assert_eq!(folders, ["a", "b"]);
+        assert_eq!(storage.sub_folders(Path::new("a")).unwrap(), ["inner"]);
+        assert!(storage.sub_folders(Path::new("gone")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn added_book_leaves_no_temp_file() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        storage.create_folder(Path::new("a")).unwrap();
+
+        storage.add_book(Path::new("a/dune.epub"), b"book").unwrap();
+
+        let names: Vec<_> = fs::read_dir(root.path().join("a"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["dune.epub"]);
+        assert_eq!(fs::read(root.path().join("a/dune.epub")).unwrap(), b"book");
+
+        storage.delete_folder(Path::new("a")).unwrap();
+        assert!(!root.path().join("a").exists());
+        storage.delete_folder(Path::new("a")).unwrap();
+    }
+
     #[tokio::test]
     async fn missing_config_is_default() {
         let root = tempfile::tempdir().unwrap();
         let storage = storage(&root);
-        assert_eq!(storage.read_config().await.unwrap(), Config::default());
+        assert_eq!(storage.read_config("default").await.unwrap(), Config::default());
     }
 
     #[tokio::test]
@@ -299,12 +447,12 @@ mod tests {
         let patch = |json| serde_json::from_value::<Config>(json).unwrap();
 
         storage
-            .update_config(&patch(json!({"reader": {"flow": "PAGINATED", "theme": "DARK"}})))
+            .update_config("a", &patch(json!({"reader": {"flow": "PAGINATED", "theme": "DARK"}})))
             .await
             .unwrap();
         // SCROLLED is the zero value: `optional` is what lets it through.
         let config = storage
-            .update_config(&patch(json!({"reader": {"flow": "SCROLLED"}})))
+            .update_config("a", &patch(json!({"reader": {"flow": "SCROLLED"}})))
             .await
             .unwrap();
 
@@ -312,19 +460,58 @@ mod tests {
             serde_json::to_value(&config).unwrap(),
             json!({"reader": {"flow": "SCROLLED", "theme": "DARK"}})
         );
+        assert!(storage.config_path("a").exists());
+        assert_eq!(storage.read_config("b").await.unwrap(), Config::default());
     }
 
     #[tokio::test]
     async fn update_keeps_unknown_fields() {
         let root = tempfile::tempdir().unwrap();
         let storage = storage(&root);
-        fs::write(storage.config_path(), r#"{"future": 1}"#).unwrap();
+        let path = storage.config_path("a");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"future": 1}"#).unwrap();
 
-        storage.update_config(&Config::default()).await.unwrap();
+        storage.update_config("a", &Config::default()).await.unwrap();
 
-        let stored: Value =
-            serde_json::from_str(&fs::read_to_string(storage.config_path()).unwrap()).unwrap();
+        let stored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(stored, json!({"future": 1}));
+    }
+
+    #[tokio::test]
+    async fn state_is_per_user() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        let state = State {
+            last_book_id: Some("abc".into()),
+        };
+
+        storage.write_state("a", &state).await.unwrap();
+
+        assert!(storage.state_path("a").exists());
+        assert_eq!(storage.read_state("a").await.unwrap(), state);
+        assert_eq!(storage.read_state("b").await.unwrap(), State::default());
+    }
+
+    #[test]
+    fn clean_up_progress_deletes_folders_without_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        let meta = BookMetadata::default();
+        for id in ["progress-only", "empty", "has-metadata", "kept"] {
+            storage.create_book_dir(id).unwrap();
+        }
+        storage.set_book_progress("progress-only", "default", BookProgress::default()).unwrap();
+        storage.set_book_progress("kept", "default", BookProgress::default()).unwrap();
+        storage.set_book_metadata("has-metadata", &meta).unwrap();
+        fs::write(storage.books_dir().join("stray-file"), "x").unwrap();
+
+        let keep = HashSet::from(["kept".to_owned()]);
+        assert_eq!(storage.clean_up_progress(&keep).unwrap(), 2);
+
+        let left = storage.all_book_hashes_in_books_dir().unwrap();
+        let want = ["has-metadata", "kept", "stray-file"].map(String::from);
+        assert_eq!(left, HashSet::from(want));
     }
 
     #[test]
@@ -340,7 +527,7 @@ mod tests {
 
         storage.set_book_metadata(id, &meta).unwrap();
         storage.set_book_metadata(id, &meta).unwrap();
-        storage.set_book_progress(id, BookProgress::default()).unwrap();
+        storage.set_book_progress(id, "default", BookProgress::default()).unwrap();
         storage.set_book_thumbnail(id, b"jpeg").unwrap();
 
         assert_eq!(storage.book_metadata(id).unwrap(), Some(meta));
@@ -356,8 +543,9 @@ mod tests {
         assert_eq!(names(root.path().join(".shelf")), ["books"]);
         assert_eq!(
             names(storage.book_dir_by_id(id)),
-            ["metadata.json", "progress.json", "thumbnail.jpeg"]
+            ["metadata.json", "progress", "thumbnail.jpeg"]
         );
+        assert_eq!(names(storage.book_dir_by_id(id).join("progress")), ["default.json"]);
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
 # Build: docker build -t shelf .
-# Run:   docker run -p 8080:8080 -v /path/to/books:/books shelf
+# Run:   docker run -p 8080:8080 -v /path/to/books:/books -v /path/to/data:/data shelf
 
 FROM docker.io/library/node:22.22.2-trixie-slim AS frontend
 COPY --from=docker.io/bufbuild/buf:1.75.0 /usr/local/bin/buf /usr/local/bin/buf
@@ -27,8 +27,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM docker.io/library/debian:trixie-slim
 COPY --from=server /usr/local/bin/shelf-server /usr/local/bin/shelf-server
-RUN mkdir /books && chown 1000:1000 /books
+RUN mkdir /books /data && chown 1000:1000 /books /data
 USER 1000:1000
-VOLUME /books
+VOLUME ["/books", "/data"]
 EXPOSE 8080
 CMD ["shelf-server"]

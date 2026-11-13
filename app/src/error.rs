@@ -22,6 +22,14 @@ impl CommandError {
     }
 }
 
+impl CommandError {
+    /// A 4xx the server sent, passed on with its message, logged at debug.
+    fn client(status: u16, what: &str, message: String) -> Self {
+        debug!(error = %message, "{what}");
+        Self { status, message }
+    }
+}
+
 impl From<LibraryError> for CommandError {
     fn from(e: LibraryError) -> Self {
         match e {
@@ -31,6 +39,25 @@ impl From<LibraryError> for CommandError {
                     status: 404,
                     message: "not found".to_owned(),
                 }
+            }
+            LibraryError::Invalid(message) => {
+                debug!(error = %message, "invalid input");
+                Self {
+                    status: 400,
+                    message,
+                }
+            }
+            LibraryError::Conflict(message) => {
+                debug!(error = %message, "conflict");
+                Self {
+                    status: 409,
+                    message,
+                }
+            }
+            LibraryError::Unauthorized(message) => Self::client(401, "unauthorized", message),
+            LibraryError::Forbidden(message) => Self::client(403, "forbidden", message),
+            LibraryError::TooManyRequests(message) => {
+                Self::client(429, "too many requests", message)
             }
             LibraryError::Internal(e) => Self::from(e),
         }

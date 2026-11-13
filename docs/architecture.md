@@ -4,7 +4,7 @@
 
 | Path | Crate / package | What it is |
 |---|---|---|
-| `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. All reads and writes of book files and `.shelf/` go through the `LibraryStorage` trait (`crates/core/src/storage/`), which takes book paths relative to the library root. The parsing rules for `state.json` and `config.json` are default methods on the trait, so every backend shares them. Backends: `LocalLibraryStorage` (a folder on this machine; callers name it directly, no generics or `dyn` yet) and `S3LibraryStorage` (`storage/s3_storage.rs`, behind the `s3` cargo feature, not wired into the server or app yet; see [library-format.md](library-format.md#s3-storage)). No Tauri or prost dependencies, and no HTTP ones except `object_store`'s client under the `s3` feature. |
+| `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. All reads and writes of book files and `.shelf/` go through the `LibraryStorage` trait (`crates/core/src/storage/`), which takes book paths relative to the library root. The parsing rules for each user's `state.json` and `config.json` are default methods on the trait, so every backend shares them. Backends: `LocalLibraryStorage` (a folder on this machine; callers name it directly, no generics or `dyn` yet) and `S3LibraryStorage` (`storage/s3_storage.rs`, behind the `s3` cargo feature, not wired into the server or app yet; see [library-format.md](library-format.md#s3-storage)). No Tauri or prost dependencies, and no HTTP ones except `object_store`'s client under the `s3` feature. |
 | `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`, and `Debounced`, a per-item debounce over a channel). Used by `core` and the app. |
 | `crates/proto` | `shelf-proto` | Rust types generated from `proto/` at build time (protox → prost + pbjson). Output goes to `target/`, never committed. |
 | `crates/server` | `shelf-server` | axum HTTP server over one `BookLibrary`; embeds `frontend/dist`. |
@@ -28,18 +28,22 @@ Everything the UI can do to a library is one method on `shelf_core::library::Lib
 | `get_cover(id)` | the thumbnail JPEG as a `FileContent`: a local path callers can stream, or bytes |
 | `get_book(id)` | the EPUB as a `FileContent` |
 | `get_progress` / `set_progress` | progress as an EPUB CFI string |
-| `get_state` / `set_state` | the last book opened |
-| `get_config` / `set_config(patch)` | library settings; `set_config` merges a partial patch and returns the whole config |
-| `rebuild_index()` | `RebuildIndexResponse`: re-hashes every book (ignoring `last_update_time`), reloads the index, returns counts |
+| `get_state` / `set_state` | the user's last book opened |
+| `get_config` / `set_config` | the user's own settings (`GetConfigRequest` / `SetConfigRequest`, each with a `user` filled in at the boundary); `set_config` merges a partial `patch` and returns the user's whole config |
+| `rebuild_index()` | `RebuildIndexResponse`: re-hashes every book (ignoring the copies' stamps), reloads the index, returns counts |
+| `clean_up_progress()` | `CleanUpProgressResponse`: deletes the `.shelf/books/<id>/` folders of books no file has any more, progress included |
+| `upload_book(UploadEbookRequest, Bytes)` | `UploadEbookResponse` `{id, file_name}`: writes the EPUB into a folder and indexes it; a book already in the library gets another copy |
+| `create_directory(CreateDirectoryRequest)` | `CreateDirectoryResponse` |
+| `delete_items(DeleteItemsRequest)` | `DeleteItemsResponse`: deletes book copies (one each, or every copy of an id) and folders with everything in them, returns counts |
 
-Errors are `LibraryError::NotFound` or `LibraryError::Internal(anyhow::Error)`. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
+Errors are `LibraryError::NotFound`, `Invalid(String)` (bad input, a 400), `Conflict(String)` (a taken name, a 409) or `Internal(anyhow::Error)`. The messages of `Invalid` and `Conflict` are for the client; `Internal`'s stay in the logs. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
 
 Four implementations:
 
 | Type | Where | Backed by |
 |---|---|---|
 | `BookLibrary` | `crates/core/src/library/book_library.rs` | A folder on disk plus its `.shelf/`. Not used directly: the server and the app's local libraries wrap it. |
-| `ServerLibrary` | `crates/server/src/library.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time. |
+| `ServerLibrary` | `crates/server/src/library.rs` | Wrapper over `BookLibrary` that lets one rebuild run at a time. It doesn't implement the trait: every user's requests go through `view(&scope)`, a `LibraryView` (`crates/core/src/library/view.rs`) with the same methods, which sees only that user's part of the library ([api.md](api.md#http-routes-cratesserversrcapirs)). `BookLibrary`'s own trait methods are its view of the whole library. |
 | `LocalLibrary` | `app/src/libsrc/local.rs` | Thin wrapper over `BookLibrary` that lets one rebuild run at a time and remembers a display name. |
 | `RemoteLibrary` | `app/src/libsrc/remote.rs` | HTTP calls to a `shelf-server`, with covers and EPUBs cached on disk and handed out as `FileContent::Local` paths, like the local one. |
 
@@ -68,7 +72,7 @@ The JSON is identical in all three: the frontend encodes the proto message with 
 `BookLibrary::open(root, on_change)` (must run inside tokio):
 
 1. Starts the filesystem watcher (before the sync, so nothing that changes during the sync is missed; its events queue in a channel).
-2. Runs the startup sync (`sync_library`, which only hashes new and modified books, one `spawn_blocking` job per book, two per CPU at a time), then loads every `.shelf/books/*/metadata.json` into memory in `spawn_blocking` (`LibraryStorage::all_book_metadata`).
+2. Runs the startup sync (`sync_library`, which only hashes new and modified books, one `spawn_blocking` job per book, two per CPU at a time, and deletes the metadata and thumbnails of books no file produced, keeping their folders and progress), then loads every `.shelf/books/*/metadata.json` into memory in `spawn_blocking` (`LibraryStorage::all_book_metadata`).
 3. Deletes temp files left in `.shelf/` by a crash mid-write (`LocalLibraryStorage::clean_up_temp_files`). A failure here is logged at `warn` and doesn't stop the library opening.
 4. Spawns the extractor task (`receive_and_process_library_updates`, built on `shelf_utility::routines::Debounced`), which drains the watcher channel, debounces each path for 5 s, re-syncs it on the blocking pool (one job per CPU at most), updates the in-memory metadata and calls `on_change` if the index changed.
 

@@ -1,21 +1,35 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, ensure};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use bytes::Bytes;
 use serde::Serialize;
-use shelf_core::{library::Library, storage::FileContent};
+use shelf_core::{
+    library::{Library, LibraryError},
+    storage::FileContent,
+};
 use shelf_proto::{
     api::{
-        GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
+        ApproveUserRequestRequest, ChangePasswordRequest, DenyUserRequestRequest,
+        ListUserRequestsResponse, ListUsersResponse, SetUserRoleRequest, SetUserScopeRequest, SignUpRequest, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
+        CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
+        LoginRequest, UploadEbookRequest, UploadEbookResponse, User,
     },
     config::Config,
 };
-use tauri::{AppHandle, Manager, State, ipc::Response};
+use tauri::{AppHandle, Manager, Runtime, State, ipc::Response};
+use tokio::{fs, io::AsyncWriteExt};
 use tauri_plugin_http::reqwest::Url;
 
 use crate::{
     app_data::validate_name,
     error::CommandError,
-    libsrc::{LibrarySource, local::LocalLibraryBuilder, remote::RemoteLibraryBuilder},
+    libsrc::{
+        AnyLibrary, LibrarySource, app_library::AppLibrary, local::LocalLibraryBuilder,
+        remote::{RemoteLibrary, RemoteLibraryBuilder},
+    },
     state::AppState,
 };
 
@@ -28,20 +42,25 @@ pub struct LibraryInfo {
     kind: &'static str,
     /// The folder for a local library, the server URL for a remote one.
     location: String,
+    /// Whether a remote library has a login key; a local one has no accounts and is always true.
+    signed_in: bool,
 }
 
 impl From<&LibrarySource> for LibraryInfo {
     fn from(source: &LibrarySource) -> Self {
+        let signed_in = source.signed_in();
         match source {
             LibrarySource::Local(b) => Self {
                 name: b.name().to_owned(),
                 kind: "local",
                 location: b.root().to_owned(),
+                signed_in,
             },
             LibrarySource::Remote(b) => Self {
                 name: b.name().to_owned(),
                 kind: "remote",
                 location: b.base_url().to_owned(),
+                signed_in,
             },
         }
     }
@@ -157,7 +176,7 @@ pub async fn ui_scale(state: State<'_, AppState>) -> Result<u32> {
     Ok(state.data.lock().await.ui_scale())
 }
 
-/// 80 to 150 in steps of 10, else a 400.
+/// 50 to 200 in steps of 10, else a 400.
 #[tauri::command]
 pub async fn set_ui_scale(
     app: AppHandle,
@@ -179,16 +198,130 @@ pub async fn remove_library(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<()> {
-    {
+    let removed = {
         let mut data = state.data.lock().await;
-        data.remove_library(&name)
+        let removed = data
+            .remove_library(&name)
             .with_context(|| format!("there's no library called {name}"))?;
         data.save(&app)?;
-    }
+        removed
+    };
     if state.open_name().await.as_deref() == Some(name.as_str()) {
         state.close().await;
     }
+    // Ends the session on the server too, without making the user wait for it.
+    if let LibrarySource::Remote(builder) = removed
+        && builder.signed_in()
+    {
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = builder.build().logout().await {
+                tracing::warn!(error = ?e, "couldn't sign out of a removed library");
+            }
+        });
+    }
     Ok(())
+}
+
+/// The open library as a remote one; a local library has no accounts.
+fn remote(library: &AnyLibrary) -> Result<&RemoteLibrary> {
+    library.remote().ok_or_else(|| {
+        LibraryError::Invalid("a local library has no accounts".to_owned()).into()
+    })
+}
+
+/// Signs in to the open remote library and keeps the key, so this device stays signed in.
+#[tauri::command]
+pub async fn login(app: AppHandle, state: State<'_, AppState>, req: LoginRequest) -> Result<User> {
+    let library = state.library().await?;
+    let res = remote(&library)?.login(&req).await?;
+    let mut data = state.data.lock().await;
+    data.set_remote_token(&library.get_name(), Some(res.token))?;
+    data.save(&app)?;
+    Ok(res.user.unwrap_or_default())
+}
+
+/// Forgets the key on this device even if the server can't be reached.
+#[tauri::command]
+pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    let library = state.library().await?;
+    if let Err(e) = remote(&library)?.logout().await {
+        tracing::warn!(error = ?e, "couldn't sign out on the server");
+    }
+    let mut data = state.data.lock().await;
+    data.set_remote_token(&library.get_name(), None)?;
+    data.save(&app)?;
+    Ok(())
+}
+
+/// The signed-in user; `None` for a local library.
+#[tauri::command]
+pub async fn me(state: State<'_, AppState>) -> Result<Option<User>> {
+    let library = state.library().await?;
+    match library.remote() {
+        Some(remote) => Ok(Some(remote.me().await?)),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn change_password(state: State<'_, AppState>, req: ChangePasswordRequest) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.change_password(&req).await?)
+}
+
+/// Asks the open remote library's admins for an account; needs no sign-in.
+#[tauri::command]
+pub async fn sign_up(state: State<'_, AppState>, req: SignUpRequest) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.sign_up(&req).await?)
+}
+
+#[tauri::command]
+pub async fn list_user_requests(state: State<'_, AppState>) -> Result<ListUserRequestsResponse> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.list_user_requests().await?)
+}
+
+#[tauri::command]
+pub async fn approve_user_request(
+    state: State<'_, AppState>,
+    req: ApproveUserRequestRequest,
+) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.approve_user_request(&req).await?)
+}
+
+#[tauri::command]
+pub async fn deny_user_request(state: State<'_, AppState>, req: DenyUserRequestRequest) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.deny_user_request(&req).await?)
+}
+
+#[tauri::command]
+pub async fn list_users(state: State<'_, AppState>) -> Result<ListUsersResponse> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.list_users().await?)
+}
+
+#[tauri::command]
+pub async fn set_user_role(state: State<'_, AppState>, req: SetUserRoleRequest) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.set_user_role(&req).await?)
+}
+
+#[tauri::command]
+pub async fn set_user_scope(state: State<'_, AppState>, req: SetUserScopeRequest) -> Result<()> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.set_user_scope(&req).await?)
+}
+
+#[tauri::command]
+pub async fn list_scope_directories(
+    state: State<'_, AppState>,
+    req: ListDirectoriesRequest,
+) -> Result<ListDirectoriesResponse> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.list_scope_directories(&req).await?)
 }
 
 /// Resolves once the library is ready to browse; a local one syncs `.shelf/` first.
@@ -240,19 +373,114 @@ pub async fn set_state(state: State<'_, AppState>, req: SetStateRequest) -> Resu
 }
 
 #[tauri::command]
-pub async fn get_config(state: State<'_, AppState>) -> Result<Config> {
-    Ok(state.library().await?.get_config().await?)
+pub async fn get_config(state: State<'_, AppState>, req: GetConfigRequest) -> Result<Config> {
+    Ok(state.library().await?.get_config(req).await?)
 }
 
 #[tauri::command]
-pub async fn set_config(state: State<'_, AppState>, patch: Config) -> Result<Config> {
-    Ok(state.library().await?.set_config(patch).await?)
+pub async fn set_config(state: State<'_, AppState>, req: SetConfigRequest) -> Result<Config> {
+    Ok(state.library().await?.set_config(req).await?)
 }
 
 /// Takes as long as hashing every book: for a local library, every file is read.
 #[tauri::command]
 pub async fn rebuild_index(state: State<'_, AppState>) -> Result<RebuildIndexResponse> {
     Ok(state.library().await?.rebuild_index().await?)
+}
+
+/// Deletes every user's progress of books no file has any more.
+#[tauri::command]
+pub async fn clean_up_progress(state: State<'_, AppState>) -> Result<CleanUpProgressResponse> {
+    Ok(state.library().await?.clean_up_progress().await?)
+}
+
+#[tauri::command]
+pub async fn create_directory(
+    state: State<'_, AppState>,
+    req: CreateDirectoryRequest,
+) -> Result<CreateDirectoryResponse> {
+    Ok(state.library().await?.create_directory(req).await?)
+}
+
+/// Deletes books and whole folders from the library, on disk or on the server.
+#[tauri::command]
+pub async fn delete_items(
+    state: State<'_, AppState>,
+    req: DeleteItemsRequest,
+) -> Result<DeleteItemsResponse> {
+    Ok(state.library().await?.delete_items(req).await?)
+}
+
+/// One base64 chunk of a book being uploaded, appended to a file in the app cache. Sent in
+/// chunks because IPC on Linux and Android turns raw bytes into a JSON array of numbers. The
+/// call with `done` uploads the book to the library and returns its response; the others
+/// return `null`.
+#[tauri::command]
+pub async fn upload_book(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: UploadEbookRequest,
+    upload_id: String,
+    offset: u64,
+    data: String,
+    done: bool,
+) -> Result<Option<UploadEbookResponse>> {
+    // It becomes a file name.
+    if upload_id.is_empty() || !upload_id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return Err(CommandError::invalid(anyhow::anyhow!("bad upload id {upload_id:?}")));
+    }
+    let chunk = BASE64
+        .decode(data)
+        .map_err(|e| CommandError::invalid(e.into()))?;
+    let path = uploads_dir(&app)?.join(format!("{upload_id}.part"));
+    append_chunk(&path, offset, &chunk).await?;
+    if !done {
+        return Ok(None);
+    }
+
+    let book = fs::read(&path)
+        .await
+        .with_context(|| format!("couldn't read {}", path.display()));
+    let _ = fs::remove_file(&path).await;
+    let book = Bytes::from(book?);
+    Ok(Some(state.library().await?.upload_book(req, book).await?))
+}
+
+fn uploads_dir<R: Runtime>(app: &AppHandle<R>) -> anyhow::Result<PathBuf> {
+    Ok(app.path().app_cache_dir().context("no app cache dir")?.join("uploads"))
+}
+
+/// Chunks must arrive in order: `offset` 0 starts the file, every other one is its length.
+async fn append_chunk(path: &Path, offset: u64, chunk: &[u8]) -> Result<()> {
+    let mut file = if offset == 0 {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).await.context("couldn't create the uploads folder")?;
+        }
+        fs::File::create(path).await
+    } else {
+        fs::OpenOptions::new().append(true).open(path).await
+    }
+    .with_context(|| format!("couldn't open {}", path.display()))?;
+
+    let len = file.metadata().await.context("couldn't read the upload's size")?.len();
+    if len != offset {
+        return Err(CommandError::invalid(anyhow::anyhow!(
+            "upload chunk at {offset}, but {len} bytes have arrived"
+        )));
+    }
+    file.write_all(chunk).await.context("couldn't write the upload")?;
+    file.flush().await.context("couldn't write the upload")?;
+    Ok(())
+}
+
+/// Uploads cut off by a crash or a closed app.
+pub async fn clean_up_uploads<R: Runtime>(app: AppHandle<R>) {
+    let Ok(dir) = uploads_dir(&app) else { return };
+    if let Err(e) = fs::remove_dir_all(&dir).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, "couldn't remove leftover uploads");
+    }
 }
 
 /// The thumbnail JPEG as raw bytes. Not a custom URI scheme: WebKitGTK won't load one from the

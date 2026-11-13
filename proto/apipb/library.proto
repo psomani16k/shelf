@@ -10,8 +10,17 @@ message RebuildIndexResponse {
   uint32 books = 1;
   // Files that couldn't be read or parsed; retried on their next change or start.
   uint32 failed = 2;
-  // `.shelf/books/` entries deleted because no file has their id any more.
+  // Books no file has any more, whose metadata and thumbnail were deleted; their progress stays.
   uint32 removed = 3;
+}
+
+// Deletes `.shelf/books/<id>/` folders with no metadata.json (books no file has any more), with
+// every user's progress in them.
+message CleanUpProgressRequest {}
+
+message CleanUpProgressResponse {
+  // How many books' folders were deleted.
+  uint32 books = 1;
 }
 
 message CreateDirectoryRequest {
@@ -19,9 +28,42 @@ message CreateDirectoryRequest {
   string directory_name = 2;
 }
 
-message CreateDirectoryResponse {}
+message CreateDirectoryResponse {
+  // The name it got: `directory_name`, or `directory_name (n)` when that was taken by something
+  // the caller can't see.
+  string directory_name = 1;
+}
 
 message UploadEbookRequest {
   string parent_directory = 1;
   string file_name = 2;
+}
+
+message UploadEbookResponse {
+  string id = 1;
+  // The name it got: `file_name`, or `<stem> (n).epub` when that was taken by a file the caller
+  // can't see.
+  string file_name = 2;
+}
+
+// Folders by their path relative to the library root; a folder goes with everything in it the
+// caller can see.
+message DeleteItemsRequest {
+  reserved 1;
+  reserved "book_ids";
+  repeated string directory_paths = 2;
+  // One exact copy each.
+  repeated BookCopy books = 3;
+}
+
+// The copy of book `id` named `file_name` in `directory_path`, as a listing shows it.
+message BookCopy {
+  string id = 1;
+  string directory_path = 2;
+  string file_name = 3;
+}
+
+message DeleteItemsResponse {
+  uint32 books = 1;
+  uint32 directories = 2;
 }

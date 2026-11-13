@@ -16,7 +16,7 @@ export function useLibraryConfig() {
   })
 }
 
-/** Resolves the library config and applies the UI theme to the page. */
+/** Resolves the user's config for this library and applies the UI theme to the page. */
 export function useAppearance(): Appearance {
   const config = useLibraryConfig().data
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)")

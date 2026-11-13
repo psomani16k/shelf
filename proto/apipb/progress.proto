@@ -4,6 +4,7 @@ package apipb;
 
 message GetProgressRequest {
   string id = 1;
+  string user = 2;
 }
 
 message GetProgressResponse {
@@ -14,4 +15,5 @@ message GetProgressResponse {
 message SetProgressRequest {
   string id = 1;
   optional string epub_progress = 2;
+  string user = 3;
 }

@@ -39,8 +39,24 @@ pub fn run() {
             commands::get_config,
             commands::set_config,
             commands::rebuild_index,
+            commands::clean_up_progress,
             commands::get_cover,
             commands::get_book_file,
+            commands::upload_book,
+            commands::create_directory,
+            commands::delete_items,
+            commands::login,
+            commands::logout,
+            commands::me,
+            commands::change_password,
+            commands::sign_up,
+            commands::list_user_requests,
+            commands::approve_user_request,
+            commands::deny_user_request,
+            commands::list_users,
+            commands::set_user_role,
+            commands::set_user_scope,
+            commands::list_scope_directories,
             commands::ui_scale,
             commands::set_ui_scale,
             logging::log_settings,
@@ -58,6 +74,7 @@ pub fn run() {
                 tracing::warn!(%problem, "app data");
             }
             app.manage(state::AppState::new(data));
+            tauri::async_runtime::spawn(commands::clean_up_uploads(app.handle().clone()));
             Ok(())
         })
         .run(tauri::generate_context!())

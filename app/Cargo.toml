@@ -24,6 +24,8 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
 
 shelf-core = { path = "../crates/core" }
 shelf-proto = { path = "../crates/proto" }

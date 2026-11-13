@@ -1,13 +1,13 @@
 # Library format and syncing
 
-A library is any folder. Shelf reads the `.epub` files in it (recursively) and writes its own data only into `<library>/.shelf/`. Nothing else in the library is ever written: no logs, caches or device settings.
+A library is any folder. Shelf reads the `.epub` files in it (recursively) and writes its own data only into `<library>/.shelf/`. Outside `.shelf/`, it changes the library only when asked to: uploading a book, creating a folder, or deleting books and folders ([api.md](api.md#http-routes-cratesserversrcapirs)). It never writes logs, caches or device settings there.
 
 ## Scanning rules
 
 - A book is any regular file whose extension is `epub`, case-insensitive.
 - Hidden entries are skipped: any file or folder whose name starts with `.`, at any depth. This also skips `.shelf/`.
 - Symlinks are skipped, both files and folders (`DirEntry::file_type` doesn't follow them), which also avoids loops.
-- Folder listings in the UI are derived from book paths, so a folder that contains no books (at any depth) never appears.
+- Folder listings in the UI are read from disk (`LibraryStorage::sub_folders`): every visible folder appears, empty ones and ones without books included. Book listings come from the index.
 
 Scanning is `LibraryStorage::all_book_file_paths` (`LocalLibraryStorage` in `crates/core/src/storage/local_storage.rs`), which returns paths relative to the library root; the watcher applies the same rule in `LibraryWatcher::is_relevant` (`crates/core/src/watcher.rs`).
 
@@ -16,8 +16,9 @@ Scanning is `LibraryStorage::all_book_file_paths` (`LocalLibraryStorage` in `cra
 A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtractor::read`, `crates/core/src/ebook_ingest.rs`). Consequences:
 
 - Moving or renaming a file keeps its ID, so progress follows it.
-- Editing a file (new bytes) gives it a new ID; its old progress is dropped at the next startup sync.
-- Two identical copies of a file share one ID and one `.shelf/books/<id>/` folder; the metadata's `path` points at whichever copy was synced last, and only that copy is listed.
+- Editing a file (new bytes) gives it a new ID, so it starts with no progress. The old ID's progress stays in `.shelf/books/<old id>/progress/`, and comes back if the original bytes do.
+- A book with no copies left loses its `metadata.json` and thumbnail at the next startup sync, but keeps its progress: adding the same file back later re-extracts it, and every user resumes where they were ([Startup sync](#startup-sync), step 5). Deleting that progress is a separate action ([Cleaning up progress](#cleaning-up-progress)).
+- Two identical copies of a file are one book: one ID, one `.shelf/books/<id>/` folder (progress included), and a location for each copy. Every copy is listed in its folder. Deleting a copy keeps the book while another copy is left.
 - IDs are 40 alphanumeric characters. `RemoteLibrary` relies on that to use them as cache file names safely.
 
 ## `.shelf/` layout
@@ -29,27 +30,32 @@ A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtr
       <sha1>/
         metadata.json    BookMetadata
         thumbnail.jpeg   only if a cover image was found
-        progress.json    BookProgress, only once the book has been read
-    state.json           State: the last book opened
-    config.json          Config: library settings (reader and UI), partially updated by set_config
+        progress/
+          <user>.json    BookProgress, one per user, once they've read the book
+    users/
+      <user>/
+        config.json      Config: that user's settings (reader and UI), partially updated by set_config
+        state.json       State: the last book that user opened
 ```
 
-All files except the thumbnail are pretty-printed JSON using the **proto JSON shape**: snake_case keys, enums by name. The Rust types are the generated proto types (`shelf_proto::bookkeeping`, `::state`, `::config`) serialized with pbjson, which ignores unknown fields when reading. So only `config.json` (merged as raw JSON) keeps fields this build doesn't know; rewriting the other files drops them.
+All files except the thumbnail are pretty-printed JSON using the **proto JSON shape**: snake_case keys, enums by name. The Rust types are the generated proto types (`shelf_proto::bookkeeping`, `::state`, `::config`) serialized with pbjson, which ignores unknown fields when reading. So only the `config.json` files (merged as raw JSON) keep fields this build doesn't know; rewriting the other files drops them.
 
 ### `metadata.json` (`bookkeeperpb.BookMetadata`)
 
 ```json
 {
-  "path": "Sci-Fi/dune.epub",
   "title": "Dune",
   "authors": ["Frank Herbert"],
   "file_type": "EPUB",
   "id": "3f786850e387550fdab836ed7e6dc881de23001b",
-  "last_update_time": "2026-10-26T04:45:00Z"
+  "locations": [
+    { "path": "Sci-Fi/dune.epub", "last_update_time": "2026-10-26T04:45:00Z" },
+    { "path": "kid/dune.epub", "last_update_time": "2026-11-13T10:00:00Z" }
+  ]
 }
 ```
 
-`path` is relative to the library root with `/` separators. `last_update_time` is when the metadata was last written after hashing the file (RFC 3339 UTC, whole seconds, from `shelf_utility::timeutil::Time`); it lets the startup sync skip hashing unchanged books. Title, authors and the thumbnail are extracted once; each later hash of the same file rewrites only `path`, `id` and `last_update_time`.
+`locations` lists every copy of the file, sorted by `path`, which is relative to the library root with `/` separators. A copy's `last_update_time` is when it was last hashed (RFC 3339 UTC, whole seconds, from `shelf_utility::timeutil::Time`); it lets the startup sync skip hashing that copy while it's unchanged. Each copy has its own, so an edit to one copy is never hidden by a later hash of another. Title, authors and the thumbnail are extracted once; later hashes only change `locations`. (Fields 1 and 6, the old single `path` and `last_update_time`, are reserved.)
 
 The extracted fields are deterministic, but `last_update_time` is each device's own clock, so two devices that both hash a book write different bytes (see [known-issues.md](known-issues.md#data-safety)).
 
@@ -66,23 +72,25 @@ The cover is found by `find_cover` (`crates/core/src/ebook_ingest.rs`), trying i
 
 Names alone are never used to guess a cover, since books also have files like `backcover.jpg`. The `thumbnail written` debug log says which step found it (`found_by`: `declared`, `cover item`, `meta path` or `landmark page`). A book whose only cover is a declared placeholder gets the placeholder. A cover that can't be read or decoded (such as an SVG, or a format the `image` crate isn't built with: only JPEG, PNG, GIF and WebP are) is logged at `warn`, and the book is kept without a thumbnail; `book extracted` then lists `thumbnail` in `missing`.
 
-### `progress.json` (`bookkeeperpb.BookProgress`)
+### `progress/<user>.json` (`bookkeeperpb.BookProgress`)
 
 ```json
-{ "file_type": "EPUB", "epub_progress": { "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)" } }
+{ "file_type": "EPUB", "epub_progress": { "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)" }, "user": "default" }
 ```
 
-An unreadable file is logged at `warn` and reads as no progress.
+One file per user, so users never write the same file. `<user>` is a username (`shelf_core::library::user::validate_user`: 1 to 32 of `a–z`, `0–9`, `-`, `_`, so it's a safe file name); the file also stores it in `user`, but only the file name decides which file is read. On the server it's the signed-in user; in an app's local library it's `default` (`DEFAULT_USER`) until users can be chosen there. An unreadable file is logged at `warn` and reads as no progress. A `progress.json` directly in the book folder, from before per-user progress, is ignored.
 
-### `state.json` (`statepb.State`)
+### `users/<user>/state.json` (`statepb.State`)
 
 ```json
 { "last_book_id": "3f786850e387550fdab836ed7e6dc881de23001b" }
 ```
 
-`set_state` reads the file into `State` first and only replaces `last_book_id`. That doesn't keep unknown fields: pbjson drops them on read, so a field written by a newer build is lost (the code comment in `book_library.rs` claims otherwise). `set_state` with an ID that isn't in the library is `NotFound`. `get_state` reports `last_book_id` as unset when that book is no longer in the library. A missing or unparseable file reads as the default state (no last book).
+`set_state` reads the file into `State` first and only replaces `last_book_id`. Unknown fields aren't kept (pbjson drops them on read), by design: only `config.json` keeps them. `set_state` with an ID that isn't in the library is `NotFound`. `get_state` reports `last_book_id` as unset when that book is no longer in the library. A missing or unparseable file reads as the default state (no last book). Each user has their own; the old shared `.shelf/state.json` is ignored (a deliberate breaking change), so everyone starts with no last book once.
 
-### `config.json` (`configpb.Config`)
+### `users/<user>/config.json` (`configpb.Config`)
+
+Each user's own settings: every field in `Config` is a personal preference (reader layout, theme and margins, the interface theme), so any user, readers included, sets their own and nobody else's. `<user>` is filled in by the server's handlers and the app's `LocalLibrary`, like progress. A `.shelf/config.json` from before per-user settings is ignored (a deliberate breaking change).
 
 ```json
 {
@@ -91,11 +99,13 @@ An unreadable file is logged at `warn` and reads as no progress.
 }
 ```
 
-Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A stored file that doesn't parse as a JSON object is logged at `warn` and replaced by the patch. A mutex in `BookLibrary` serializes concurrent `set_config` calls. A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme). `developer.logging` (`max_mobile_files`, `max_desktop_files`) is in the schema, but no code reads or writes it.
+Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A stored file that doesn't parse as a JSON object is logged at `warn` and replaced by the patch. A mutex in `BookLibrary` serializes concurrent `set_config` calls (for all users at once). A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme). `developer.logging` (`max_mobile_files`, `max_desktop_files`) is in the schema, but no code reads or writes it.
 
 ### Writes
 
-Every file Shelf writes (`state.json`, `config.json`, and each book's `metadata.json`, `progress.json` and `thumbnail.jpeg`) is written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>-<seq>` directly in `.shelf/`, `fsync`, then a rename over the target (`LocalLibraryStorage::write_atomic`, `crates/core/src/storage/local_storage.rs`). A rename is atomic within one filesystem, so the temp file can't go in the OS temp dir. Keeping every temp file directly in `.shelf/`, even for a book's files, lets the cleanup find them without listing each book's folder. `<seq>` is a per-process counter, so concurrent writes in the same nanosecond don't share a temp file. Leftover temp files are deleted when a library opens, after the startup sync (`LocalLibraryStorage::clean_up_temp_files`).
+Every file Shelf writes (each user's `state.json` and `config.json`, and each book's `metadata.json`, `progress/<user>.json` and `thumbnail.jpeg`) is written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>-<seq>` directly in `.shelf/`, `fsync`, then a rename over the target (`LocalLibraryStorage::write_atomic`, `crates/core/src/storage/local_storage.rs`). A rename is atomic within one filesystem, so the temp file can't go in the OS temp dir. Keeping every temp file directly in `.shelf/`, even for a book's files, lets the cleanup find them without listing each book's folder. `<seq>` is a per-process counter, so concurrent writes in the same nanosecond don't share a temp file. `write_shelf_file` creates missing folders first (`.shelf/` itself in a library with no books yet, and `users/<user>/`). Leftover temp files are deleted when a library opens, after the startup sync (`LocalLibraryStorage::clean_up_temp_files`).
+
+An uploaded book is written the same way, but its temp file sits next to the target, in the book's folder: `.<name>.part-<pid>-<seq>` (`LocalLibraryStorage::add_book`). It's a dot-file, so the scanner and the watcher skip it, and the rename is the only event they see. A crash mid-upload leaves it behind; nothing cleans it up yet ([known issues](known-issues.md)).
 
 ### S3 storage
 
@@ -106,22 +116,32 @@ Every file Shelf writes (`state.json`, `config.json`, and each book's `metadata.
 `sync_library` (`crates/core/src/routines/extractor.rs`) runs on every `BookLibrary::open`. It lists the folders, metadata and book files in one `spawn_blocking`, then syncs each book file in its own `spawn_blocking` job, two per CPU at a time, so one can use a core while another waits on the disk (`shelf_utility::routines::transform_concurrent_blocking`), and tallies the results once they're all in:
 
 1. List every `.shelf/books/<id>` folder.
-2. Load every `metadata.json`, keyed by `path`.
+2. Load every `metadata.json`, and key each by the paths of its locations.
 3. For every book file:
-   - **Skip hashing** (`EbookExtractor::predict_id_change_using_modified_time`) when a `metadata.json` has this `path`, a non-empty `id`, and a `last_update_time` no earlier than the file's mtime (both compared to the whole second). The stored `id` is used as is.
+   - **Skip hashing** (`EbookExtractor::predict_id_change_using_modified_time`) when a `metadata.json` has a location at this path, a non-empty `id`, and that location's `last_update_time` is no earlier than the file's mtime (both compared to the whole second). The stored `id` and location are used as they are.
    - Otherwise read and SHA-1 the whole file (`EbookExtractor::read`, which also loads `.shelf/books/<id>/metadata.json` if there is one; one it can't read or parse is logged at `warn` and treated as missing, so the book is fully extracted again and its folder, progress included, is kept), then `extract(force)`:
-     - metadata exists and `force` is off: set `path`, `id` and `last_update_time` in it if they changed, and write it only then (the stamp is refreshed when the file's mtime has passed it, so a touched but identical file is hashed once, not on every start);
-     - otherwise: parse the EPUB with `rbook` from the bytes already read, then create the folder and write `metadata.json` (with `last_update_time`) and the thumbnail.
-4. Delete every `.shelf/books/<id>/` folder whose ID no file produced (a folder that can't be deleted is skipped silently). **This deletes that book's progress too.**
-5. Log `library synced` with `books`, `hashed` (read and synced successfully), `skipped`, `failed` and `removed` counts, and `force`.
+     - metadata exists and `force` is off: nothing is written; this copy's location is kept, or stamped now if the file's mtime has passed its stamp (so a touched but identical file is hashed once, not on every start);
+     - otherwise: parse the EPUB with `rbook` from the bytes already read, then create the folder and write `metadata.json` (with this copy as its only location) and the thumbnail.
+4. Set each book's `locations` to exactly the copies found (a copy that failed extraction gets an empty stamp, so it's read again next time), writing `metadata.json` only where that changes it. Copies that are gone drop out here. A book with no `metadata.json` (new, and its extraction failed) is left alone. Two identical new files may both be fully extracted at once; the output is the same, and every write is atomic.
+5. For every `.shelf/books/<id>/` whose ID no file produced, delete its `metadata.json` and `thumbnail.jpeg` (`LibraryStorage::clean_up_books`), and nothing else: **no folder is deleted**, empty or not, and progress is kept, so a book added back later (same bytes, same ID) is extracted again and every user resumes where they were. A file that can't be deleted is logged at `warn` and skipped. `SyncReport.removed` counts the books that had something deleted, so a folder holding only kept progress isn't counted again on later starts. Deleting the folders is left to [cleaning up progress](#cleaning-up-progress). Every entry in `.shelf/books/` is treated as a book ID, so a sync tool's conflict copy of a book folder loses those two files too, and anything else in it stays.
+6. Log `library synced` with `books`, `hashed` (read and synced successfully), `skipped`, `failed` and `removed` counts, and `force`.
 
 A file that fails (for example half-copied) is logged at `warn` and retried on the next watcher event or startup. A file that was hashed but couldn't be extracted (an EPUB rbook can't parse) still counts as producing its ID, so its `.shelf/books/<id>/` folder and progress are kept; the folder is only created once the EPUB has parsed. Only a file that can't be read at all leaves its ID unproduced.
 
-So only new and modified books are hashed; an unchanged library starts with one `stat` per book plus reading its `metadata.json`. Metadata written before `last_update_time` existed has no stamp, so the first start after upgrading hashes everything once and adds it.
+So only new and modified copies are hashed; an unchanged library starts with one `stat` per book file plus reading each `metadata.json`. Metadata from before `locations` existed has none, so the first start after upgrading hashes every book once and adds them (without re-extracting).
 
-**Rebuild index** (*Settings → Library*, `Library::rebuild_index`) runs the same sync with `force` set: every book is hashed regardless of `last_update_time` and fully re-extracted (title, authors, thumbnail and stamp), then the in-memory index is replaced with what's on disk. It fixes stale IDs (such as a same-path replacement with an older mtime).
+**Rebuild index** (*Settings → Library*, `Library::rebuild_index`) runs the same sync with `force` set: every book is hashed regardless of its stamps and fully re-extracted (title, authors, thumbnail and locations), then the in-memory index is replaced with what's on disk. It waits for uploads, deletes and watcher jobs to finish, and they wait for it, so none of them interleaves with it. It fixes stale IDs (such as a same-path replacement with an older mtime).
 
-After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetadata>` behind a `tokio::sync::RwLock`. Browsing (`list_books`, `list_sub_directories`) and ID checks only read that list; they never touch the disk or hash anything.
+After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetadata>` behind a `tokio::sync::RwLock`. From then on it's the truth about where each book's copies are: the watcher updates it and writes `metadata.json` from it. Book listings (`list_books`) and ID checks only read that list; they never touch the disk or hash anything. Folder listings (`list_sub_directories`) read the one folder's entries from disk, and never hash.
+
+## Cleaning up progress
+
+`Library::clean_up_progress` (*Settings → Library → Clean up progress*; `BookLibrary::clean_up_progress`, `LibraryStorage::clean_up_progress`) deletes every `.shelf/books/<id>/` folder that has no `metadata.json`, every user's progress in it included. Those are the books the startup sync found no file for. Kept anyway:
+
+- An ID in the in-memory index, even with its `metadata.json` gone: another device's startup sync may have deleted it (through the sync tool) while the book is still here.
+- A folder whose `metadata.json` can't be checked (an I/O error counts as having one), and any entry in `.shelf/books/` that isn't a folder.
+
+It takes `files_lock` and the write side of `sync_gate`, like `rebuild_index`, so no upload, watcher job or rebuild is half-way through making a book's folder. A folder that can't be deleted is logged at `warn` and skipped. On S3, each ID's objects are listed and deleted unless the exact `metadata.json` key is among them. It returns how many folders were deleted.
 
 ## Watcher
 
@@ -133,10 +153,10 @@ After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetad
 
 `BookLibrary::receive_and_process_library_updates` (`crates/core/src/library/book_library.rs`) debounces with `shelf_utility::routines::Debounced`: each path fires **5 s after its last event**; a new event for the same path resets its timer. There is no 60 s upper bound yet ([roadmap](roadmap.md#library-core)). When a path fires, its sync job (`IndexSync::sync_path`, `crates/core/src/routines/index_sync.rs`) runs on tokio's blocking pool, at most one job per CPU (each job holds a whole book in memory while it runs):
 
-- Folder exists → every `.epub` under it, at any depth, goes through the book cases below, one after another. A book that fails logs a `warn` and the rest carry on. This is how a renamed, moved or copied-in folder is picked up: inotify reports the folder, not the books inside it. On a rename, each book's hash matches its existing `.shelf/books/<id>/`, so only its `path` is rewritten.
-- Path is gone and isn't an `.epub` → treated as a folder moved away or deleted: every entry whose `path` starts with `<path>/` is removed from memory.
+- Folder exists → every `.epub` under it, at any depth, goes through the book cases below, one after another. A book that fails logs a `warn` and the rest carry on. This is how a renamed, moved or copied-in folder is picked up: inotify reports the folder, not the books inside it. On a rename, each book's hash matches its existing `.shelf/books/<id>/`, so only its locations change.
+- Path is gone and isn't an `.epub` → treated as a folder moved away or deleted: every location under `<path>/` is removed from memory, and books left with none leave the index.
 - File exists and is unchanged (the same `predict_id_change_using_modified_time` check against its in-memory metadata) → nothing to do, nothing read; logged at `debug`, and `on_change()` isn't called.
-- File exists and is new or modified → read and hash it, `extract(false)` (same routine as the startup sync), and put its metadata in memory, replacing entries with the same ID (a moved book only changes `path`) or the same `path` (an edited book's old ID). If the index already had exactly this entry, `on_change()` isn't called.
-- File is gone → `EbookExtractor::read` scans every `metadata.json` for the ID that still has that `path`, and `extract` returns it with no metadata. Entries with that ID and that `path` are removed from memory, or, if no ID was found, entries with that `path`. Matching the path too matters for a move: its create job can run at the same time and may already have put the ID back under the new path. If nothing was removed, `on_change()` isn't called. The `.shelf/books/<id>/` folder stays until the next startup sync, because a move's remove event can arrive before its create event.
+- File exists and is new or modified → read and hash it, `extract(false)` (same routine as the startup sync), then, under the index's write lock: drop this path from any other book (an edited copy is a different book now; a book left with no copies leaves the index), add or update it in this book's locations (a book not in memory yet comes in with only this location, since the copies its `metadata.json` lists may be stale), and write `metadata.json` for each book whose locations changed and still has some. If nothing changed, `on_change()` isn't called.
+- File is gone → its location is removed from memory, before anything is read, and a book left with no copies leaves the index. Nothing is written: `metadata.json` may list the gone copy until the book's next write or the next startup. A move works whichever of its two events comes first. Deleting a folder of books therefore costs no `metadata.json` reads. If nothing was removed, `on_change()` isn't called. The `.shelf/books/<id>/` folder stays until the next startup sync (which deletes its metadata and thumbnail, keeping progress), because a move's remove event can arrive before its create event.
 
 Otherwise `on_change()` is called. It doesn't look at event kinds (add, rename, …): it just looks at the disk.

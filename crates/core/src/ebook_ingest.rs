@@ -9,10 +9,13 @@ use rbook::{
     epub::manifest::{EpubManifest, EpubManifestEntry},
 };
 use sha1::{Digest, Sha1};
-use shelf_proto::bookkeeping::{BookMetadata, book_file_type};
+use shelf_proto::bookkeeping::{BookLocation, BookMetadata, book_file_type};
 use tracing::{debug, info, warn};
 
-use crate::storage::{LibraryStorage, LocalLibraryStorage};
+use crate::{
+    library::locations::{location, upsert_location},
+    storage::{LibraryStorage, LocalLibraryStorage},
+};
 use shelf_utility::timeutil::Time;
 
 /// Only the book's path is known; `read` loads the book.
@@ -26,8 +29,8 @@ pub enum Cached {
         hash: String,
         metadata: Option<BookMetadata>,
     },
-    /// The file is gone. `hash` is the id whose `metadata.json` still has its path, if any.
-    Gone { hash: Option<String> },
+    /// The file is gone.
+    Gone,
 }
 
 /// Blocking throughout: use it inside `spawn_blocking`.
@@ -38,12 +41,12 @@ pub struct EbookExtractor<S = Uncached> {
 }
 
 impl<S> EbookExtractor<S> {
-    /// The book's path relative to the library root, as stored in `metadata.path`.
+    /// The book's path relative to the library root, as stored in its location.
     pub fn rel_path(&self) -> String {
         self.relative_path.to_string_lossy().into_owned()
     }
 
-    /// The file's modified time, at the precision `last_update_time` is stored with. `None` if
+    /// The file's modified time, at the precision a location's stamp is stored with. `None` if
     /// the file is gone.
     fn modified(&self) -> anyhow::Result<Option<Time>> {
         Ok(self
@@ -52,38 +55,45 @@ impl<S> EbookExtractor<S> {
             .map(Time::whole_seconds))
     }
 
-    /// `known`'s id when it describes this file and the file hasn't been modified since
-    /// `known` was written, so the book needn't be read and hashed again.
+    /// `known`'s id when it has a copy at this path that was hashed no earlier than the file's
+    /// mtime, so the book needn't be read and hashed again.
     pub fn predict_id_change_using_modified_time(
         &self,
         known: &BookMetadata,
     ) -> anyhow::Result<Option<String>> {
-        if known.path != self.rel_path() || known.id.is_empty() {
+        let Some(copy) = location(known, &self.rel_path()) else {
+            return Ok(None);
+        };
+        if known.id.is_empty() {
             return Ok(None);
         }
         let Some(modified) = self.modified()? else {
             return Ok(None);
         };
-        Ok(stamp_covers(known, modified).then(|| known.id.clone()))
+        Ok(stamp_covers(copy, modified).then(|| known.id.clone()))
     }
 
-    fn stamp_covers_mtime(&self, known: &BookMetadata) -> anyhow::Result<bool> {
+    /// This path's copy, stamped now unless `known`'s stamp still covers the file's mtime.
+    fn this_location(&self, known: Option<&BookMetadata>) -> anyhow::Result<BookLocation> {
+        let path = self.rel_path();
         let modified = self.modified()?.context("the book is gone")?;
-        Ok(stamp_covers(known, modified))
+        if let Some(copy) = known.and_then(|k| location(k, &path))
+            && stamp_covers(copy, modified)
+        {
+            return Ok(copy.clone());
+        }
+        Ok(BookLocation {
+            path,
+            last_update_time: Time::now().to_string(),
+        })
     }
 }
 
-/// Whether `known` was written no earlier than the file's (whole-second) `modified` time.
-fn stamp_covers(known: &BookMetadata, modified: Time) -> bool {
-    // Missing in metadata from before the field existed; hashing once adds it.
-    let Some(updated) = known
-        .last_update_time
-        .as_deref()
-        .and_then(|t| t.parse::<Time>().ok())
-    else {
-        return false;
-    };
-    modified <= updated
+/// Whether the copy was hashed no earlier than the file's (whole-second) `modified` time.
+fn stamp_covers(copy: &BookLocation, modified: Time) -> bool {
+    copy.last_update_time
+        .parse::<Time>()
+        .is_ok_and(|updated| modified <= updated)
 }
 
 impl EbookExtractor<Uncached> {
@@ -96,8 +106,7 @@ impl EbookExtractor<Uncached> {
         }
     }
 
-    /// Reads and hashes the book, and loads its `metadata.json` if it has one. For a gone file,
-    /// scans every `metadata.json` for the id that still has its path.
+    /// Reads and hashes the book, and loads its `metadata.json` if it has one.
     pub fn read(self) -> anyhow::Result<EbookExtractor<Cached>> {
         let state = if let Some(book) = self.storage.read_book(&self.relative_path)? {
             let book: Arc<[u8]> = book.into();
@@ -114,14 +123,7 @@ impl EbookExtractor<Uncached> {
                 metadata,
             }
         } else {
-            let rel_path = self.rel_path();
-            let hash = self
-                .storage
-                .all_book_metadata()?
-                .into_iter()
-                .find(|m| m.path == rel_path)
-                .map(|m| m.id);
-            Cached::Gone { hash }
+            Cached::Gone
         };
         Ok(EbookExtractor {
             storage: self.storage,
@@ -141,17 +143,18 @@ impl EbookExtractor<Cached> {
     pub fn hash(&self) -> Option<&str> {
         match &self.state {
             Cached::Present { hash, .. } => Some(hash),
-            Cached::Gone { .. } => None,
+            Cached::Gone => None,
         }
     }
 
-    /// Brings `.shelf/books/<hash>/` up to date and returns the book's id and metadata. Without
-    /// `force`, known metadata only gets its `path` and `last_update_time` refreshed. A gone book
-    /// has no metadata, and an id only if `.shelf/` still had one for its path.
-    pub fn extract(&self, force: bool) -> anyhow::Result<(Option<String>, Option<BookMetadata>)> {
+    /// The book's metadata with a current location for this file; `None` if the file is gone.
+    /// A new book (or any, with `force`) is fully extracted into `.shelf/books/<hash>/`, with this
+    /// file as its only location. A known one isn't written: the caller merges the location into
+    /// the copies it knows of and writes `metadata.json`.
+    pub fn extract(&self, force: bool) -> anyhow::Result<Option<BookMetadata>> {
         debug!(path = %self.rel_path(), force, "extracting");
         let (book, hash, metadata) = match &self.state {
-            Cached::Gone { hash } => return Ok((hash.clone(), None)),
+            Cached::Gone => return Ok(None),
             Cached::Present {
                 book,
                 hash,
@@ -162,28 +165,15 @@ impl EbookExtractor<Cached> {
             Some(known) if !force => self.refresh(hash, known.clone())?,
             _ => self.extract_full(book, hash)?,
         };
-        Ok((Some(hash.clone()), Some(meta)))
+        Ok(Some(meta))
     }
 
     fn refresh(&self, hash: &str, mut meta: BookMetadata) -> anyhow::Result<BookMetadata> {
         debug!(path = %self.rel_path(), id = hash, "refreshing metadata");
-        let mut changed = false;
-        if meta.path != self.rel_path() {
-            meta.path = self.rel_path();
-            changed = true;
-        }
-        if meta.id != hash {
-            meta.id = hash.to_owned();
-            changed = true;
-        }
-        // Otherwise a touched but unchanged file would be hashed on every start.
-        if !self.stamp_covers_mtime(&meta)? {
-            meta.last_update_time = Some(Time::now().to_string());
-            changed = true;
-        }
-        if changed {
-            self.storage.set_book_metadata(hash, &meta)?;
-        }
+        meta.id = hash.to_owned();
+        // Keeping a stamp that still covers the mtime, so a touched file isn't hashed every start.
+        let copy = self.this_location(Some(&meta))?;
+        upsert_location(&mut meta, copy);
         Ok(meta)
     }
 
@@ -196,14 +186,11 @@ impl EbookExtractor<Cached> {
         let meta = BookMetadata {
             authors: metadata.creators().map(|a| a.to_string()).collect(),
             title: metadata.title().map(|t| t.to_string()),
-            path: path.clone(),
             file_type: book_file_type::Value::Epub as i32,
             id: hash.to_owned(),
-            last_update_time: Some(Time::now().to_string()),
+            locations: vec![self.this_location(None)?],
         };
         self.storage.set_book_metadata(hash, &meta)?;
-
-        // TODO: write a zero progress file for the book
 
         let cover = find_cover(&book);
         let thumbnail = cover.as_ref().is_some_and(|(cover, found_by)| {
@@ -372,7 +359,7 @@ fn resolve_href(page: &str, relative: &str) -> String {
     parts.join("/")
 }
 
-fn sha1_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
     Sha1::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -409,9 +396,11 @@ mod tests {
 
     fn known(path: &str, updated: Option<&str>) -> BookMetadata {
         BookMetadata {
-            path: path.into(),
             id: "abc".into(),
-            last_update_time: updated.map(Into::into),
+            locations: vec![BookLocation {
+                path: path.into(),
+                last_update_time: updated.unwrap_or_default().into(),
+            }],
             ..Default::default()
         }
     }
@@ -474,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_without_force_refreshes_path_and_stamp_only() {
+    fn extract_without_force_adds_this_copy_and_writes_nothing() {
         let (root, book) = book(0);
         let storage = LocalLibraryStorage::new(root.path()).unwrap();
         fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
@@ -487,11 +476,11 @@ mod tests {
         storage.set_book_metadata(EMPTY_SHA1, &old).unwrap();
 
         let book = book.read().unwrap();
-        let (hash, meta) = book.extract(false).unwrap();
-        let meta = meta.unwrap();
+        let meta = book.extract(false).unwrap().unwrap();
 
-        assert_eq!(hash.as_deref(), Some(EMPTY_SHA1));
-        assert_eq!(meta.path, "dune.epub");
+        assert_eq!(meta.id, EMPTY_SHA1);
+        let paths: Vec<_> = meta.locations.iter().map(|l| l.path.as_str()).collect();
+        assert_eq!(paths, ["dune.epub", "old/dune.epub"]);
         assert_eq!((&meta.title, &meta.authors), (&old.title, &old.authors));
         // The next startup can skip it.
         assert_eq!(
@@ -500,7 +489,7 @@ mod tests {
                 .as_deref(),
             Some(EMPTY_SHA1)
         );
-        assert_eq!(storage.book_metadata(EMPTY_SHA1).unwrap(), Some(meta));
+        assert_eq!(storage.book_metadata(EMPTY_SHA1).unwrap(), Some(old));
     }
 
     /// Deletes the book `book()` made and returns an extractor for its path, made afterwards.
@@ -508,26 +497,6 @@ mod tests {
         let storage = LocalLibraryStorage::new(root.path()).unwrap();
         fs::remove_file(storage.library_root().join("dune.epub")).unwrap();
         EbookExtractor::new(storage, "dune.epub".into())
-    }
-
-    #[test]
-    fn gone_book_returns_its_id_from_shelf() {
-        let (root, _) = book(0);
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
-        fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
-        let meta = BookMetadata {
-            id: EMPTY_SHA1.into(),
-            ..known("dune.epub", None)
-        };
-        storage.set_book_metadata(EMPTY_SHA1, &meta).unwrap();
-
-        let book = gone(&root);
-        assert_eq!(
-            book.predict_id_change_using_modified_time(&meta).unwrap(),
-            None
-        );
-        let (hash, meta) = book.read().unwrap().extract(false).unwrap();
-        assert_eq!((hash.as_deref(), meta), (Some(EMPTY_SHA1), None));
     }
 
     #[test]
@@ -548,9 +517,12 @@ mod tests {
     }
 
     #[test]
-    fn gone_book_without_metadata_has_no_id() {
+    fn a_gone_book_has_no_metadata() {
         let (root, _) = book(0);
-        let (hash, meta) = gone(&root).read().unwrap().extract(false).unwrap();
-        assert_eq!((hash, meta), (None, None));
+        let book = gone(&root);
+        let later = known("dune.epub", Some("2025-10-26T05:00:00Z"));
+
+        assert_eq!(book.predict_id_change_using_modified_time(&later).unwrap(), None);
+        assert_eq!(book.read().unwrap().extract(false).unwrap(), None);
     }
 }

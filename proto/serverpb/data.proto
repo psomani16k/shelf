@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package serverpb;
+
+import "apipb/auth.proto";
+
+// The server's own data in `/data/data.json`, never inside a library.
+message ServerData {
+  // Keyed by user id, which is also the name of that user's progress files in `.shelf/`.
+  map<string, ServerUser> users = 1;
+  // Accounts asked for on the sign-in page, waiting for an admin. Names may repeat here; only
+  // `users` keys are unique.
+  repeated ServerUserOnboardingRequests user_requests = 2;
+}
+
+message ServerUser {
+  // Plain text, by choice: see docs/decisions.md.
+  string password = 1;
+  apipb.Role.Value role = 2;
+  // Signed-in devices, keyed by the hex SHA-256 of their token; the token itself is never stored.
+  map<string, Session> sessions = 3;
+  // The folder under the library that is this user's whole library; "" is all of it.
+  string library_root = 4;
+  // Globs for the books the user can see, relative to `library_root` and matched against book
+  // paths, ignoring case. A leading "!" excludes; the last match wins. With no positive pattern
+  // every book starts visible, otherwise none does. Empty: every book under the root.
+  repeated string books = 5;
+}
+
+message Session {
+  // RFC 3339.
+  string created = 1;
+  string expires = 2;
+}
+
+message ServerUserOnboardingRequests {
+  string user_name = 1;
+  string password = 2;
+  // Random; how approve and deny name the request.
+  string id = 3;
+  // RFC 3339.
+  string created = 4;
+}

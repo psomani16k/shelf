@@ -6,7 +6,7 @@ export const ZOOM_STEPS = Array.from({ length: 16 }, (_, i) => (50 + 10 * i) / 1
 const MIN = 0.5
 const MAX = 2
 
-// Per device, like browser zoom, so it lives here and not in the library's config.
+// Per device, like browser zoom, so it lives here and not in the user's config.
 const KEY = "shelf.reader-zoom"
 
 export function loadZoom(): number {

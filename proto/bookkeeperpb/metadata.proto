@@ -2,15 +2,24 @@ syntax = "proto3";
 
 package bookkeeperpb;
 
+// One book: every file with these bytes. The id is their SHA-1.
 message BookMetadata {
-  string path = 1;
+  reserved 1, 6;
+  reserved "path", "last_update_time";
   optional string title = 2;
   repeated string authors = 3;
   BookFileType.Value file_type = 4;
   string id = 5;
-  // When this was last written after hashing the file: RFC 3339 UTC, whole seconds (core's `Time`).
-  // A book whose file mtime isn't newer isn't hashed again at startup.
-  optional string last_update_time = 6;
+  // Every copy of the file, sorted by path.
+  repeated BookLocation locations = 7;
+}
+
+message BookLocation {
+  // Relative to the library root.
+  string path = 1;
+  // When this copy was last hashed: RFC 3339 UTC, whole seconds (core's `Time`). A copy whose
+  // mtime isn't newer isn't hashed again at startup.
+  string last_update_time = 2;
 }
 
 message FolderListing {

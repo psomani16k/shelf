@@ -9,7 +9,7 @@ import {
   type Group,
   type Section,
   type Setting,
-  VISIBLE_SECTIONS,
+  useVisibleSections,
 } from "@/components/settings/sections"
 import { Button } from "@/components/ui/button"
 import type { Config } from "@/gen/configpb/config_pb"
@@ -38,6 +38,7 @@ export function Settings() {
   const state = location.state as NavState
   const depth = state?.depth
   const wide = useMediaQuery(WIDE)
+  const { sections, pending } = useVisibleSections()
   const rootRef = useRef<HTMLDivElement>(null)
   // Read during the first render: once the page behind turns inert, the browser drops its focus.
   const [returnFocus] = useState(() => document.activeElement as HTMLElement | null)
@@ -61,14 +62,18 @@ export function Settings() {
     }
   }, [returnFocus])
 
-  const section = VISIBLE_SECTIONS.find((s) => s.slug === slug)
+  const section = sections.find((s) => s.slug === slug)
   const backToList = () =>
     state?.fromList ? navigate(-1) : navigate(SETTINGS_PATH, { replace: true, state: { depth } })
   // Same as the header's back arrow: a section on a phone goes back to the list.
   useBackButton(() => void (!wide && section ? backToList() : close()))
 
-  if (slug && !section) return <Navigate to={SETTINGS_PATH} replace state={state} />
-  const shown = section ?? (wide ? VISIBLE_SECTIONS[0] : undefined)
+  if (slug && !section) {
+    // A reload on an admin-only section: wait for the role before deciding it isn't there.
+    if (pending) return null
+    return <Navigate to={SETTINGS_PATH} replace state={state} />
+  }
+  const shown = section ?? (wide ? sections[0] : undefined)
 
   const openSection = (s: Section) => {
     const to = `${SETTINGS_PATH}/${s.slug}`
@@ -100,7 +105,7 @@ export function Settings() {
             }
           />
           <ul className="flex flex-col gap-1 p-2">
-            {VISIBLE_SECTIONS.map((s) => (
+            {sections.map((s) => (
               <li key={s.slug}>
                 <button
                   type="button"
@@ -159,7 +164,7 @@ function SectionSettings({ section }: { section: Section }) {
   )
 }
 
-/** Settings stored in the library's config, one `Select` each. */
+/** The user's own settings, stored in the library (`users/<user>/config.json`), one `Select` each. */
 function ConfigSettings({ groups }: { groups: Group[] }) {
   const queryClient = useQueryClient()
   const config = useLibraryConfig()

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package apipb;
+
+import "configpb/config.proto";
+
+message GetConfigRequest {
+  string user = 1;
+}
+
+message SetConfigRequest {
+  string user = 1;
+  // Only the fields set here change.
+  configpb.Config patch = 2;
+}

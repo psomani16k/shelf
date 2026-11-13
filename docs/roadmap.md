@@ -1,29 +1,41 @@
 # Roadmap
 
-Everything planned but not built, as of 2026-11-09. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
+Everything planned but not built, as of 2026-11-10. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
 
 Rough priority within each section is top to bottom. Plan milestones are noted as (M*n*) where they came from one.
 
-## Authentication
+## Users and authentication
 
-From the plan's server design (M4, M5). Nothing here exists; today the server is open to anyone who can reach it.
+From the plan's server design (M4, M5), extended to per-user progress (design in [decisions.md](decisions.md#users-and-shelf-partly-built)).
 
-- [ ] Users in the server config: `[[users]] name`, `password_hash` (argon2id).
-- [ ] `shelf-server hash-password`: prompts and prints an argon2id hash.
-- [ ] `POST /api/auth/login {username, password}`: checks the hash, creates a random 32-byte token, stores only `sha256(token)` with user and expiry (90 days, sliding) in `state_dir/sessions.json`. Responds with `{ token }` and sets an `HttpOnly; Secure; SameSite=Lax` cookie.
-- [ ] Requests authenticate with the cookie (browser) or `Authorization: Bearer <token>` (app). Every `/api/*` route except `login` and `health` requires it.
-- [ ] `POST /api/auth/logout` revokes the token; `GET /api/auth/me` returns the username or 401.
-- [ ] In-memory per-IP rate limit on login attempts (log at `warn` when hit).
-- [ ] Access log gets a `user` field; login success/failure logged at `info` with username and client IP. Never log passwords, tokens or their hashes, or auth request bodies.
-- [ ] Web: a Login screen, shown on 401.
-- [ ] App: login when adding a remote library; token kept in the app store (plaintext acceptable at first, OS keyring later); `RemoteLibrary` sends it as a bearer token; an expired or invalid token goes back to login.
+### Per-user data in `.shelf/` (core)
+
+Built: progress, the last book and settings are per user ([library-format.md](library-format.md)), with the user in the request's proto message, filled in by the server's handlers (the signed-in user) and by `LocalLibrary` (the library entry's `user`, `default` for now). Old `progress.json`, `config.json` and `state.json` files are ignored (a deliberate breaking change). Book metadata and thumbnails stay shared.
+
+- [ ] `users/<user>/` folders (settings and last book) are never deleted automatically.
+
+### Server auth
+
+Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding), logout, `me`, password change, roles enforced per route, the per-username lockout, and `user` in the access log ([api.md](api.md#http-routes-cratesserversrcapirs), [server.md](server.md#server-data)). The web and the app's remote libraries have a login screen, stay signed in, and hide what the role can't do; *Settings → Account* shows the user, changes the password and logs out ([frontend.md](frontend.md)). Sign-up from the login screen, approved or denied by an admin in *Settings → Admin*, where admins also change other users' roles and ban them ([api.md](api.md#http-routes-cratesserversrcapirs)).
+
+- [x] **Library root and book access per user** (`library_root` and `books` in `data.json`), with identical files as one book with several copies ([server.md](server.md#server-data), [api.md](api.md#http-routes-cratesserversrcapirs)).
+- [x] An admin UI for each user's `library_root` and `books`, with `may_manage` for who may change whose ([api.md](api.md#http-routes-cratesserversrcapirs), [frontend.md](frontend.md)).
+- [x] Frontend: delete one copy with `DeleteItemsRequest.books`, and key and select listing items by file name, so two copies in one folder are separate ([frontend.md](frontend.md)).
+- [x] Making users through the API: approving sign-ups (`ADMIN` for readers and editors, `OWNER` for admins).
+- [x] Changing a user's role and banning through the API (`ADMIN` for readers, editors and banned users, `OWNER` for admins too, per [api.md](api.md#access-by-role)).
+- [ ] Removing users through the API, with the same rule.
+- [ ] App: keep a remote library's token in the OS keyring instead of `app_data.json`.
+
+### App, local libraries
+
+- [ ] Ask for the username to use (stored as the entry's `user` in `AppData` and used by `LocalLibrary` already, always `default` today) when adding it, from the names that already have progress or typed in. No password and no role: every feature is available. Existing entries get asked once on open.
+- [ ] Show the current user in the library slideover too; changing a local library's user is allowed (it's not a security boundary).
 
 ## Server
 
-- [ ] Config file and CLI (`shelf-server serve --config /etc/shelf/config.toml`) with `library`, `bind`, `state_dir` (sessions; never inside the library), `log_bodies`, trusted proxies. Today `/books` and `0.0.0.0:8080` are hard-coded.
-- [ ] Trust `X-Forwarded-For` only from proxies listed in the config, for `client_ip` behind Caddy or Tailscale.
+- [ ] Config file and CLI (`shelf-server serve --config /etc/shelf/config.toml`) with `library`, `bind`, the data folder (today `/data`; never inside the library), `log_bodies`. Today `/books` and `0.0.0.0:8080` are hard-coded.
 - [ ] `log_bodies = true`: access lines include JSON request and response bodies, cut at about 4 KB. Never for `/api/auth/*` or the raw-byte routes (`/file`, `/cover`).
-- [ ] Integration tests against a temp library: every route, Range requests, progress round-trips, and auth flows and 401s once auth exists (M4).
+- [ ] Integration tests against a temp library: every route, Range requests, progress round-trips (M4). The auth flows, 401s and 403s are covered by `api.rs`'s router tests.
 - [ ] Deployment notes for HTTPS: Tailscale (`tailscale serve`) or Caddy in front of the container (M4/M7).
 
 ## Library core
@@ -33,13 +45,14 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 - [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`BookLibrary::receive_and_process_library_updates`) checks `predict_id_change_using_modified_time` first. A touch still does.
 - [x] **Don't lose progress to a corrupt `metadata.json`:** `EbookExtractor::read` treats one it can't read as missing (with a `warn`), so the book is extracted again and its folder kept ([library-format.md](library-format.md#startup-sync)).
 - [x] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails too ([library-format.md](library-format.md#writes)). Together with the item above, a crash during *Rebuild index* can't cost a book its progress.
-- [ ] **Keep unknown fields** when rewriting `state.json`, `metadata.json` and `progress.json` (merge into raw JSON as `config.json` does).
-- [ ] **Don't delete unrecognised entries in `.shelf/books/`**, such as sync-tool conflict copies; only remove folders that are valid IDs for books that are gone.
-- [ ] **Keep progress across a book being briefly missing or edited** (e.g. don't delete a book's folder on the first startup it's missing; or derive the ID from the OPF `unique-identifier`, falling back to the file hash, as the plan proposed).
-- [ ] **Watcher: take a gone book's ID from the in-memory index.** `EbookExtractor::read` scans every `metadata.json` for a gone file's ID, and `rm -r` reports each file, so deleting a folder of 100 books in a 2,000-book library reads about 200,000 files. `IndexSync::sync_book` already has the book's index entry (looked up by path) when it calls `read`.
+- [x] **Keep progress across a book being missing:** the startup sync deletes only a gone book's `metadata.json` and thumbnail, so its progress is there when the same file comes back ([library-format.md](library-format.md#startup-sync)).
+- [ ] **Keep progress across a book being edited:** e.g. derive the ID from the OPF `unique-identifier`, falling back to the file hash, as the plan proposed.
+- [x] A way to delete the kept progress of books that are gone for good: *Settings → Library → Clean up progress* ([library-format.md](library-format.md#cleaning-up-progress)).
+- [x] **Watcher: a gone book costs no `metadata.json` reads.** `IndexSync::sync_book` drops a gone file's entries by path before calling `EbookExtractor::read` ([library-format.md](library-format.md#watcher)).
+- [ ] **Clean up leftover upload temp files** (`.<name>.part-*` next to a book, left by a crash mid-upload) when a library opens, as `.shelf/` temp files are.
+- [ ] **Stream uploads to disk** instead of holding the whole book in memory, on the server and in the app.
 - [ ] **Extraction concurrency:** measure the startup sync's two jobs per CPU against one (32 vs 16 on a 16-thread machine, and up to that many books in memory) and keep whichever is faster. Then share one cap (a `Semaphore` in `BookLibrary`) between the startup sync, *Rebuild index* and the watcher, which today each cap themselves.
 - [ ] **Wire up S3 libraries.** `S3LibraryStorage` is written and tested but unused. Left: a dispatch enum over the storage backends (the trait returns `impl Future`, so no `dyn`), used by `BookLibrary`, `EbookExtractor`, `IndexSync` and `sync_library`; `BookLibrary::open` skipping the watcher for S3; and configuration (server env var, maybe an app library kind).
-- [ ] Write a zero progress file at extraction (TODO in `ebook_ingest.rs`).
 - [ ] Make `list_books` / `list_sub_directories` fallible in the `Library` trait, so a remote library's network errors show as errors, not an empty folder.
 - [x] Move rayon work onto tokio (`spawn_blocking`), per the "tokio everywhere" rule. Done: the startup sync uses `shelf_utility::routines::transform_concurrent_blocking`, and rayon is out of the workspace.
 - [ ] Fixture-based tests with 2–3 small public-domain EPUBs (one without a cover): extraction, ID stability across renames, progress round-trips, the watcher with `start_paused` (M1). Also each step of `find_cover` (a declared cover, the `cover` item's page, a `<meta>` holding a path, the landmarks page) and a cover that can't be decoded; tiny EPUBs built in memory with the `zip` crate as a dev-dependency would do.
@@ -67,9 +80,9 @@ From the plan's server design (M4, M5). Nothing here exists; today the server is
 
 ## Theming and reading customization
 
-Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all in the library's `config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`). Reader zoom is per device, in `localStorage` (`frontend/src/lib/readerZoom.ts`). The app's interface scale is per device, in the app data (`frontend/src/lib/uiScale.ts`), and the book's zoom is multiplied by it.
+Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all per user in the library's `users/<user>/config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`). Reader zoom is per device, in `localStorage` (`frontend/src/lib/readerZoom.ts`). The app's interface scale is per device, in the app data (`frontend/src/lib/uiScale.ts`), and the book's zoom is multiplied by it.
 
-- [ ] **Decide where each preference lives** before adding more. Colours and layout suit the library config (the same on every device); size-like ones (font size, line height, margins) differ between a phone and a laptop and probably belong per device (app store / `localStorage`). Record the choice in [decisions.md](decisions.md).
+- [ ] **Decide where each preference lives** before adding more. Settings are per user now, the same on all of that user's devices; size-like ones (font size, line height, margins) differ between a phone and a laptop and might belong per device instead (app store / `localStorage`), as zoom and the interface scale do. Record the choice in [decisions.md](decisions.md).
 - [ ] **More reader themes**: sepia, a low-contrast warm "night" theme, and pure black for OLED screens. New `ReaderTheme` enum values (append, never renumber), with `PALETTE` in `appearance.ts` becoming a table of themes and `readerCss` handling each.
 - [ ] **Typography**:
   - font size, in steps;

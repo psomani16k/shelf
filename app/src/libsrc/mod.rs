@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use shelf_core::{
     library::{Library, LibraryError},
@@ -6,9 +7,11 @@ use shelf_core::{
 };
 use shelf_proto::{
     api::{
-        GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
+        CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
+        CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
+        UploadEbookRequest, UploadEbookResponse,
     },
     config::Config,
 };
@@ -37,6 +40,14 @@ impl LibrarySource {
         }
     }
 
+    /// A local library has no accounts, so it counts as signed in.
+    pub fn signed_in(&self) -> bool {
+        match self {
+            Self::Local(_) => true,
+            Self::Remote(builder) => builder.signed_in(),
+        }
+    }
+
     /// `on_change` fires when a local library's watcher syncs a book; a server pushes nothing.
     pub async fn build(self, on_change: impl Fn() + Send + Sync + 'static) -> Result<AnyLibrary> {
         Ok(match self {
@@ -50,6 +61,16 @@ impl LibrarySource {
 pub enum AnyLibrary {
     Local(LocalLibrary),
     Remote(RemoteLibrary),
+}
+
+impl AnyLibrary {
+    /// `None` for a local library, which has no accounts.
+    pub fn remote(&self) -> Option<&RemoteLibrary> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(lib) => Some(lib),
+        }
+    }
 }
 
 macro_rules! dispatch {
@@ -97,16 +118,38 @@ impl Library for AnyLibrary {
         dispatch!(self, lib => lib.set_state(req).await)
     }
 
-    async fn get_config(&self) -> Result<Config, LibraryError> {
-        dispatch!(self, lib => lib.get_config().await)
+    async fn get_config(&self, req: GetConfigRequest) -> Result<Config, LibraryError> {
+        dispatch!(self, lib => lib.get_config(req).await)
     }
 
-    async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
-        dispatch!(self, lib => lib.set_config(patch).await)
+    async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
+        dispatch!(self, lib => lib.set_config(req).await)
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
         dispatch!(self, lib => lib.rebuild_index().await)
+    }
+
+    async fn clean_up_progress(&self) -> Result<CleanUpProgressResponse, LibraryError> {
+        dispatch!(self, lib => lib.clean_up_progress().await)
+    }
+    async fn upload_book(
+        &self,
+        req: UploadEbookRequest,
+        book: Bytes,
+    ) -> Result<UploadEbookResponse, LibraryError> {
+        dispatch!(self, lib => lib.upload_book(req, book).await)
+    }
+
+    async fn create_directory(
+        &self,
+        req: CreateDirectoryRequest,
+    ) -> Result<CreateDirectoryResponse, LibraryError> {
+        dispatch!(self, lib => lib.create_directory(req).await)
+    }
+
+    async fn delete_items(&self, req: DeleteItemsRequest) -> Result<DeleteItemsResponse, LibraryError> {
+        dispatch!(self, lib => lib.delete_items(req).await)
     }
 }
 

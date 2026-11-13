@@ -7,12 +7,12 @@
 | File | Role |
 |---|---|
 | `main.rs` | Desktop entry; calls `app_lib::run()` |
-| `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (`AppData`, then logging, then `AppState`) |
+| `lib.rs` | Builder: plugins, `invoke_handler` with every command, `setup` (`AppData`, then logging, then `AppState`, then deleting leftover upload chunks in `<app cache dir>/uploads/`) |
 | `logging/mod.rs` | `init` (the `tracing` subscriber) and the log commands |
 | `logging/files.rs` | `LogFiles`: one log file per app start, pruned to the newest N |
 | `state.rs` | `AppState`: the stored library list and the currently open library (opened by name) |
 | `app_data.rs` | `AppData`: the library list, the current library's name, the log-file count and the interface scale, persisted with tauri-plugin-store (`app_data.json`); `validate_name`, `validate_log_files`, `validate_ui_scale` |
-| `commands.rs` | Library management commands and the `Library` passthroughs |
+| `commands.rs` | Library management commands, the `Library` passthroughs, and the chunked `upload_book` ([api.md](api.md#library-passthroughs-need-an-open-library)) |
 | `error.rs` | `CommandError { status, message }`, the only place command errors are logged; `CommandError::invalid` for 400s |
 | `native.rs` | The `shelf` plugin: storage permission, folder picker, system insets (Android) |
 | `libsrc/mod.rs` | `LibrarySource` (what's stored, with `name()`) and `AnyLibrary` (what's open) |
@@ -59,21 +59,21 @@ pub struct AppState {
 `AppData` lives in the app's private data directory, never in a library:
 
 - Store file `app_data.json`, keys `libraries`, `current` (the name of the library to open on start) `log_files` (see [Logging](#logging)) and `ui_scale`, via tauri-plugin-store (relative paths resolve to the app data dir). On Linux: `~/.local/share/com.psomani16k.shelf/app_data.json`. On Android: the app's internal storage.
-- `ui_scale` is the interface's size on this device in percent: 80 to 150 in steps of 10, default 100 (`validate_ui_scale`). An unreadable or invalid stored value falls back to 100, with a warning. Commands `ui_scale` and `set_ui_scale` in `commands.rs`; the frontend side is in [frontend.md](frontend.md#settings-and-appearance).
+- `ui_scale` is the interface's size on this device in percent: 50 to 200 in steps of 10, default 100 (`validate_ui_scale`). An unreadable or invalid stored value falls back to 100, with a warning. Commands `ui_scale` and `set_ui_scale` in `commands.rs`; the frontend side is in [frontend.md](frontend.md#settings-and-appearance).
 - Each entry is a serde externally tagged `LibrarySource`:
 
 ```json
 {
   "libraries": [
-    { "Local": { "root": "/storage/emulated/0/Books", "name": "Books" } },
-    { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "NAS" } }
+    { "Local": { "root": "/storage/emulated/0/Books", "name": "Books", "user": "default" } },
+    { "Remote": { "base_url": "http://nas:8080", "cache_dir": "/home/me/.cache/com.psomani16k.shelf/remote/nas-8080", "name": "NAS", "token": "…" } }
   ],
   "current": "NAS",
   "log_files": 5
 }
 ```
 
-A missing list loads as empty, and so does an unreadable one, with a warning, rather than blocking the app. An unreadable `current` loads as unset. Libraries from before names were required already had one (the folder name or host), so they load unchanged. Two remote libraries on the same server share one download cache, since it's keyed by content hash.
+A missing list loads as empty, and so does an unreadable one, with a warning, rather than blocking the app. An unreadable `current` loads as unset. Libraries from before names were required already had one (the folder name or host), so they load unchanged. A local entry's `user` is whose progress this device reads and writes in that library (`LocalLibrary` puts it into every progress request); it's `default` for new entries and for entries saved before it existed, and there's no UI to change it yet. Remote entries have none: the server decides from the token. A remote entry's `token` is its login token, **in plain text** (an OS keyring is on the roadmap), left out until the first login and removed by *Log out*. Two remote libraries on the same server share one download cache, since it's keyed by content hash.
 
 ## Local libraries
 
@@ -84,7 +84,9 @@ A missing list loads as empty, and so does an unreadable one, with a warning, ra
 `RemoteLibrary` (`libsrc/remote.rs`) implements `Library` over a `shelf-server`:
 
 - `add_remote_library(name, baseUrl)`: the name is checked first, as for local libraries (the add form pre-fills an empty one with the host); `http://` is prepended when there's no `://`; only http/https are accepted; cache dir = `<app cache dir>/remote/<host>-<port>` (Linux: `~/.cache/com.psomani16k.shelf/remote/...`). Nothing is contacted when adding or opening; the first request is what reaches the server.
-- `api_call(req, path)`: POSTs JSON to `{base_url}/api{path}`. A non-2xx response becomes an error carrying `HttpStatus`, with the server's `ApiError.message` in the context; `to_library_error` maps a 404 to `LibraryError::NotFound`. An empty body (204) decodes as `null` → `()`.
+- `api_call(req, path)`: POSTs JSON to `{base_url}/api{path}` through `send`, which adds `Authorization: Bearer <token>` when the library has one (so do the cover and file downloads). A non-2xx response becomes an error carrying `HttpStatus` (the status and the server's `ApiError.message`); `to_library_error` maps a 404 to `LibraryError::NotFound`, and a 400, 401, 403, 409 or 429 to `Invalid`, `Unauthorized`, `Forbidden`, `Conflict` or `TooManyRequests` with the server's message, so the frontend shows the same text as on the web. An empty body (204) decodes as `null` → `()`.
+- **Signing in:** `RemoteLibrary::login`, `logout`, `me`, `change_password`, `sign_up`, `list_user_requests`, `approve_user_request`, `deny_user_request`, `list_users`, `set_user_role`, `set_user_scope` and `list_scope_directories` sit outside the `Library` trait (a local library has no accounts, so these commands are a 400 there) and back the commands of the same names. `sign_up` needs no token. The token is held in a `tokio::sync::RwLock` in the open library, so a login applies at once, and `login` also saves it in the entry in `AppData`, so the device stays signed in across restarts. `logout` always forgets it, even if the server can't be reached. A 401 on any command makes the frontend show its login screen; the stale token stays stored until the next login replaces it. Removing a signed-in library logs it out on the server in the background.
+- `upload_book`: POSTs the bytes as `application/epub+zip` to `/api/books/upload`, with the request as the query (`Url::query_pairs_mut`).
 - `get_cover` / `get_book`: download `GET /api/books/{id}/{cover|file}` once into `<cache>/{cover|file}/<id>.{jpeg|epub}` (via a `.<id>.<ext>.part-<pid>` temp file in the same folder, renamed when complete and deleted if the download fails), then return the cached path (`FileContent::Local`). IDs are content hashes, so a cached file never goes stale. The ID must be alphanumeric, so a server can't make the app write outside the cache.
 - `list_books` / `list_sub_directories` can't fail in the trait, so errors are logged at `warn` and an empty listing is returned. An unreachable server therefore looks like an empty library.
 - The client has a 10 s connect timeout and no overall timeout. The cache is never evicted and isn't deleted when the library is removed.

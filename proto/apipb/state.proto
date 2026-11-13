@@ -2,7 +2,9 @@ syntax = "proto3";
 
 package apipb;
 
-message GetStateRequest {}
+message GetStateRequest {
+  string user = 1;
+}
 
 message GetStateResponse {
   optional string last_book_id = 1;
@@ -10,4 +12,5 @@ message GetStateResponse {
 
 message SetStateRequest {
   optional string last_book_id = 1;
+  string user = 2;
 }

@@ -1,16 +1,19 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use shelf_core::{
-    library::{Library, LibraryError, book_library::BookLibrary},
+    library::{Library, LibraryError, book_library::BookLibrary, user::DEFAULT_USER},
     storage::FileContent,
 };
 use shelf_proto::{
     api::{
-        GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
+        CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetProgressRequest, SetStateRequest,
+        CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
+        UploadEbookRequest, UploadEbookResponse,
     },
     config::Config,
 };
@@ -22,6 +25,13 @@ use crate::libsrc::{LibrarySource, app_library::AppLibrary};
 pub struct LocalLibraryBuilder {
     root: String,
     name: String,
+    /// Whose progress this device reads and writes in the library.
+    #[serde(default = "default_user")]
+    user: String,
+}
+
+fn default_user() -> String {
+    DEFAULT_USER.to_owned()
 }
 
 impl LocalLibraryBuilder {
@@ -29,6 +39,7 @@ impl LocalLibraryBuilder {
         Self {
             root: root.to_string_lossy().to_string(),
             name: name.to_string(),
+            user: default_user(),
         }
     }
 
@@ -42,7 +53,7 @@ impl LocalLibraryBuilder {
 
     /// Opens the folder: starts its watcher and syncs `.shelf/`, so it takes as long as the sync.
     pub async fn build(self, on_change: impl Fn() + Send + Sync + 'static) -> Result<LocalLibrary> {
-        LocalLibrary::new(Path::new(&self.root), self.name, on_change).await
+        LocalLibrary::new(Path::new(&self.root), self.name, self.user, on_change).await
     }
 }
 
@@ -52,6 +63,7 @@ pub struct LocalLibrary {
     rebuild_lock: Mutex<()>,
     root: PathBuf,
     name: String,
+    user: String,
 }
 
 impl LocalLibrary {
@@ -59,6 +71,7 @@ impl LocalLibrary {
     pub async fn new(
         root: &Path,
         name: String,
+        user: String,
         on_change: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self> {
         let lib = BookLibrary::open(root.to_path_buf(), on_change).await?;
@@ -67,6 +80,7 @@ impl LocalLibrary {
             rebuild_lock: Mutex::new(()),
             root: root.to_path_buf(),
             name,
+            user,
         })
     }
 }
@@ -88,36 +102,65 @@ impl Library for LocalLibrary {
         self.book_library.get_book(id).await
     }
 
+    // The user in progress, state and config requests comes from the app data, never the frontend.
     async fn get_progress(
         &self,
-        req: GetProgressRequest,
+        mut req: GetProgressRequest,
     ) -> Result<GetProgressResponse, LibraryError> {
+        req.user = self.user.clone();
         self.book_library.get_progress(req).await
     }
 
-    async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
+    async fn set_progress(&self, mut req: SetProgressRequest) -> Result<(), LibraryError> {
+        req.user = self.user.clone();
         self.book_library.set_progress(req).await
     }
 
-    async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
+    async fn get_state(&self, mut req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
+        req.user = self.user.clone();
         self.book_library.get_state(req).await
     }
 
-    async fn set_state(&self, req: SetStateRequest) -> Result<(), LibraryError> {
+    async fn set_state(&self, mut req: SetStateRequest) -> Result<(), LibraryError> {
+        req.user = self.user.clone();
         self.book_library.set_state(req).await
     }
 
-    async fn get_config(&self) -> Result<Config, LibraryError> {
-        self.book_library.get_config().await
+    async fn get_config(&self, mut req: GetConfigRequest) -> Result<Config, LibraryError> {
+        req.user = self.user.clone();
+        self.book_library.get_config(req).await
     }
 
-    async fn set_config(&self, patch: Config) -> Result<Config, LibraryError> {
-        self.book_library.set_config(patch).await
+    async fn set_config(&self, mut req: SetConfigRequest) -> Result<Config, LibraryError> {
+        req.user = self.user.clone();
+        self.book_library.set_config(req).await
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
         let _guard = self.rebuild_lock.lock().await;
         self.book_library.rebuild_index().await
+    }
+
+    async fn clean_up_progress(&self) -> Result<CleanUpProgressResponse, LibraryError> {
+        self.book_library.clean_up_progress().await
+    }
+    async fn upload_book(
+        &self,
+        req: UploadEbookRequest,
+        book: Bytes,
+    ) -> Result<UploadEbookResponse, LibraryError> {
+        self.book_library.upload_book(req, book).await
+    }
+
+    async fn create_directory(
+        &self,
+        req: CreateDirectoryRequest,
+    ) -> Result<CreateDirectoryResponse, LibraryError> {
+        self.book_library.create_directory(req).await
+    }
+
+    async fn delete_items(&self, req: DeleteItemsRequest) -> Result<DeleteItemsResponse, LibraryError> {
+        self.book_library.delete_items(req).await
     }
 }
 
@@ -127,6 +170,10 @@ impl AppLibrary for LocalLibrary {
     }
 
     fn get_builder(&self) -> LibrarySource {
-        LibrarySource::Local(LocalLibraryBuilder::new(&self.root, &self.name))
+        LibrarySource::Local(LocalLibraryBuilder {
+            root: self.root.to_string_lossy().to_string(),
+            name: self.name.clone(),
+            user: self.user.clone(),
+        })
     }
 }

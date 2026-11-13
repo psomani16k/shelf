@@ -21,16 +21,34 @@ impl IntoResponse for ApiErrorResponse {
         let (status, message) = match self.0 {
             LibraryError::NotFound => {
                 debug!("not found");
-                (StatusCode::NOT_FOUND, "not found")
+                (StatusCode::NOT_FOUND, "not found".to_owned())
+            }
+            LibraryError::Invalid(message) => {
+                debug!(error = %message, "invalid request");
+                (StatusCode::BAD_REQUEST, message)
+            }
+            LibraryError::Conflict(message) => {
+                debug!(error = %message, "conflict");
+                (StatusCode::CONFLICT, message)
+            }
+            LibraryError::Unauthorized(message) => {
+                debug!(error = %message, "unauthorized");
+                (StatusCode::UNAUTHORIZED, message)
+            }
+            LibraryError::Forbidden(message) => {
+                debug!(error = %message, "forbidden");
+                (StatusCode::FORBIDDEN, message)
+            }
+            LibraryError::TooManyRequests(message) => {
+                debug!(error = %message, "too many requests");
+                (StatusCode::TOO_MANY_REQUESTS, message)
             }
             LibraryError::Internal(e) => {
                 error!(error = %format!("{e:#}"), "request failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_owned())
             }
         };
-        let body = ApiError {
-            message: message.to_owned(),
-        };
+        let body = ApiError { message };
         (status, Json(body)).into_response()
     }
 }

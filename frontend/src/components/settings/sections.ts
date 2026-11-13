@@ -1,5 +1,13 @@
 import type { MessageInitShape } from "@bufbuild/protobuf"
-import { BookOpen, CodeXml, LibraryBig, type LucideIcon, Palette } from "lucide-react"
+import {
+  BookOpen,
+  CircleUser,
+  CodeXml,
+  LibraryBig,
+  type LucideIcon,
+  Palette,
+  ShieldCheck,
+} from "lucide-react"
 import type { ComponentType } from "react"
 import {
   type Config,
@@ -10,6 +18,9 @@ import {
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
 import { IS_TAURI } from "@/lib/platform"
+import { permissions, useMe } from "@/lib/useMe"
+import { AccountSection } from "./AccountSection"
+import { AdminSection } from "./AdminSection"
 import { InterfaceSection } from "./InterfaceSection"
 import { LibrarySection } from "./LibrarySection"
 import { LogsSection } from "./LogsSection"
@@ -31,14 +42,16 @@ export type Group = { label?: string; settings: Setting[] }
 
 /**
  * `groups` are `Config` fields, in the same nesting. `content` is a component for settings that
- * don't live in the library config (actions, and app-only settings behind `IS_TAURI`), shown
- * after the groups. `appOnly` sections aren't shown on the web.
+ * don't live in the user's config (actions, and app-only settings behind `IS_TAURI`), shown
+ * after the groups. `appOnly` sections aren't shown on the web, `adminOnly` ones only to a
+ * remote library's admins and owners.
  */
 export type Section = {
-  slug: "reader" | "ui" | "library" | "developer"
+  slug: "reader" | "ui" | "library" | "account" | "admin" | "developer"
   label: string
   icon: LucideIcon
   appOnly?: true
+  adminOnly?: true
 } & ({ groups: Group[]; content?: ComponentType } | { content: ComponentType; groups?: never })
 
 /** In size order; the enum's numbers put MEDIUM first only because it's the default. */
@@ -152,6 +165,8 @@ export const SECTIONS: Section[] = [
     content: InterfaceSection,
   },
   { slug: "library", label: "Library", icon: LibraryBig, content: LibrarySection },
+  { slug: "account", label: "Account", icon: CircleUser, content: AccountSection },
+  { slug: "admin", label: "Admin", icon: ShieldCheck, content: AdminSection, adminOnly: true },
   {
     slug: "developer",
     label: "Developer options",
@@ -161,4 +176,12 @@ export const SECTIONS: Section[] = [
   },
 ]
 
-export const VISIBLE_SECTIONS = SECTIONS.filter((s) => !s.appOnly || IS_TAURI)
+const PLATFORM_SECTIONS = SECTIONS.filter((s) => !s.appOnly || IS_TAURI)
+
+/** `pending` while the role isn't known yet, so `adminOnly` sections may still appear. */
+export function useVisibleSections() {
+  const me = useMe()
+  const { canManageUsers } = permissions(me.data)
+  const sections = PLATFORM_SECTIONS.filter((s) => !s.adminOnly || canManageUsers)
+  return { sections, pending: me.isPending }
+}

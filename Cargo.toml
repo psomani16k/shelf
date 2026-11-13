@@ -13,6 +13,10 @@ anyhow = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.11"
+sha2 = "0.11"
+globset = "0.4"
+subtle = "2.6"
+getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
@@ -22,6 +26,7 @@ rust-embed = { version = "8", features = ["mime-guess"] }
 # No time zone database: only UTC timestamps are needed.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 bytes = "1"
+base64 = "0.22"
 futures = "0.3"
 # Features are picked per crate: `aws` brings reqwest and aws-lc-rs.
 object_store = { version = "0.14", default-features = false }

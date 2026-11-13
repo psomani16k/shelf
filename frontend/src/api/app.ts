@@ -8,6 +8,8 @@ export type LibraryInfo = {
   kind: "local" | "remote"
   /** The folder for a local library, the server URL for a remote one. */
   location: string
+  /** Whether a remote library has a login key; always true for a local one. */
+  signed_in: boolean
 }
 
 export type Libraries = {
@@ -52,7 +54,7 @@ export const systemInsets = () => invokeCommand<Insets>("system_insets")
 /** The interface's size on this device, in percent. */
 export const uiScale = () => invokeCommand<number>("ui_scale")
 
-/** 80 to 150 in steps of 10, else a 400. Resolves with the saved value. */
+/** 50 to 200 in steps of 10, else a 400. Resolves with the saved value. */
 export const setUiScale = (percent: number) => invokeCommand<number>("set_ui_scale", { percent })
 
 export type LogSettings = {

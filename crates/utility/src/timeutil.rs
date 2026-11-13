@@ -1,6 +1,7 @@
 pub use std::time::Duration;
 use std::{
     fmt::{self, Display},
+    ops::Add,
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -36,6 +37,16 @@ impl Time {
             .unwrap_or_default();
         Time {
             time: self.time - fraction,
+        }
+    }
+}
+
+impl Add<Duration> for Time {
+    type Output = Time;
+
+    fn add(self, duration: Duration) -> Time {
+        Time {
+            time: self.time + duration,
         }
     }
 }

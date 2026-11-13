@@ -121,6 +121,42 @@ impl LibraryStorage for S3LibraryStorage {
         Ok(!listing.objects.is_empty() || !listing.common_prefixes.is_empty())
     }
 
+    fn sub_folders(&self, dir: &Path) -> Result<Vec<String>> {
+        let key = self.book_key(dir)?;
+        let listing = self.block_on(self.store.list_with_delimiter(Some(&key)))?;
+        Ok(listing
+            .common_prefixes
+            .iter()
+            .filter_map(|prefix| prefix.filename().map(str::to_owned))
+            .filter(|name| !name.starts_with('.'))
+            .collect())
+    }
+
+    fn add_book(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        let key = self.book_key(path)?;
+        self.block_on(self.put(&key, Bytes::copy_from_slice(bytes)))
+    }
+
+    /// Object stores have no empty folders, so this leaves a hidden marker the scanner skips.
+    fn create_folder(&self, path: &Path) -> Result<()> {
+        let key = self.book_key(&path.join(".keep"))?;
+        self.block_on(self.put(&key, Bytes::new()))
+    }
+
+    fn delete_book_file(&self, path: &Path) -> Result<()> {
+        let key = self.book_key(path)?;
+        let keys = futures::stream::once(async move { Ok(key) }).boxed();
+        self.block_on(self.store.delete_stream(keys).try_collect::<Vec<_>>())?;
+        Ok(())
+    }
+
+    fn delete_folder(&self, path: &Path) -> Result<()> {
+        let dir = self.book_key(path)?;
+        let locations = self.store.list(Some(&dir)).map_ok(|o| o.location).boxed();
+        self.block_on(self.store.delete_stream(locations).try_collect::<Vec<_>>())?;
+        Ok(())
+    }
+
     fn book_modified(&self, path: &Path) -> Result<Option<Time>> {
         let key = self.book_key(path)?;
         let head = GetOptions::new().with_head(true);
@@ -170,16 +206,16 @@ impl LibraryStorage for S3LibraryStorage {
         Ok(())
     }
 
-    fn book_progress(&self, hash: &str) -> Result<Option<BookProgress>> {
-        let key = self.book_data_key(hash, "progress.json")?;
+    fn book_progress(&self, hash: &str, user: &str) -> Result<Option<BookProgress>> {
+        let key = self.book_data_key(hash, &format!("progress/{user}.json"))?;
         match self.block_on(self.get(&key))? {
             Some(json) => Ok(serde_json::from_slice(&json)?),
             None => Ok(None),
         }
     }
 
-    fn set_book_progress(&self, hash: &str, progress: BookProgress) -> Result<()> {
-        let key = self.book_data_key(hash, "progress.json")?;
+    fn set_book_progress(&self, hash: &str, user: &str, progress: BookProgress) -> Result<()> {
+        let key = self.book_data_key(hash, &format!("progress/{user}.json"))?;
         self.block_on(self.put(&key, serde_json::to_string_pretty(&progress)?))
     }
 
@@ -193,15 +229,51 @@ impl LibraryStorage for S3LibraryStorage {
         self.block_on(self.put(&key, Bytes::copy_from_slice(thumbnail)))
     }
 
-    fn clean_up_hashes(&self, hashes: HashSet<String>) -> Result<()> {
+    fn clean_up_books(&self, hashes: HashSet<String>) -> Result<usize> {
+        let mut cleaned = 0;
         for hash in hashes {
             let dir = self.key(&format!(".shelf/books/{hash}"))?;
-            let locations = self.store.list(Some(&dir)).map_ok(|o| o.location).boxed();
-            let deleted = self.store.delete_stream(locations).try_collect::<Vec<_>>();
-            // Like a local `remove_dir_all`: one failed book doesn't stop the rest.
-            let _ = self.block_on(deleted);
+            let stale = [
+                self.book_data_key(&hash, "metadata.json")?,
+                self.book_data_key(&hash, "thumbnail.jpeg")?,
+            ];
+            let listed = self.store.list(Some(&dir)).map_ok(|o| o.location);
+            // Like a local delete: one failed book doesn't stop the rest.
+            let Ok(listed) = self.block_on(listed.try_collect::<Vec<_>>()) else {
+                continue;
+            };
+            let mut deleted = false;
+            for key in listed.iter().filter(|k| stale.contains(k)) {
+                deleted |= self.block_on(self.store.delete(key)).is_ok();
+            }
+            cleaned += usize::from(deleted);
         }
-        Ok(())
+        Ok(cleaned)
+    }
+
+    fn clean_up_progress(&self, keep: &HashSet<String>) -> Result<usize> {
+        let mut deleted = 0;
+        for hash in self.all_book_hashes_in_books_dir()? {
+            if keep.contains(&hash) {
+                continue;
+            }
+            let dir = self.key(&format!(".shelf/books/{hash}"))?;
+            let metadata = self.book_data_key(&hash, "metadata.json")?;
+            let listed = self.store.list(Some(&dir)).map_ok(|o| o.location);
+            let Ok(listed) = self.block_on(listed.try_collect::<Vec<_>>()) else {
+                continue;
+            };
+            if listed.contains(&metadata) {
+                continue;
+            }
+            let keys = futures::stream::iter(listed.into_iter().map(Ok)).boxed();
+            let removed = self.store.delete_stream(keys).try_collect::<Vec<_>>();
+            // Like a local `remove_dir_all`: one failed book doesn't stop the rest.
+            if self.block_on(removed).is_ok() {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
     }
 
     async fn read_shelf_file(&self, name: &str) -> Result<Option<String>> {
@@ -226,7 +298,7 @@ impl LibraryStorage for S3LibraryStorage {
 mod tests {
     use object_store::{ObjectStoreExt, memory::InMemory};
     use shelf_proto::{
-        bookkeeping::{EpubProgress, book_file_type},
+        bookkeeping::{BookLocation, EpubProgress, book_file_type},
         config::Config,
         state::State,
     };
@@ -312,28 +384,45 @@ mod tests {
     async fn book_data_round_trips_and_cleans_up() {
         let storage = storage(&[]).await;
         let meta = BookMetadata {
-            path: "a.epub".into(),
+            locations: vec![BookLocation {
+                path: "a.epub".into(),
+                ..Default::default()
+            }],
             id: ID.into(),
             ..Default::default()
         };
         let progress = BookProgress {
             file_type: book_file_type::Value::Epub as i32,
             epub_progress: Some(EpubProgress { cfi: "epubcfi(/6/2)".into() }),
+            user: "default".into(),
         };
 
-        let (stored, stored_progress, missing, hashes, left) = blocking(&storage, {
+        let (stored, stored_progress, missing, hashes, cleaned) = blocking(&storage, {
             let (meta, progress) = (meta.clone(), progress.clone());
             move |s| {
                 s.set_book_metadata(ID, &meta).unwrap();
-                s.set_book_progress(ID, progress).unwrap();
+                s.set_book_progress(ID, "default", progress.clone()).unwrap();
                 s.set_book_thumbnail(ID, b"jpeg").unwrap();
                 s.set_book_metadata(OTHER_ID, &meta).unwrap();
+                s.set_book_thumbnail(OTHER_ID, b"jpeg").unwrap();
+                s.set_book_progress(OTHER_ID, "metadata", progress.clone()).unwrap();
                 let hashes = s.all_book_hashes_in_books_dir().unwrap();
-                let stored = (s.book_metadata(ID).unwrap(), s.book_progress(ID).unwrap());
-                let missing = (s.book_metadata("nope").unwrap(), s.book_progress("nope").unwrap());
-                s.clean_up_hashes(HashSet::from([OTHER_ID.to_owned()])).unwrap();
-                let left = s.all_book_hashes_in_books_dir().unwrap();
-                (stored.0, stored.1, missing, hashes, left)
+                let stored = (s.book_metadata(ID).unwrap(), s.book_progress(ID, "default").unwrap());
+                let other_user = s.book_progress(ID, "other").unwrap();
+                assert_eq!(other_user, None);
+                let missing = (
+                    s.book_metadata("nope").unwrap(),
+                    s.book_progress("nope", "default").unwrap(),
+                );
+                let other = HashSet::from([OTHER_ID.to_owned()]);
+                let cleaned = (s.clean_up_books(other.clone()).unwrap(), s.clean_up_books(other).unwrap());
+                assert_eq!(s.book_metadata(OTHER_ID).unwrap(), None);
+                // A user named "metadata" has a `metadata.json` too; only the book's goes.
+                assert!(s.book_progress(OTHER_ID, "metadata").unwrap().is_some());
+                let keep = HashSet::from([ID.to_owned()]);
+                assert_eq!(s.clean_up_progress(&keep).unwrap(), 1);
+                assert_eq!(s.all_book_hashes_in_books_dir().unwrap(), keep);
+                (stored.0, stored.1, missing, hashes, cleaned)
             }
         })
         .await;
@@ -342,7 +431,7 @@ mod tests {
         assert_eq!(stored_progress, Some(progress));
         assert_eq!(missing, (None, None));
         assert_eq!(hashes, HashSet::from([ID.to_owned(), OTHER_ID.to_owned()]));
-        assert_eq!(left, HashSet::from([ID.to_owned()]));
+        assert_eq!(cleaned, (1, 0));
         assert!(matches!(
             storage.book_thumbnail(ID).await.unwrap(),
             Some(FileContent::Bytes(b)) if b == "jpeg"
@@ -353,19 +442,21 @@ mod tests {
     #[tokio::test]
     async fn state_and_config_round_trip() {
         let storage = storage(&[]).await;
-        assert_eq!(storage.read_state().await.unwrap(), State::default());
-        assert_eq!(storage.read_config().await.unwrap(), Config::default());
+        assert_eq!(storage.read_state("a").await.unwrap(), State::default());
+        assert_eq!(storage.read_config("a").await.unwrap(), Config::default());
 
         let state = State {
             last_book_id: Some(ID.into()),
         };
-        storage.write_state(&state).await.unwrap();
+        storage.write_state("a", &state).await.unwrap();
         let patch: Config =
             serde_json::from_value(serde_json::json!({"reader": {"flow": "PAGINATED"}})).unwrap();
-        let config = storage.update_config(&patch).await.unwrap();
+        let config = storage.update_config("a", &patch).await.unwrap();
 
-        assert_eq!(storage.read_state().await.unwrap(), state);
-        assert_eq!(storage.read_config().await.unwrap(), config);
+        assert_eq!(storage.read_state("a").await.unwrap(), state);
+        assert_eq!(storage.read_state("b").await.unwrap(), State::default());
+        assert_eq!(storage.read_config("a").await.unwrap(), config);
+        assert_eq!(storage.read_config("b").await.unwrap(), Config::default());
         assert_eq!(config, patch);
     }
 }

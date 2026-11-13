@@ -1,14 +1,16 @@
-use std::{net::SocketAddr, time::Instant};
+use std::time::Instant;
 
 use axum::{
     body::HttpBody,
-    extract::{ConnectInfo, OriginalUri, Request},
+    extract::{OriginalUri, Request},
     http::{HeaderMap, header},
     middleware::Next,
     response::Response,
 };
 use tracing::{Instrument, info, info_span};
 use tracing_subscriber::EnvFilter;
+
+use crate::auth::LoggedUser;
 
 /// One JSON object per line on stdout. Level comes from `RUST_LOG`, default `info`.
 pub fn init() {
@@ -23,9 +25,9 @@ pub fn init() {
 }
 
 /// Writes the `access` line for each request, and runs the request inside a span carrying its
-/// `request_id`, so every log line it causes can be matched to it.
+/// `request_id`, so every log line it causes can be matched to it. Nothing about the client's
+/// device (IP, user agent) is logged.
 pub async fn access_log(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     OriginalUri(uri): OriginalUri,
     req: Request,
     next: Next,
@@ -33,7 +35,6 @@ pub async fn access_log(
     let start = Instant::now();
     let request_id = header_str(req.headers(), "x-request-id").to_owned();
     let method = req.method().clone();
-    let user_agent = header_str(req.headers(), header::USER_AGENT.as_str()).to_owned();
     let req_bytes = content_length(req.headers());
 
     let span = info_span!("request", request_id = %request_id);
@@ -44,6 +45,10 @@ pub async fn access_log(
         .size_hint()
         .exact()
         .unwrap_or_else(|| content_length(response.headers()));
+    let user = response
+        .extensions()
+        .get::<LoggedUser>()
+        .map_or("", |u| u.0.as_str());
     info!(
         target: "access",
         request_id,
@@ -53,9 +58,7 @@ pub async fn access_log(
         latency_ms = start.elapsed().as_secs_f64() * 1000.0,
         req_bytes,
         resp_bytes,
-        // The direct peer: behind a reverse proxy this is the proxy until trusted proxies are configured.
-        client_ip = %peer.ip(),
-        user_agent,
+        user,
     );
     response
 }

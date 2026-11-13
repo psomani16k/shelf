@@ -7,7 +7,7 @@ import { IS_TAURI } from "@/lib/platform"
 export const UI_SCALE_KEY = ["ui-scale"]
 
 /** Percents, matching `validate_ui_scale` in `app/src/app_data.rs`. */
-export const UI_SCALE_CHOICES = [80, 90, 100, 110, 120, 130, 140, 150]
+export const UI_SCALE_CHOICES = Array.from({ length: 16 }, (_, i) => 50 + 10 * i)
 
 /** Tailwind sizes in rem, so the root font size scales the whole UI but not px insets or viewport units. */
 function applyUiScale(percent: number) {
