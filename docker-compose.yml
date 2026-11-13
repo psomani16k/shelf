@@ -10,15 +10,18 @@ services:
     volumes:
       # The library: a folder of .epub files. The server runs as uid 1000 and writes its
       # metadata to a hidden .shelf folder inside it, so that uid needs write access.
-      - ~/books/:/books
+      - path/to/books:/books
       # The server's own data: data.json, with the users and their passwords in plain text.
       # Created on first start; edit it and restart to add users. Keep it out of the books
       # folder, so it never syncs with the library. Create the folder first and give it to
       # uid 1000 (`mkdir data; and sudo chown 1000:1000 data`), or Docker creates it as root.
-      - ~/data/:/data
+      - path/to/data/:/data
     environment:
       # error, warn, info or debug.
       RUST_LOG: info
+      # The container's time zone, as a tz database name (e.g. Asia/Kolkata). Shelf itself
+      # writes every timestamp (logs, data.json, .shelf/) in UTC, so this doesn't change them.
+      TZ: Asia/Kolkata
     logging:
       # Docker's default json-file driver never rotates on its own.
       driver: json-file

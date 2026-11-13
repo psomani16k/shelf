@@ -47,12 +47,13 @@ Rust tests: in `crates/core/src/` — `storage/mod.rs` (the config merge), `stor
 
 ## The `demo` crate
 
-`crates/demo` is a small binary for running `core` and `utility` routines by hand against a real folder. `cargo run -p demo` with no arguments lists its functions:
+`crates/demo` is a small binary for running `core`, `utility` and server routines by hand against a real folder. `cargo run -p demo` with no arguments lists its functions:
 
 - `force_extract <root>`: runs the startup sync with `force` on `<root>`, as *Rebuild index* does. Every book is re-extracted into `<root>/.shelf/`, and the metadata and thumbnails of books no file produced are deleted (their folders and progress are kept). Prints the `SyncReport`.
+- `server <data> <books>`: runs the real server (`shelf_server::serve`) as the Docker image does, with `<data>` in place of `/data` and `<books>` in place of `/books`, on `0.0.0.0:8080` (so a phone on the same network can reach it too). `data.json` is created in `<data>` if it's missing; add a user to it by hand to sign in. The frontend comes from `frontend/dist`: a debug build reads it from disk on each request, so `pnpm --dir frontend build` updates it without rebuilding the server, and `pnpm --dir frontend dev` (which proxies `/api` to `localhost:8080`) works against it too. Ctrl-C stops it. Keep `<data>` outside `<books>`.
 - `debounce <delay> <blocking>`: replays a scripted burst of file events through `Debounced` with a `<delay>`-second debounce, on the blocking pool when `<blocking>` is `true`.
 
-Logs go to stdout as JSON lines with the server's flags (`RUST_LOG`, default `info,shelf_core=debug`), followed by the return value printed with `{:?}`. To see only warnings, such as failed extractions:
+Logs go to stdout as JSON lines with the server's flags (`RUST_LOG`, default `info,shelf_core=debug`), followed by the return value printed with `{:?}`. With `server`, `shelf_core=debug` logs every watcher event; set `RUST_LOG=info` for the Docker image's level. To see only warnings, such as failed extractions:
 
 ```fish
 cargo run -p demo -- force_extract <root> | jq -R 'fromjson? | select(.level == "WARN")'

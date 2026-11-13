@@ -21,8 +21,8 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 - [x] **Library root and book access per user** (`library_root` and `books` in `data.json`), with identical files as one book with several copies ([server.md](server.md#server-data), [api.md](api.md#http-routes-cratesserversrcapirs)).
 - [x] An admin UI for each user's `library_root` and `books`, with `may_manage` for who may change whose ([api.md](api.md#http-routes-cratesserversrcapirs), [frontend.md](frontend.md)).
 - [x] Frontend: delete one copy with `DeleteItemsRequest.books`, and key and select listing items by file name, so two copies in one folder are separate ([frontend.md](frontend.md)).
-- [x] Making users through the API: approving sign-ups (`ADMIN` for readers and editors, `OWNER` for admins).
-- [x] Changing a user's role and banning through the API (`ADMIN` for readers, editors and banned users, `OWNER` for admins too, per [api.md](api.md#access-by-role)).
+- [x] Making users through the API: approving sign-ups (`ADMIN` for roles below admin, `OWNER` for admins).
+- [x] Changing a user's role and banning through the API (`ADMIN` for users below admin, `OWNER` for admins too, per [api.md](api.md#access-by-role)).
 - [ ] Removing users through the API, with the same rule.
 - [ ] App: keep a remote library's token in the OS keyring instead of `app_data.json`.
 

@@ -3,14 +3,15 @@ syntax = "proto3";
 package apipb;
 
 // In order: each role can do everything the ones before it can, so a check is `role >= needed`.
-// Never renumber: the order is the numbers.
+// The order is the numbers: a new role goes where it belongs and the ones above it move up.
 message Role {
   enum Value {
     BANNED = 0; // can only sign in to be told so; the value when "role" is left out
     READER = 1; // read books and keep their own progress
-    EDITOR = 2; // add and delete books
-    ADMIN = 3; // rebuild the index, approve sign-ups, change readers', editors' and banned users' roles
-    OWNER = 4; // also make, change and ban admins; given or taken only by editing data.json
+    CONTRIBUTOR = 2; // also add books and folders
+    LIBRARIAN = 3; // also delete books and folders
+    ADMIN = 4; // rebuild the index, clean up progress, approve sign-ups, manage everyone below admin
+    OWNER = 5; // also make, change and ban admins; given or taken only by editing data.json
   }
 }
 
@@ -104,7 +105,7 @@ message SetUserRoleRequest {
 
 message SetUserRoleResponse {}
 
-// Applies from the user's next request. Admins set readers', editors' and banned users' scopes,
+// Applies from the user's next request. Admins set the scopes of users below admin,
 // owners admins' too; nobody sets their own or an owner's.
 message SetUserScopeRequest {
   string username = 1;

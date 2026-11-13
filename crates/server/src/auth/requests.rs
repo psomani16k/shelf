@@ -253,13 +253,13 @@ mod tests {
         assert_eq!(request.username, "newbie");
         assert!(!request.taken);
         let approver = approver(Role::Admin);
-        auth.approve_request(&approver, &approval(&request.id, Role::Editor), now())
+        auth.approve_request(&approver, &approval(&request.id, Role::Librarian), now())
             .await
             .unwrap();
 
         assert!(pending(&auth).await.is_empty());
         let res = auth.login("newbie", "secret", now()).await.unwrap();
-        assert_eq!(res.user.unwrap().role(), Role::Editor);
+        assert_eq!(res.user.unwrap().role(), Role::Librarian);
     }
 
     #[tokio::test]

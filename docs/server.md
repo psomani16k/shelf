@@ -4,8 +4,8 @@ An axum server (`crates/server`) that serves one library over HTTP and serves th
 
 ## What it does
 
-`main.rs`:
-1. Installs JSON logging (`logging::init`).
+The crate is a library with a thin binary. `main.rs` installs JSON logging (`init_logging`, which is `logging::init`) and calls `serve(Config::default())`; `lib.rs`'s `serve` does the rest. `Config` holds the library folder, the data folder and the bind address, and its default is the Docker image's (`/books`, `/data`, `0.0.0.0:8080`); the binary has no flags, so only the `demo` crate's `server` function uses other folders ([development.md](development.md#the-demo-crate)). Steps:
+1. Installs JSON logging (`main.rs`).
 2. Loads the server data from **`/data/data.json`** (fixed; see [Server data](#server-data)), creating it if it's missing, into `Auth`, and logs how many users it has.
 3. Opens `ServerLibrary` (a `BookLibrary` plus a lock so only one rebuild runs at a time) at **`/books`** (fixed) with a no-op `on_change`. This runs the startup sync, which hashes only new and modified books (all of them on the very first start). The watcher then keeps it current.
 4. Routes: `/api/*` → `api::router(state)` (`AppState { library, auth }`) with the request-ID and access-log layers; every API route but `health` and `auth/login` goes through `auth::authenticate` ([api.md](api.md#http-routes-cratesserversrcapirs)); everything else → `frontend::serve`. Request bodies are capped at axum's default 2 MB, except `/api/books/upload` at 512 MiB (`MAX_UPLOAD_BYTES` in `api.rs`); behind a reverse proxy, raise its limit too (Caddy has none by default, nginx's `client_max_body_size` is 1 MB).
@@ -19,7 +19,8 @@ There is no config file and no TLS: put it behind a reverse proxy that terminate
 
 | File | Role |
 |---|---|
-| `main.rs` | Startup, router assembly, graceful shutdown |
+| `main.rs` | The binary: logging, then `serve` with the Docker layout; a fatal error is logged as a JSON line and exits 1 |
+| `lib.rs` | `Config` (folders and bind address, defaulting to the Docker layout) and `serve`: startup, router assembly, graceful shutdown |
 | `api.rs` | One handler per library operation, each going through the user's `LibraryView` for anything that touches books, and the router: routes grouped by the lowest role that may call them. `AppState { library, auth }`, with `FromRef` so each handler takes only its part. Routes are listed in [api.md](api.md). |
 | `auth.rs` | `Auth`: login, sessions, the lockout, password change. `auth/requests.rs`: sign-ups and approving them; `auth/users.rs`: listing users and changing roles, with `may_manage`, the one rule for who may give or take which role. The `authenticate` middleware (bearer token → `CurrentUser` in the request's extensions, like a value in a Go `context`), the `CurrentUser` extractor, `require(role)`, and the `/auth/*` handlers. |
 | `data.rs` | `DataFile`: `/data/data.json` in memory, with each user's `Scope` built whenever it's read. `load` (creates it if missing), `refresh` (reloads after a hand edit), `update` (re-reads, changes, writes atomically). |
@@ -59,14 +60,15 @@ Compared to Go: the handlers are like `http.HandlerFunc`s whose decoding and enc
 
 A session's key is the hex SHA-256 of its token, so the file never holds a token that works. To sign someone out everywhere, delete their `sessions`.
 
-Roles (`apipb.Role.Value`, in `proto/apipb/auth.proto` because `/api/auth/me` returns it) are a ladder: each can do everything the ones before it can, so a check is `role >= needed`. Their numbers are that order, so they must never be renumbered.
+Roles (`apipb.Role.Value`, in `proto/apipb/auth.proto` because `/api/auth/me` returns it) are a ladder: each can do everything the ones before it can, so a check is `role >= needed`. Their numbers are that order: a new role is put in its place and the ones above it are renumbered. `data.json` stores the names, so that's safe, but a removed or renamed role must be fixed by hand in the file (an `EDITOR` from before the split is now `LIBRARIAN`).
 
 | Role | Can |
 |---|---|
 | `BANNED` (0, the value when `role` is left out) | Nothing: signing in is a 403 saying the account is banned, and a session ends on its next request |
 | `READER` | Read books and keep their own progress |
-| `EDITOR` | Also add and delete books |
-| `ADMIN` | Also rebuild the index, approve sign-ups as readers or editors, and move other users between `READER`, `EDITOR` and `BANNED`; later remove them and change which books each user can read (planned) |
+| `CONTRIBUTOR` | Also upload books and make folders, but never delete anything (a taken name gets ` (n)` added, so adding can't overwrite) |
+| `LIBRARIAN` | Also delete books and folders |
+| `ADMIN` | Also rebuild the index, clean up progress, approve sign-ups as readers, contributors or librarians, move other users between `READER`, `CONTRIBUTOR`, `LIBRARIAN` and `BANNED`, and change which books they can read; later remove them (planned) |
 | `OWNER` | Also make users admins (from a sign-up or an existing user) and change or ban admins; later remove them (planned). Only given or taken by editing `data.json` on the server, never through the UI. There can be any number of owners, including none |
 
 No one can change their own role. Banning ends all of the user's sessions; other role changes keep them and apply on the next request. Which routes each role can call: [api.md](api.md#access-by-role).
@@ -144,7 +146,7 @@ services:
     restart: unless-stopped
     ports: ["8080:8080"]
     volumes: ["~/notes/books:/books", "./data:/data"] # both writable by uid 1000
-    environment: { RUST_LOG: info }
+    environment: { RUST_LOG: info, TZ: Etc/UTC }
     logging:                          # json-file never rotates by default
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
@@ -154,6 +156,8 @@ services:
 docker compose pull; and docker compose up -d
 docker compose logs -f shelf
 ```
+
+`TZ` sets the container's time zone, but Shelf writes every timestamp (logs, `data.json`, `.shelf/`) in UTC, and the slim image has no time zone database, so today it changes nothing; the browser shows times in the viewer's own zone.
 
 If a host folder doesn't exist, Docker creates it owned by root and the server can't write `.shelf/` or `data.json`. Create them first, or `sudo chown 1000:1000` them. Adjust the books volume to where the books are; keep `data` outside it.
 

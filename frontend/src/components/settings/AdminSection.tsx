@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { ChevronRight, Folder, LoaderCircle } from "lucide-react"
+import { ChevronDown, ChevronRight, Folder, LoaderCircle } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import {
   approveUserRequest,
@@ -32,9 +32,21 @@ import {
   type UserScope,
 } from "@/gen/apipb/auth_pb"
 import { assignableRoles, ROLE_NAMES, useMe } from "@/lib/useMe"
+import { cn } from "cn"
 
 const USERS_KEY = ["users"]
 const USER_REQUESTS_KEY = ["user-requests"]
+
+/** What each role may do, mirroring `apipb.Role`. */
+const ROLE_DESCRIPTIONS: Record<Role_Value, string> = {
+  [Role_Value.BANNED]: "Can't sign in. Banning signs them out everywhere.",
+  [Role_Value.READER]: "Reads books and keeps their own progress.",
+  [Role_Value.CONTRIBUTOR]: "Also uploads books and makes folders. Can't delete anything.",
+  [Role_Value.LIBRARIAN]: "Also deletes books and folders.",
+  [Role_Value.ADMIN]:
+    "Also rebuilds the index, cleans up progress, approves sign-ups, and changes the roles and access of everyone below admin.",
+  [Role_Value.OWNER]: "Also changes admins. Made only by editing data.json on the server.",
+}
 
 /** Admins and owners only: users' roles, library access and sign-ups. */
 export function AdminSection() {
@@ -46,10 +58,20 @@ export function AdminSection() {
   const requests = useQuery({ queryKey: USER_REQUESTS_KEY, queryFn: listUserRequests })
   return (
     <div className="flex flex-col gap-6">
-      <Card title="Users" query={users} empty="No users.">
+      <Card
+        title="Users"
+        description="Open a user to see or change their role and the part of the library they see."
+        query={users}
+        empty="No users."
+      >
         {({ user, scope }) => <UserRow key={user.username} user={user} scope={scope} />}
       </Card>
-      <Card title="New user requests" query={requests} empty="No requests.">
+      <Card
+        title="New user requests"
+        description="Accounts asked for on the sign-in page. Approving makes the account with the password they chose."
+        query={requests}
+        empty="No requests."
+      >
         {(request) => <RequestRow key={request.id} request={request} />}
       </Card>
     </div>
@@ -58,18 +80,21 @@ export function AdminSection() {
 
 function Card<T>({
   title,
+  description,
   query,
   empty,
   children,
 }: {
   title: string
+  description: string
   query: UseQueryResult<T[]>
   empty: string
   children: (item: T) => ReactNode
 }) {
   return (
     <section aria-label={title}>
-      <h3 className="mb-2 px-1 font-medium">{title}</h3>
+      <h3 className="px-1 font-medium">{title}</h3>
+      <p className="mb-2 px-1 text-sm text-muted-foreground">{description}</p>
       {query.isPending ? (
         <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
       ) : query.isError ? (
@@ -84,47 +109,37 @@ function Card<T>({
 }
 
 function UserRow({ user, scope }: { user: User; scope?: UserScope }) {
-  const queryClient = useQueryClient()
-  const me = useMe().data
-  const roles = assignableRoles(me)
-  // Yourself, owners, and admins unless you're an owner.
-  const canChange = user.username !== me?.username && roles.includes(user.role)
-  const change = useMutation({
-    mutationFn: (role: Role_Value) => setUserRole(user.username, role),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: USERS_KEY }),
-  })
-  const [editing, setEditing] = useState(false)
+  const [open, setOpen] = useState(false)
+  const isMe = user.username === useMe().data?.username
 
   return (
-    <li className="py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium">{user.username}</p>
+    <li>
+      <button
+        type="button"
+        className="flex w-full items-center gap-3 py-3 text-left"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <span className="truncate">{user.username}</span>
+            {isMe && (
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
+                You
+              </span>
+            )}
+          </p>
           <p className="truncate text-sm text-muted-foreground">{describeScope(scope)}</p>
-          {change.error && <p className="text-sm text-destructive">{change.error.message}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {canChange && !editing && (
-            <Button variant="outline" onClick={() => setEditing(true)}>
-              Access
-            </Button>
+        <span className="shrink-0 text-sm text-muted-foreground">{ROLE_NAMES[user.role]}</span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
           )}
-          {canChange ? (
-            <RoleSelect
-              roles={roles}
-              value={user.role}
-              disabled={change.isPending}
-              label={`Role of ${user.username}`}
-              onChange={(role) => change.mutate(role)}
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">{ROLE_NAMES[user.role]}</p>
-          )}
-        </div>
-      </div>
-      {editing && (
-        <ScopeForm username={user.username} scope={scope} onDone={() => setEditing(false)} />
-      )}
+        />
+      </button>
+      {open && <UserDetails user={user} scope={scope} isMe={isMe} />}
     </li>
   )
 }
@@ -136,50 +151,128 @@ function describeScope(scope?: UserScope) {
   return rules ? `${root} · ${rules} book rule${rules === 1 ? "" : "s"}` : root
 }
 
-/** The part of the library a user sees: a folder, and globs for the books in it. */
-function ScopeForm({
-  username,
-  scope,
-  onDone,
-}: {
-  username: string
-  scope?: UserScope
-  onDone: () => void
-}) {
+/** A user's role and library access: editable, or read-only with the reason. */
+function UserDetails({ user, scope, isMe }: { user: User; scope?: UserScope; isMe: boolean }) {
   const queryClient = useQueryClient()
-  const [root, setRoot] = useState(scope?.libraryRoot ?? "")
-  const [patterns, setPatterns] = useState((scope?.books ?? []).join("\n"))
-  const save = useMutation({
-    mutationFn: () => {
-      const books = patterns
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-      return setUserScope(username, { libraryRoot: root, books })
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: USERS_KEY })
-      onDone()
-    },
+  const roles = assignableRoles(useMe().data)
+  // Yourself, owners, and admins unless you're an owner.
+  const canChange = !isMe && roles.includes(user.role)
+  const change = useMutation({
+    mutationFn: (role: Role_Value) => setUserRole(user.username, role),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: USERS_KEY }),
   })
+  const why = isMe
+    ? "You can't change your own role or library access."
+    : user.role === Role_Value.OWNER
+      ? "Owners are changed only by editing data.json on the server."
+      : "Only an owner can change an admin."
+
+  return (
+    <div className="flex flex-col gap-5 pb-4">
+      {!canChange && <p className="text-sm text-muted-foreground">{why}</p>}
+      <Field label="Role" description={ROLE_DESCRIPTIONS[user.role]}>
+        {canChange ? (
+          <div className="flex flex-col gap-1">
+            <RoleSelect
+              roles={roles}
+              value={user.role}
+              disabled={change.isPending}
+              label={`Role of ${user.username}`}
+              onChange={(role) => change.mutate(role)}
+            />
+            {change.error && <p className="text-sm text-destructive">{change.error.message}</p>}
+          </div>
+        ) : (
+          <p className="text-sm">{ROLE_NAMES[user.role]}</p>
+        )}
+      </Field>
+      {canChange ? (
+        <ScopeForm username={user.username} scope={scope} />
+      ) : (
+        <>
+          <Field label="Folder" description={`${user.username} sees this folder as their whole library.`}>
+            <p className="text-sm">{scope?.libraryRoot || "Whole library"}</p>
+          </Field>
+          <Field label="Books">
+            {scope?.books.length ? (
+              <ul className="font-mono text-sm">
+                {scope.books.map((rule, i) => (
+                  <li key={i}>{rule}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm">Every book in the folder</p>
+            )}
+          </Field>
+        </>
+      )}
+    </div>
+  )
+}
+
+function Field({
+  label,
+  description,
+  children,
+}: {
+  label: string
+  description?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div>
+        <p className="text-sm font-medium">{label}</p>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** The part of the library a user sees: a folder, and globs for the books in it. */
+function ScopeForm({ username, scope }: { username: string; scope?: UserScope }) {
+  const queryClient = useQueryClient()
+  const savedRoot = scope?.libraryRoot ?? ""
+  const savedPatterns = (scope?.books ?? []).join("\n")
+  const [root, setRoot] = useState(savedRoot)
+  const [patterns, setPatterns] = useState(savedPatterns)
+  const books = patterns
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const changed = root !== savedRoot || books.join("\n") !== (scope?.books ?? []).join("\n")
+  const save = useMutation({
+    mutationFn: () => setUserScope(username, { libraryRoot: root, books }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_KEY }),
+  })
+  const reset = () => {
+    setRoot(savedRoot)
+    setPatterns(savedPatterns)
+    save.reset()
+  }
 
   return (
     <form
-      className="mt-3 flex flex-col gap-4 rounded-lg bg-muted/40 p-3"
+      className="flex flex-col gap-5"
       onSubmit={(e) => {
         e.preventDefault()
         save.mutate()
       }}
     >
-      <div>
-        <p className="text-sm font-medium">Folder</p>
-        <p className="text-sm text-muted-foreground">
-          {username} sees this folder as their whole library.
-        </p>
+      <Field label="Folder" description={`${username} sees this folder as their whole library.`}>
         <FolderPicker folder={root} onChange={setRoot} />
-      </div>
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium">Books</span>
+      </Field>
+      <Field
+        label="Books"
+        description={
+          <>
+            Globs relative to the folder, one per line. <code>**/*.epub</code> is every book;{" "}
+            <code>!scary/**</code> hides a folder. The last match wins. Empty: every book in the
+            folder.
+          </>
+        }
+      >
         <Textarea
           value={patterns}
           onChange={(e) => setPatterns(e.target.value)}
@@ -187,22 +280,24 @@ function ScopeForm({
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          className="bg-background font-mono"
+          className="font-mono"
           disabled={save.isPending}
+          aria-label={`Book rules for ${username}`}
         />
-        <span className="text-sm text-muted-foreground">
-          Globs relative to the folder, one per line. <code>**/*.epub</code> is every book;{" "}
-          <code>!scary/**</code> hides a folder. The last match wins. Empty: every book in the
-          folder.
-        </span>
-      </label>
+      </Field>
       {save.isError && <p className="text-sm text-destructive">{save.error.message}</p>}
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onDone} disabled={save.isPending}>
-          Cancel
+      <div className="flex items-center justify-end gap-2">
+        {save.isSuccess && !changed && (
+          <span className="mr-auto text-sm text-muted-foreground">
+            Saved. Applies from their next request.
+          </span>
+        )}
+        <Button type="button" variant="ghost" onClick={reset} disabled={!changed || save.isPending}>
+          Reset
         </Button>
-        <Button type="submit" disabled={save.isPending}>
-          Save
+        <Button type="submit" disabled={!changed || save.isPending}>
+          {save.isPending && <LoaderCircle className="animate-spin" />}
+          Save access
         </Button>
       </div>
     </form>
@@ -218,7 +313,7 @@ function FolderPicker({ folder, onChange }: { folder: string; onChange: (f: stri
   const pathOf = (name: string) => (folder ? `${folder}/${name}` : name)
 
   return (
-    <div className="mt-2 rounded-lg border bg-background">
+    <div className="rounded-lg border bg-background">
       <div className="border-b px-3 pb-2">
         <Breadcrumb folder={folder} rootLabel="Whole library" onNavigate={onChange} />
       </div>

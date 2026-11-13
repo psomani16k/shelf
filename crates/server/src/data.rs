@@ -272,14 +272,14 @@ mod tests {
     #[tokio::test]
     async fn roles_load_by_name_and_default_to_banned() {
         let dir = tempfile::tempdir().unwrap();
-        let json = r#"{ "users": { "a": { "role": "OWNER" }, "b": { "role": "EDITOR" }, "c": {} } }"#;
+        let json = r#"{ "users": { "a": { "role": "OWNER" }, "b": { "role": "LIBRARIAN" }, "c": {} } }"#;
         write(dir.path(), json);
 
         let file = DataFile::load(dir.path(), now()).await.unwrap();
 
         let users = &file.data().users;
         assert_eq!(users["a"].role(), role::Value::Owner);
-        assert_eq!(users["b"].role(), role::Value::Editor);
+        assert_eq!(users["b"].role(), role::Value::Librarian);
         assert_eq!(users["c"].role(), role::Value::Banned);
     }
 

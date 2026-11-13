@@ -63,10 +63,10 @@ Notes:
 - **Sign-up** (`crates/server/src/auth/requests.rs`): anyone can ask for an account; an admin or owner approves it, choosing the role, or denies it. Requests are kept in `data.json` → `user_requests` ([server.md](server.md#server-data)).
   - **Asking:** the username must be valid (`validate_user`; else 400 `a username is 1 to 32 of a–z, 0–9, - and _`), the password 1 to 256 characters (else 400). A name a user already has is a 409 `this username is already taken`. Names are unique among users only: two pending requests may share one. At most 20 requests wait at once (`MAX_PENDING_REQUESTS`); then it's a 429 `too many accounts are waiting for approval; try again later`. Each request gets a random id (16 bytes, base64url) and its `created` time.
   - **Listing** never sends the password. `taken` is true when a user has the name by now (another request with it was approved, or it was added by hand); the request can then only be denied.
-  - **Approving:** the role must be `READER` or `EDITOR`, or `ADMIN` when the approver is an `OWNER`; anything else is a 403 `you can't give the X role`. The name is checked again against `users` in the file as it is at that moment, so two users never share a name: a taken one is a 409 `this username is already taken; deny the request`, and the request stays. An unknown id is a 404. On success the request is removed and the user added with its password and the role. Nothing is written when a check fails (`DataFile::try_update`).
+  - **Approving:** the role must be `READER`, `CONTRIBUTOR` or `LIBRARIAN`, or `ADMIN` when the approver is an `OWNER`; anything else is a 403 `you can't give the X role`. The name is checked again against `users` in the file as it is at that moment, so two users never share a name: a taken one is a 409 `this username is already taken; deny the request`, and the request stays. An unknown id is a 404. On success the request is removed and the user added with its password and the role. Nothing is written when a check fails (`DataFile::try_update`).
   - **Denying** deletes the request; an unknown id is a 404.
-- **Roles** (`crates/server/src/auth/users.rs`): `users/list` sends every user's name and role, never passwords or sessions. `users/role/set` checks, in order: changing your own role is a 403 `you can't change your own role`; a role the caller may not give is a 403 `you can't give the X role`; an unknown user is a 404; a user whose current role the caller may not take away is a 403 `you can't change an X's role`. The rule (`may_manage`, shared with approving): `BANNED`, `READER` and `EDITOR` need `ADMIN` or higher, `ADMIN` needs `OWNER`, and `OWNER` is never given or taken. Banning also deletes all of the user's sessions, so they're signed out at once; unbanning doesn't bring them back. Nothing is written when a check fails.
-- **Scopes** (`users.rs`): `users/list` also sends each user's `library_root` and `books` in `scopes` (not on `User`, which `auth/me` sends the user themselves). `users/scope/set` normalizes the scope (the root goes through the folder-path rules, `/kid/` → `kid`; patterns are trimmed and blank ones dropped) and checks it like `data.json` does: a bad root or pattern is a 400 with the parser's message, and a root that isn't a folder in the library a 400 `there's no folder "x"`. Then, as for roles: your own is a 403, an unknown user a 404, and the caller must be allowed to manage the user's current role (`may_manage`), so admins set readers', editors' and banned users' scopes, owners admins' too, and an owner's is only set by hand. It applies from the user's next request; their sessions stay. `users/scope/directories` lists folders of the whole library for picking a root. **An admin's own scope doesn't apply to either**: a scoped admin sees and sets full library paths (a choice; see [decisions.md](decisions.md)).
+- **Roles** (`crates/server/src/auth/users.rs`): `users/list` sends every user's name and role, never passwords or sessions. `users/role/set` checks, in order: changing your own role is a 403 `you can't change your own role`; a role the caller may not give is a 403 `you can't give the X role`; an unknown user is a 404; a user whose current role the caller may not take away is a 403 `you can't change an X's role`. The rule (`may_manage`, shared with approving): `BANNED`, `READER`, `CONTRIBUTOR` and `LIBRARIAN` need `ADMIN` or higher, `ADMIN` needs `OWNER`, and `OWNER` is never given or taken. Banning also deletes all of the user's sessions, so they're signed out at once; unbanning doesn't bring them back. Nothing is written when a check fails.
+- **Scopes** (`users.rs`): `users/list` also sends each user's `library_root` and `books` in `scopes` (not on `User`, which `auth/me` sends the user themselves). `users/scope/set` normalizes the scope (the root goes through the folder-path rules, `/kid/` → `kid`; patterns are trimmed and blank ones dropped) and checks it like `data.json` does: a bad root or pattern is a 400 with the parser's message, and a root that isn't a folder in the library a 400 `there's no folder "x"`. Then, as for roles: your own is a 403, an unknown user a 404, and the caller must be allowed to manage the user's current role (`may_manage`), so admins set the scopes of users below admin, owners admins' too, and an owner's is only set by hand. It applies from the user's next request; their sessions stay. `users/scope/directories` lists folders of the whole library for picking a root. **An admin's own scope doesn't apply to either**: a scoped admin sees and sets full library paths (a choice; see [decisions.md](decisions.md)).
 - **Scopes** (`crates/core/src/library/scope.rs`, `view.rs`): each user sees only their part of the library, set in `/data/data.json` by `library_root` and `books` ([server.md](server.md#server-data)). Every handler that touches books, folders, progress or the last book goes through `ServerLibrary::view(&user.scope)`, a `LibraryView`. A user without either field sees the whole library.
   - **Paths are relative to the user's root**, both ways: their root is `""`, and nothing they get back names it, so the UI shows it as the library root.
   - **A hidden book acts as missing:** a book is visible when one of its copies is under the root and allowed by the patterns. A hidden one is left out of listings, and its cover, file and progress are 404s; a last book that's hidden reads as unset. A copy outside the scope is never deleted.
@@ -88,39 +88,38 @@ Notes:
 
 ### Access by role
 
-Roles are defined in [server.md](server.md#server-data); each can do everything the ones before it can (`READER` < `EDITOR` < `ADMIN` < `OWNER`), so access is a minimum role. `BANNED` can't sign in, so it can call nothing but `health`, `auth/login` (which tells it so) and `auth/signup`. A logged-in user below it gets a 403 (`this needs the EDITOR role or higher`). `api::router` groups the routes by that minimum, with `auth::require` as a `route_layer` on the editor and admin groups.
+Roles are defined in [server.md](server.md#server-data); each can do everything the ones before it can (`READER` < `CONTRIBUTOR` < `LIBRARIAN` < `ADMIN` < `OWNER`), so access is a minimum role. `BANNED` can't sign in, so it can call nothing but `health`, `auth/login` (which tells it so) and `auth/signup`. A logged-in user below it gets a 403 (`this needs the LIBRARIAN role or higher`). `api::router` groups the routes by that minimum, with `auth::require` as a `route_layer` on the contributor, librarian and admin groups.
 
-| Route | Tauri command | Status | READER | EDITOR | ADMIN | OWNER |
-|---|---|---|:-:|:-:|:-:|:-:|
-| `GET /api/health` | — | built | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/books/list` | `list_books` | built | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/directories/list` | `list_directories` | built | ✓ | ✓ | ✓ | ✓ |
-| `GET /api/books/{id}/cover` | `get_cover` | built | ✓ | ✓ | ✓ | ✓ |
-| `GET /api/books/{id}/file` | `get_book_file` | built | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/progress/get`, `/set` | `get_progress`, `set_progress` | built | ✓ own | ✓ own | ✓ own | ✓ own |
-| `POST /api/state/get`, `/set` | `get_state`, `set_state` | built | ✓ own | ✓ own | ✓ own | ✓ own |
-| `POST /api/config/get`, `/set` | `get_config`, `set_config` | built | ✓ own | ✓ own | ✓ own | ✓ own |
-| `POST /api/library/rebuild` | `rebuild_index` | built | | | ✓ | ✓ |
-| `POST /api/library/progress/clean` | `clean_up_progress` | built | | | ✓ | ✓ |
-| `POST /api/auth/login` | `login` | built | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/password` | `logout`, `me`, `change_password` | built | ✓ own | ✓ own | ✓ own | ✓ own |
-| `POST /api/books/upload` | `upload_book` | built | | ✓ | ✓ | ✓ |
-| `POST /api/directories/create` | `create_directory` | built | | ✓ | ✓ | ✓ |
-| `POST /api/library/delete` | `delete_items` | built | | ✓ | ✓ | ✓ |
-| Change which books a user can read | — | planned | | | ✓ | ✓ |
-| `POST /api/auth/signup` | `sign_up` | built | anyone, signed in or not | | | |
-| `POST /api/users/requests/list`, `/deny` | `list_user_requests`, `deny_user_request` | built | | | ✓ | ✓ |
-| `POST /api/users/requests/approve` as `READER` or `EDITOR` | `approve_user_request` | built | | | ✓ | ✓ |
-| `POST /api/users/requests/approve` as `ADMIN` | `approve_user_request` | built | | | | ✓ |
-| `POST /api/users/list` | `list_users` | built | | | ✓ | ✓ |
-| `POST /api/users/role/set` between `READER`, `EDITOR` and `BANNED`, for a user who has one of those | `set_user_role` | built | | | ✓ other users | ✓ other users |
-| `POST /api/users/role/set` to or from `ADMIN` | `set_user_role` | built | | | | ✓ other users |
-| `POST /api/users/scope/set` for a `READER`, `EDITOR` or `BANNED` user | `set_user_scope` | built | | | ✓ other users | ✓ other users |
-| `POST /api/users/scope/set` for an `ADMIN` | `set_user_scope` | built | | | | ✓ other users |
-| `POST /api/users/scope/directories` | `list_scope_directories` | built | | | ✓ | ✓ |
-| Remove a reader or editor | — | planned | | | ✓ | ✓ |
-| Remove an admin | — | planned | | | | ✓ |
-| Make or remove an owner | — | — | | | | |
+| Route | Tauri command | Status | READER | CONTRIBUTOR | LIBRARIAN | ADMIN | OWNER |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|
+| `GET /api/health` | — | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/books/list` | `list_books` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/directories/list` | `list_directories` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `GET /api/books/{id}/cover` | `get_cover` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `GET /api/books/{id}/file` | `get_book_file` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/progress/get`, `/set` | `get_progress`, `set_progress` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/state/get`, `/set` | `get_state`, `set_state` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/config/get`, `/set` | `get_config`, `set_config` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/library/rebuild` | `rebuild_index` | built | | | | ✓ | ✓ |
+| `POST /api/library/progress/clean` | `clean_up_progress` | built | | | | ✓ | ✓ |
+| `POST /api/auth/login` | `login` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/password` | `logout`, `me`, `change_password` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/books/upload` | `upload_book` | built | | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/directories/create` | `create_directory` | built | | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/library/delete` | `delete_items` | built | | | ✓ | ✓ | ✓ |
+| `POST /api/auth/signup` | `sign_up` | built | anyone, signed in or not | | | | |
+| `POST /api/users/requests/list`, `/deny` | `list_user_requests`, `deny_user_request` | built | | | | ✓ | ✓ |
+| `POST /api/users/requests/approve` as `READER`, `CONTRIBUTOR` or `LIBRARIAN` | `approve_user_request` | built | | | | ✓ | ✓ |
+| `POST /api/users/requests/approve` as `ADMIN` | `approve_user_request` | built | | | | | ✓ |
+| `POST /api/users/list` | `list_users` | built | | | | ✓ | ✓ |
+| `POST /api/users/role/set` between `READER`, `CONTRIBUTOR`, `LIBRARIAN` and `BANNED`, for a user who has one of those | `set_user_role` | built | | | | ✓ other users | ✓ other users |
+| `POST /api/users/role/set` to or from `ADMIN` | `set_user_role` | built | | | | | ✓ other users |
+| `POST /api/users/scope/set` for a `READER`, `CONTRIBUTOR`, `LIBRARIAN` or `BANNED` user | `set_user_scope` | built | | | | ✓ other users | ✓ other users |
+| `POST /api/users/scope/set` for an `ADMIN` | `set_user_scope` | built | | | | | ✓ other users |
+| `POST /api/users/scope/directories` | `list_scope_directories` | built | | | | ✓ | ✓ |
+| Remove a user below admin | — | planned | | | | ✓ | ✓ |
+| Remove an admin | — | planned | | | | | ✓ |
+| Make or remove an owner | — | — | | | | | |
 
 - `health`, `login` and `signup` need no session; every other route does, and gets a 401 without one.
 - "Own" progress, last book and settings: the user comes from the session, so a user can only read and write their own (see the note above). Nobody, not even an owner, reads another user's through the API.

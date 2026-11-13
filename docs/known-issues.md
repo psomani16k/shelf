@@ -45,7 +45,7 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 - **A scoped admin sees the whole library in *Settings → Admin*:** the folder picker lists every folder and other users' roots are full paths, so the admin's own scope doesn't hide folder names from them (by choice).
 - **A role change shows after a reload:** the frontend caches the user's own role (`me`) for the whole visit, so someone promoted doesn't see the new buttons, and someone demoted still sees buttons that now give a 403, until they reload or switch library. The server's checks apply at once. A ban isn't affected: it signs the user out.
 - Removing a user from `data.json` signs them out on their next request, but the app's remote library just shows the login screen; their `.shelf/users/<user>/` folder stays.
-- The server's library path (`/books`) and bind address (`0.0.0.0:8080`) are hard-coded.
+- The server binary's library path (`/books`), data path (`/data`) and bind address (`0.0.0.0:8080`) are fixed: it has no flags or environment variables for them. `shelf_server::Config` takes them, but only the `demo` crate's `server` function sets other values.
 - Reader zoom doesn't scale images: they get the inverse zoom so foliate's px height cap still fits them to the page. An image sized in px in the book's CSS stays that size at any zoom.
 - The interface scale doesn't move breakpoints: media queries (`md:`, Settings' `48rem`) use the browser's default font size, not the root's. At 150% a narrow desktop window keeps the wide layout with bigger controls. Bits sized in px (the 3px position lines, borders) don't scale.
 

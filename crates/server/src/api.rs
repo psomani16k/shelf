@@ -74,15 +74,19 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password", post(auth::change_password));
-    let editor = Router::new()
-        .route("/library/delete", post(delete_items))
+    let contributor = Router::new()
         .route("/directories/create", post(create_directory))
         .route(
             "/books/upload",
             post(upload_book).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
         .route_layer(middleware::from_fn(|req: Request, next: Next| {
-            auth::require(Role::Editor, req, next)
+            auth::require(Role::Contributor, req, next)
+        }));
+    let librarian = Router::new()
+        .route("/library/delete", post(delete_items))
+        .route_layer(middleware::from_fn(|req: Request, next: Next| {
+            auth::require(Role::Librarian, req, next)
         }));
     let admin = Router::new()
         .route("/library/rebuild", post(rebuild_index))
@@ -99,7 +103,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         }));
     // `route_layer` only wraps routes that matched, so an unknown path stays a 404.
     let signed_in = reader
-        .merge(editor)
+        .merge(contributor)
+        .merge(librarian)
         .merge(admin)
         .route_layer(middleware::from_fn_with_state(state, auth::authenticate));
 
@@ -273,8 +278,8 @@ mod tests {
     use super::*;
     use crate::data::DataFile;
 
-    /// The API router over a temp library and data folder, with an owner, a reader, and `kid`,
-    /// whose library is the `kid/` folder.
+    /// The API router over a temp library and data folder, with an owner, a reader, a contributor,
+    /// a librarian, and `kid`, whose library is the `kid/` folder.
     struct TestServer {
         app: Router,
         _books: TempDir,
@@ -288,6 +293,8 @@ mod tests {
             let users = r#"{ "users": {
                 "owner": { "password": "o", "role": "OWNER" },
                 "reader": { "password": "r", "role": "READER" },
+                "contributor": { "password": "c", "role": "CONTRIBUTOR" },
+                "librarian": { "password": "l", "role": "LIBRARIAN" },
                 "kid": { "password": "k", "role": "READER", "library_root": "kid" }
             } }"#;
             std::fs::write(data.path().join("data.json"), users).unwrap();
@@ -415,7 +422,7 @@ mod tests {
         let (status, body) = server.call("POST", "/users/requests/list", Some(&owner), "{}").await;
         assert_eq!(status, StatusCode::OK);
         let list: ListUserRequestsResponse = serde_json::from_str(&body).unwrap();
-        let approve = format!(r#"{{ "id": "{}", "role": "EDITOR" }}"#, list.requests[0].id);
+        let approve = format!(r#"{{ "id": "{}", "role": "LIBRARIAN" }}"#, list.requests[0].id);
         let approved = server.call("POST", "/users/requests/approve", Some(&owner), &approve).await;
         assert_eq!(approved.0, StatusCode::NO_CONTENT, "{}", approved.1);
         server.login("newbie", "n").await;
@@ -432,7 +439,7 @@ mod tests {
         let (status, body) = server.call("POST", "/users/list", Some(&owner), "{}").await;
         assert_eq!(status, StatusCode::OK);
         let list: ListUsersResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(list.users.len(), 3);
+        assert_eq!(list.users.len(), 5);
         let ban = r#"{ "username": "reader", "role": "BANNED" }"#;
         let banned = server.call("POST", "/users/role/set", Some(&owner), ban).await;
         assert_eq!(banned.0, StatusCode::NO_CONTENT, "{}", banned.1);
@@ -502,5 +509,23 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let res: CleanUpProgressResponse = serde_json::from_str(&body).unwrap();
         assert_eq!(res.books, 0);
+    }
+
+    #[tokio::test]
+    async fn contributors_add_but_never_delete() {
+        let server = TestServer::new().await;
+        let contributor = server.login("contributor", "c").await;
+        let librarian = server.login("librarian", "l").await;
+        let folder = r#"{ "parent_directory": "", "directory_name": "new" }"#;
+        let delete = r#"{ "directory_paths": ["new"] }"#;
+
+        let create = server.call("POST", "/directories/create", Some(&contributor), folder).await;
+        assert_eq!(create.0, StatusCode::OK, "{}", create.1);
+        let denied = server.call("POST", "/library/delete", Some(&contributor), delete).await;
+        assert_eq!(denied.0, StatusCode::FORBIDDEN);
+        assert!(denied.1.contains("LIBRARIAN"), "{}", denied.1);
+
+        let deleted = server.call("POST", "/library/delete", Some(&librarian), delete).await;
+        assert_eq!(deleted.0, StatusCode::OK, "{}", deleted.1);
     }
 }

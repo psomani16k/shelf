@@ -562,10 +562,10 @@ mod tests {
         let auth = auth(dir.path()).await;
         let token = auth.login("parth", "hunter2", now()).await.unwrap().token;
 
-        edit_by_hand(dir.path(), "OWNER", "EDITOR");
+        edit_by_hand(dir.path(), "OWNER", "LIBRARIAN");
 
         let user = auth.authenticate(&token, now()).await.unwrap();
-        assert_eq!(user.role, Role::Editor);
+        assert_eq!(user.role, Role::Librarian);
     }
 
     #[tokio::test]

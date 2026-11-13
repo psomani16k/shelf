@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 shelf-core = { path = "../core" }
 shelf-utility = { path = "../utility" }
+shelf-server = { path = "../server" }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing-subscriber = { workspace = true }

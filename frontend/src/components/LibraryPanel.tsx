@@ -70,10 +70,10 @@ export function LibraryPanel({
     onFolderChange(next)
   }
 
-  // Selecting is only for deleting, which needs an editor.
-  const { canEdit } = usePermissions()
+  // Selecting is only for deleting, which needs a librarian.
+  const { canAdd, canDelete } = usePermissions()
   const startSelecting = (first?: { book?: string; dir?: string }) => {
-    if (!canEdit) return
+    if (!canDelete) return
     setForm(null)
     setSelection({
       books: new Set(first?.book ? [first.book] : []),
@@ -226,17 +226,19 @@ export function LibraryPanel({
               <Settings />
             </Button>
             <div className="flex-1" />
-            {canEdit && (
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => startSelecting()}
+                disabled={!!empty || !dirs.data || !books.data}
+                aria-label="Select"
+              >
+                <ListChecks />
+              </Button>
+            )}
+            {canAdd && (
               <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => startSelecting()}
-                  disabled={!!empty || !dirs.data || !books.data}
-                  aria-label="Select"
-                >
-                  <ListChecks />
-                </Button>
                 <Button
                   variant="ghost"
                   size="icon"

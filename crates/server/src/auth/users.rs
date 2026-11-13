@@ -19,7 +19,7 @@ use crate::{api::Lib, error::ApiErrorResponse};
 /// Whether `actor` may give `role` to someone, or take it from them.
 pub(super) fn may_manage(actor: Role, role: Role) -> bool {
     match role {
-        Role::Banned | Role::Reader | Role::Editor => actor >= Role::Admin,
+        Role::Banned | Role::Reader | Role::Contributor | Role::Librarian => actor >= Role::Admin,
         Role::Admin => actor == Role::Owner,
         Role::Owner => false,
     }
@@ -234,8 +234,8 @@ mod tests {
         let auth = auth(dir.path()).await;
         let token = auth.login("kid", "pancakes", now()).await.unwrap().token;
 
-        auth.set_role(&admin(), &set("kid", Role::Editor), now()).await.unwrap();
-        assert_eq!(role_of(&auth, "kid").await, Role::Editor);
+        auth.set_role(&admin(), &set("kid", Role::Librarian), now()).await.unwrap();
+        assert_eq!(role_of(&auth, "kid").await, Role::Librarian);
         assert!(auth.authenticate(&token, now()).await.is_ok());
 
         auth.set_role(&admin(), &set("kid", Role::Banned), now()).await.unwrap();

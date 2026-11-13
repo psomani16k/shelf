@@ -7,7 +7,8 @@ export const ME_KEY = ["me"]
 export const ROLE_NAMES: Record<Role_Value, string> = {
   [Role_Value.BANNED]: "Banned",
   [Role_Value.READER]: "Reader",
-  [Role_Value.EDITOR]: "Editor",
+  [Role_Value.CONTRIBUTOR]: "Contributor",
+  [Role_Value.LIBRARIAN]: "Librarian",
   [Role_Value.ADMIN]: "Admin",
   [Role_Value.OWNER]: "Owner",
 }
@@ -25,7 +26,8 @@ export function permissions(user: User | null | undefined) {
   const role = user === null ? Role_Value.OWNER : (user?.role ?? Role_Value.BANNED)
   const accountRole = user?.role ?? Role_Value.BANNED
   return {
-    canEdit: role >= Role_Value.EDITOR,
+    canAdd: role >= Role_Value.CONTRIBUTOR,
+    canDelete: role >= Role_Value.LIBRARIAN,
     canAdmin: role >= Role_Value.ADMIN,
     canManageUsers: accountRole >= Role_Value.ADMIN,
   }
@@ -39,6 +41,6 @@ export function usePermissions() {
 export function assignableRoles(user: User | null | undefined): Role_Value[] {
   const role = user?.role ?? Role_Value.BANNED
   if (role < Role_Value.ADMIN) return []
-  const roles = [Role_Value.READER, Role_Value.EDITOR, Role_Value.BANNED]
+  const roles = [Role_Value.READER, Role_Value.CONTRIBUTOR, Role_Value.LIBRARIAN, Role_Value.BANNED]
   return role === Role_Value.OWNER ? [...roles, Role_Value.ADMIN] : roles
 }

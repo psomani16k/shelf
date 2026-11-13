@@ -842,6 +842,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "shelf-core",
+ "shelf-server",
  "shelf-utility",
  "tokio",
  "tracing-subscriber",

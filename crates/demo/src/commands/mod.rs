@@ -1,1 +1,1 @@
-commands!(debounce, force_extract);
+commands!(debounce, force_extract, server);

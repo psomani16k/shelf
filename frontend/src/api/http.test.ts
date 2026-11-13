@@ -238,9 +238,9 @@ describe("http api", () => {
       expect(request).toMatchObject({ id: "r1", username: "newbie", taken: true })
 
       const fetch = mockFetch(204)
-      await approveUserRequest("r1", Role_Value.EDITOR)
+      await approveUserRequest("r1", Role_Value.LIBRARIAN)
       expect(fetch.mock.calls[0][0]).toBe("/api/users/requests/approve")
-      expect(sentJson(fetch)).toEqual({ id: "r1", role: "EDITOR" })
+      expect(sentJson(fetch)).toEqual({ id: "r1", role: "LIBRARIAN" })
     })
 
     it("lists users, with no role meaning banned, and bans one", async () => {
