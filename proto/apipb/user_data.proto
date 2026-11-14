@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package apipb;
+
+import "configpb/config.proto";
+
+// One user's data in a library, with no username, so it can be imported as anyone into any
+// library holding the same books (ids are file hashes). It's the file an export saves.
+message UserData {
+  // 1. Anything else is refused on import.
+  uint32 version = 1;
+  repeated BookProgressEntry progress = 2;
+  optional string last_book_id = 3;
+  configpb.Config config = 4;
+}
+
+message BookProgressEntry {
+  string id = 1;
+  // The CFI, as in GetProgressResponse.
+  string epub_progress = 2;
+}
+
+message ExportUserDataRequest {
+  string user = 1;
+}
+
+// Replaces the user's progress for each book in `data` that this library has, their last book
+// and the settings `data` sets.
+message ImportUserDataRequest {
+  string user = 1;
+  UserData data = 2;
+}
+
+message ImportUserDataResponse {
+  // Progress entries written.
+  uint32 books = 1;
+  // Entries for books this library doesn't have, or the user can't see.
+  uint32 skipped = 2;
+}

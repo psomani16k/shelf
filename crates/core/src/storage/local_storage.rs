@@ -15,6 +15,7 @@ use shelf_utility::timeutil::Time;
 use tracing::{debug, warn};
 
 use super::{FileContent, LibraryStorage, is_epub};
+use crate::library::user::validate_user;
 
 /// Marks a temp file from `write_atomic`: `.<target name>.tmp-<pid>-<nanos>-<seq>`.
 const TMP_MARKER: &str = ".tmp-";
@@ -62,6 +63,26 @@ impl LocalLibraryStorage {
 
     pub fn thumbnail_path(&self, hash: &str) -> PathBuf {
         self.book_dir_by_id(hash).join("thumbnail.jpeg")
+    }
+
+    /// The users with a folder in `.shelf/users/` (anyone who has opened a book or changed a
+    /// setting), sorted. Folders that aren't valid usernames are skipped.
+    pub fn user_names(&self) -> Result<Vec<String>> {
+        let entries = match fs::read_dir(self.shelf_file_path("users")) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type()?.is_dir() && validate_user(&name).is_ok() {
+                names.push(name);
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 
     pub fn shelf_file_path(&self, name: &str) -> PathBuf {
@@ -411,6 +432,19 @@ mod tests {
         assert_eq!(folders, ["a", "b"]);
         assert_eq!(storage.sub_folders(Path::new("a")).unwrap(), ["inner"]);
         assert!(storage.sub_folders(Path::new("gone")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_names_are_the_valid_folders_in_users() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = storage(&root);
+        assert!(storage.user_names().unwrap().is_empty());
+        for dir in ["parth", "kid", "Not Valid"] {
+            fs::create_dir_all(root.path().join(".shelf/users").join(dir)).unwrap();
+        }
+        fs::write(root.path().join(".shelf/users/file"), "").unwrap();
+
+        assert_eq!(storage.user_names().unwrap(), ["kid", "parth"]);
     }
 
     #[test]

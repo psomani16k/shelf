@@ -23,13 +23,15 @@ Everything the UI can do to a library is one method on `shelf_core::library::Lib
 
 | Method | Returns |
 |---|---|
-| `list_books(ListBooksRequest)` | `ListBooksResponse` (infallible) |
-| `list_sub_directories(ListDirectoriesRequest)` | `ListDirectoriesResponse` (infallible) |
+| `list_books(ListBooksRequest)` | `ListBooksResponse`; a missing or hidden folder is empty, an unsafe path `Invalid` |
+| `list_sub_directories(ListDirectoriesRequest)` | `ListDirectoriesResponse`, likewise; a storage error is `Internal` |
 | `get_cover(id)` | the thumbnail JPEG as a `FileContent`: a local path callers can stream, or bytes |
 | `get_book(id)` | the EPUB as a `FileContent` |
 | `get_progress` / `set_progress` | progress as an EPUB CFI string |
 | `get_state` / `set_state` | the user's last book opened |
 | `get_config` / `set_config` | the user's own settings (`GetConfigRequest` / `SetConfigRequest`, each with a `user` filled in at the boundary); `set_config` merges a partial `patch` and returns the user's whole config |
+| `export_user_data(ExportUserDataRequest)` | `UserData`: the user's progress, last book and settings, no username |
+| `import_user_data(ImportUserDataRequest)` | `ImportUserDataResponse`: writes that data as the request's user, skipping books it doesn't have |
 | `rebuild_index()` | `RebuildIndexResponse`: re-hashes every book (ignoring the copies' stamps), reloads the index, returns counts |
 | `clean_up_progress()` | `CleanUpProgressResponse`: deletes the `.shelf/books/<id>/` folders of books no file has any more, progress included |
 | `upload_book(UploadEbookRequest, Bytes)` | `UploadEbookResponse` `{id, file_name}`: writes the EPUB into a folder and indexes it; a book already in the library gets another copy |

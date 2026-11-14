@@ -6,9 +6,11 @@ import {
   approveUserRequest,
   createDirectory,
   deleteItems,
+  exportUserData,
   getCover,
   getProgress,
   getState,
+  importUserData,
   listBooks,
   listUserRequests,
   listUsers,
@@ -111,6 +113,27 @@ describe("http api", () => {
     expect(fetch.mock.calls[0][0]).toBe("/api/library/progress/clean")
     expect(sentJson(fetch)).toEqual({})
     expect(res.books).toBe(3)
+  })
+
+  it("exports and imports user data without a user name", async () => {
+    const exported = {
+      version: 1,
+      progress: [{ id: "abc", epub_progress: "epubcfi(/6/2)" }],
+      config: { ui: { theme: "DARK" } },
+    }
+    let fetch = mockFetch(200, exported)
+    const data = await exportUserData()
+
+    expect(fetch.mock.calls[0][0]).toBe("/api/user-data/export")
+    expect(sentJson(fetch)).toEqual({})
+    expect(data.progress[0].epubProgress).toBe("epubcfi(/6/2)")
+
+    fetch = mockFetch(200, { books: 1, skipped: 0 })
+    const res = await importUserData(data)
+
+    expect(fetch.mock.calls[0][0]).toBe("/api/user-data/import")
+    expect(sentJson(fetch)).toEqual({ data: exported })
+    expect(res.books).toBe(1)
   })
 
   it("turns error responses into ApiError", async () => {

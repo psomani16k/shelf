@@ -64,6 +64,14 @@ import {
   SetStateRequestSchema,
 } from "@/gen/apipb/state_pb"
 import { GetConfigRequestSchema, SetConfigRequestSchema } from "@/gen/apipb/config_pb"
+import {
+  ExportUserDataRequestSchema,
+  ImportUserDataRequestSchema,
+  type ImportUserDataResponse,
+  ImportUserDataResponseSchema,
+  type UserData,
+  UserDataSchema,
+} from "@/gen/apipb/user_data_pb"
 import { type Config, ConfigSchema } from "@/gen/configpb/config_pb"
 import { endSession, getToken, setSignedOut, setToken } from "@/lib/session"
 import { ApiError } from "./error"
@@ -84,6 +92,8 @@ export const httpBackend: Backend = {
   setState,
   getConfig,
   setConfig,
+  exportUserData,
+  importUserData,
   rebuildIndex,
   cleanUpProgress,
   getCover,
@@ -233,6 +243,19 @@ export function getConfig(): Promise<Config> {
 /** Only the fields set in `patch` change; resolves to the user's whole config. */
 export function setConfig(patch: MessageInitShape<typeof ConfigSchema>): Promise<Config> {
   return post("/config/set", SetConfigRequestSchema, { patch }, ConfigSchema)
+}
+
+export function exportUserData(): Promise<UserData> {
+  return post("/user-data/export", ExportUserDataRequestSchema, {}, UserDataSchema)
+}
+
+export function importUserData(data: UserData): Promise<ImportUserDataResponse> {
+  return post(
+    "/user-data/import",
+    ImportUserDataRequestSchema,
+    { data },
+    ImportUserDataResponseSchema,
+  )
 }
 
 export function rebuildIndex(): Promise<RebuildIndexResponse> {

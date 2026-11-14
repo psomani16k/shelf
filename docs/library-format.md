@@ -75,10 +75,10 @@ Names alone are never used to guess a cover, since books also have files like `b
 ### `progress/<user>.json` (`bookkeeperpb.BookProgress`)
 
 ```json
-{ "file_type": "EPUB", "epub_progress": { "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)" }, "user": "default" }
+{ "file_type": "EPUB", "epub_progress": { "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)" }, "user": "parth" }
 ```
 
-One file per user, so users never write the same file. `<user>` is a username (`shelf_core::library::user::validate_user`: 1 to 32 of `a–z`, `0–9`, `-`, `_`, so it's a safe file name); the file also stores it in `user`, but only the file name decides which file is read. On the server it's the signed-in user; in an app's local library it's `default` (`DEFAULT_USER`) until users can be chosen there. An unreadable file is logged at `warn` and reads as no progress. A `progress.json` directly in the book folder, from before per-user progress, is ignored.
+One file per user, so users never write the same file. `<user>` is a username (`shelf_core::library::user::validate_user`: 1 to 32 of `a–z`, `0–9`, `-`, `_`, so it's a safe file name); the file also stores it in `user`, but only the file name decides which file is read. On the server it's the signed-in user; in an app's local library it's the name chosen on that device. An unreadable file is logged at `warn` and reads as no progress. A `progress.json` directly in the book folder, from before per-user progress, is ignored.
 
 ### `users/<user>/state.json` (`statepb.State`)
 
@@ -111,6 +111,10 @@ An uploaded book is written the same way, but its temp file sits next to the tar
 
 `S3LibraryStorage` (`crates/core/src/storage/s3_storage.rs`, cargo feature `s3`, built on `object_store`) keeps the same layout under a key prefix in a bucket: books at `<prefix>/<path>`, data at `<prefix>/.shelf/…`, with the same scanning rules (dot-parts skipped, `.epub` case-insensitive). Credentials, region and endpoint come from the standard `AWS_*` env vars (`AWS_ENDPOINT` for MinIO or R2). Every write is a single PUT, which replaces an object whole, so there are no temp files, and `create_book_dir` and `clean_up_temp_files` do nothing. `book_file` and `book_thumbnail` fetch the whole object and return `FileContent::Bytes`. `S3LibraryStorage::with_store` takes any `object_store` backend (tests use `InMemory`). A book's mtime is its object's `last_modified`. The blocking trait methods wait on the tokio runtime the storage was created in, so they must run in `spawn_blocking`. It isn't wired into the server or app yet (see [known-issues.md](known-issues.md#s3-storage)).
 
+## Moving a library
+
+The folder is self-contained, so it can move between a device and a server either way: copy it (`.shelf/` included, so nothing is extracted again), or just copy the books and let the new library extract them. Then each user exports their data from the old library and imports it into the new one (*Settings → Library*, [api.md](api.md)): progress, last book and settings, keyed by book id and carrying no username. If the names match (the local library's reader and the server account), nothing needs importing: the files are already that user's. Files of users without an account are left alone. What doesn't move: the server's accounts, passwords, roles and scopes (`/data/data.json`, outside the library), and per-device settings (reader zoom, the app's interface scale).
+
 ## Startup sync
 
 `sync_library` (`crates/core/src/routines/extractor.rs`) runs on every `BookLibrary::open`. It lists the folders, metadata and book files in one `spawn_blocking`, then syncs each book file in its own `spawn_blocking` job, two per CPU at a time, so one can use a core while another waits on the disk (`shelf_utility::routines::transform_concurrent_blocking`), and tallies the results once they're all in:
@@ -138,7 +142,7 @@ After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetad
 
 `Library::clean_up_progress` (*Settings → Library → Clean up progress*; `BookLibrary::clean_up_progress`, `LibraryStorage::clean_up_progress`) deletes every `.shelf/books/<id>/` folder that has no `metadata.json`, every user's progress in it included. Those are the books the startup sync found no file for. Kept anyway:
 
-- An ID in the in-memory index, even with its `metadata.json` gone: another device's startup sync may have deleted it (through the sync tool) while the book is still here.
+- An ID in the in-memory index, even with its `metadata.json` gone (deleted from outside Shelf while the book is still here).
 - A folder whose `metadata.json` can't be checked (an I/O error counts as having one), and any entry in `.shelf/books/` that isn't a folder.
 
 It takes `files_lock` and the write side of `sync_gate`, like `rebuild_index`, so no upload, watcher job or rebuild is half-way through making a book's folder. A folder that can't be deleted is logged at `warn` and skipped. On S3, each ID's objects are listed and deleted unless the exact `metadata.json` key is among them. It returns how many folders were deleted.

@@ -16,6 +16,7 @@ import type {
 } from "@/gen/apipb/library_pb"
 import type { GetProgressResponse } from "@/gen/apipb/progress_pb"
 import type { GetStateResponse } from "@/gen/apipb/state_pb"
+import type { ImportUserDataResponse, UserData } from "@/gen/apipb/user_data_pb"
 import type { Config, ConfigSchema } from "@/gen/configpb/config_pb"
 
 /**
@@ -37,6 +38,13 @@ export type Backend = {
   getConfig: () => Promise<Config>
   /** Only the fields set in `patch` change; resolves to the user's whole config. */
   setConfig: (patch: MessageInitShape<typeof ConfigSchema>) => Promise<Config>
+  /** The user's progress, last book and settings, without their name, to import elsewhere. */
+  exportUserData: () => Promise<UserData>
+  /**
+   * Replaces the user's progress for the books in `data` this library has, their last book and
+   * the settings `data` sets. Rejects with a 400 when it isn't a Shelf export.
+   */
+  importUserData: (data: UserData) => Promise<ImportUserDataResponse>
   /** Re-hashes every book and reloads the index. Takes as long as reading the whole library. */
   rebuildIndex: () => Promise<RebuildIndexResponse>
   /** Deletes every user's progress of books no file has any more. Admins only on a server. */

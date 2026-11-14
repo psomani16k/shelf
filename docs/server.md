@@ -33,7 +33,7 @@ Compared to Go: the handlers are like `http.HandlerFunc`s whose decoding and enc
 
 ## Server data
 
-`/data/data.json` (`serverpb.ServerData`, `proto/serverpb/data.proto`) is the server's own data, kept out of the library so it never syncs with it. All of it is in this one file: the users, keyed by user id, each with a password **in plain text** (a deliberate choice, see [decisions.md](decisions.md)), a role, the part of the library they see, and their signed-in sessions, plus the sign-ups waiting for an admin (`user_requests`). Users come from approved sign-ups or are added by hand; the server adds and removes sessions and requests, changes passwords and roles, and adds approved users:
+`/data/data.json` (`serverpb.ServerData`, `proto/serverpb/data.proto`) is the server's own data, kept out of the library so it never moves with it. All of it is in this one file: the users, keyed by user id, each with a password **in plain text** (a deliberate choice, see [decisions.md](decisions.md)), a role, the part of the library they see, and their signed-in sessions, plus the sign-ups waiting for an admin (`user_requests`). Users come from approved sign-ups or are added by hand; the server adds and removes sessions and requests, changes passwords and roles, and adds approved users:
 
 ```json
 {

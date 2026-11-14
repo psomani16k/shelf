@@ -9,7 +9,8 @@ use std::future::Future;
 use bytes::Bytes;
 use shelf_proto::{
     api::{
-        CleanUpProgressResponse, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        CleanUpProgressResponse, CreateDirectoryRequest, ExportUserDataRequest, ImportUserDataRequest,
+        ImportUserDataResponse, UserData, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
@@ -44,12 +45,16 @@ impl From<anyhow::Error> for LibraryError {
 }
 
 pub trait Library {
-    fn list_books(&self, req: ListBooksRequest) -> impl Future<Output = ListBooksResponse> + Send;
+    /// A folder that's missing (or hidden from the user) lists as empty.
+    fn list_books(
+        &self,
+        req: ListBooksRequest,
+    ) -> impl Future<Output = Result<ListBooksResponse, LibraryError>> + Send;
 
     fn list_sub_directories(
         &self,
         req: ListDirectoriesRequest,
-    ) -> impl Future<Output = ListDirectoriesResponse> + Send;
+    ) -> impl Future<Output = Result<ListDirectoriesResponse, LibraryError>> + Send;
 
     /// The book's thumbnail JPEG: a local file callers can stream, or its bytes.
     fn get_cover(&self, id: &str)
@@ -90,6 +95,19 @@ pub trait Library {
         &self,
         req: SetConfigRequest,
     ) -> impl Future<Output = Result<Config, LibraryError>> + Send;
+
+    /// The user's progress, last book and settings, without their name (`view.rs`).
+    fn export_user_data(
+        &self,
+        req: ExportUserDataRequest,
+    ) -> impl Future<Output = Result<UserData, LibraryError>> + Send;
+
+    /// Replaces the user's progress for the books in `req.data` this library has, their last
+    /// book and the settings it sets.
+    fn import_user_data(
+        &self,
+        req: ImportUserDataRequest,
+    ) -> impl Future<Output = Result<ImportUserDataResponse, LibraryError>> + Send;
 
     /// Re-hashes every book, ignoring the copies' stamps, and reloads the index. Slow on big
     /// libraries; for when the index looks wrong.

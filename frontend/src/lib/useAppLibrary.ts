@@ -49,6 +49,18 @@ export function resetLibraryCache(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })
 }
 
+/**
+ * After another user signs in to the same open library: drops everything cached for the last
+ * one, but keeps the library open (reopening a local one would sync it again).
+ */
+export function resetUserCache(queryClient: QueryClient) {
+  uploads.dropQueued()
+  setSignedOut(false)
+  const kept = [LIBRARIES_KEY[0], UI_SCALE_KEY[0], "open-library"]
+  queryClient.removeQueries({ predicate: (q) => !kept.includes(q.queryKey[0] as string) })
+  return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })
+}
+
 export function useSwitchLibrary() {
   const queryClient = useQueryClient()
   return useMutation({

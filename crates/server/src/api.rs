@@ -17,7 +17,8 @@ use shelf_proto::{
     api::{
         role::Value as Role,
         CleanUpProgressRequest, CleanUpProgressResponse, CreateDirectoryRequest,
-        CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse, GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
+        CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse, ExportUserDataRequest,
+        ImportUserDataRequest, ImportUserDataResponse, UserData, GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexRequest, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
         UploadEbookRequest, UploadEbookResponse,
@@ -69,6 +70,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/state/set", post(set_state))
         .route("/config/get", post(get_config))
         .route("/config/set", post(set_config))
+        .route("/user-data/export", post(export_user_data))
+        .route("/user-data/import", post(import_user_data))
         .route("/books/{id}/cover", get(cover))
         .route("/books/{id}/file", get(file))
         .route("/auth/me", get(auth::me))
@@ -122,16 +125,16 @@ async fn list_books(
     State(library): State<Lib>,
     user: CurrentUser,
     Json(req): Json<ListBooksRequest>,
-) -> Json<ListBooksResponse> {
-    Json(library.view(&user.scope).list_books(req).await)
+) -> Result<Json<ListBooksResponse>, ApiErrorResponse> {
+    Ok(Json(library.view(&user.scope).list_books(req).await?))
 }
 
 async fn list_directories(
     State(library): State<Lib>,
     user: CurrentUser,
     Json(req): Json<ListDirectoriesRequest>,
-) -> Json<ListDirectoriesResponse> {
-    Json(library.view(&user.scope).list_sub_directories(req).await)
+) -> Result<Json<ListDirectoriesResponse>, ApiErrorResponse> {
+    Ok(Json(library.view(&user.scope).list_sub_directories(req).await?))
 }
 
 // The user in progress, state and config requests comes from the session, never the client.
@@ -189,6 +192,24 @@ async fn set_config(
 ) -> Result<Json<Config>, ApiErrorResponse> {
     req.user = user.id;
     Ok(Json(library.set_config(req).await?))
+}
+
+async fn export_user_data(
+    State(library): State<Lib>,
+    user: CurrentUser,
+    Json(mut req): Json<ExportUserDataRequest>,
+) -> Result<Json<UserData>, ApiErrorResponse> {
+    req.user = user.id.clone();
+    Ok(Json(library.view(&user.scope).export_user_data(req).await?))
+}
+
+async fn import_user_data(
+    State(library): State<Lib>,
+    user: CurrentUser,
+    Json(mut req): Json<ImportUserDataRequest>,
+) -> Result<Json<ImportUserDataResponse>, ApiErrorResponse> {
+    req.user = user.id.clone();
+    Ok(Json(library.view(&user.scope).import_user_data(req).await?))
 }
 
 async fn rebuild_index(
@@ -509,6 +530,39 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let res: CleanUpProgressResponse = serde_json::from_str(&body).unwrap();
         assert_eq!(res.books, 0);
+    }
+
+    #[tokio::test]
+    async fn user_data_exported_by_one_user_imports_as_another() {
+        let server = TestServer::new().await;
+        let reader = server.login("reader", "r").await;
+        let owner = server.login("owner", "o").await;
+        let theme = r#"{ "patch": { "ui": { "theme": "DARK" } } }"#;
+        let set = server.call("POST", "/config/set", Some(&reader), theme).await;
+        assert_eq!(set.0, StatusCode::OK, "{}", set.1);
+
+        let (status, data) = server.call("POST", "/user-data/export", Some(&reader), "{}").await;
+        assert_eq!(status, StatusCode::OK, "{data}");
+        assert!(!data.contains("reader"), "{data}");
+        let import = format!(r#"{{ "data": {data} }}"#);
+        let (status, body) = server.call("POST", "/user-data/import", Some(&owner), &import).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let (_, config) = server.call("POST", "/config/get", Some(&owner), "{}").await;
+        let config: Config = serde_json::from_str(&config).unwrap();
+        assert_eq!(serde_json::to_value(config).unwrap()["ui"]["theme"], "DARK");
+        let old = r#"{ "data": { "version": 0 } }"#;
+        let refused = server.call("POST", "/user-data/import", Some(&owner), old).await;
+        assert_eq!(refused.0, StatusCode::BAD_REQUEST);
+    }
+
+    /// The app's remote library asks with a HEAD before opening a cached book.
+    #[tokio::test]
+    async fn book_files_answer_head() {
+        let server = TestServer::new().await;
+        let reader = server.login("reader", "r").await;
+        let (status, _) = server.call("HEAD", "/books/abc/file", Some(&reader), "").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

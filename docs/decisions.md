@@ -4,17 +4,17 @@ What Shelf is for, the choices it's built on, and where the original plan (the o
 
 ## What it's for
 
-A personal EPUB reader whose library is a plain folder of books, like an Obsidian vault. Built for one person, on two Linux laptops, an Android phone and a browser, with room for a few more people (a household) sharing the same library, each with their own reading progress. Progress is stored per user. The server has logins; choosing a user for an app's local library is planned ([roadmap.md](roadmap.md#users-and-authentication)).
+A personal EPUB reader whose library is a plain folder of books, like an Obsidian vault. Built for one person reading on Linux, an Android phone and a browser, with room for a few more people (a household) sharing a server's library, each with their own reading progress. Progress is stored per user. The server has logins; an app's local library asks for a name, with no password. **A library can move** between a device and a server, both ways, without losing anyone's progress: the folder is self-contained, and each user's data can be exported and imported under any name.
 
 ### Ways to use a library
 
 | Mode | Where the books are | How data moves between devices |
 |---|---|---|
-| **Local** (app) | A folder on the device | The user's own sync tool (e.g. Syncthing). Shelf just reads and writes files. |
+| **Local** (app) | A folder on the device | One reader, on this device. Syncing the folder to other devices may work but isn't supported or designed for. |
 | **Remote** (app) | On the server only | The app talks to `shelf-server`, Jellyfin-style. Downloaded books and covers are cached; nothing else is local. |
 | **Web** (browser) | On the server only | The browser talks to the server, which serves the same UI. |
 
-All three use the same on-disk format, so they can be mixed: laptops in Local mode on a Syncthing folder, the phone in Remote mode against a server whose library is the same synced folder.
+All three use the same on-disk format, so a library can move between them: take a local folder to a server (or a server's folder to a device), then each user imports the data they exported (*Settings → Library → Export / Import*).
 
 ### Goals
 
@@ -25,7 +25,7 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 
 ### Non-goals
 
-- **Sync conflict resolution.** Syncing the folder is the sync tool's job.
+- **Syncing a library folder between devices.** It may work with a sync tool, but nothing is designed around it, and conflicts are the tool's business.
 - **Live syncing between devices in use at the same time.** Each user reads on one device at a time: progress is read when a book opens. No "progress changed" events and no "jump to newer position" prompts.
 - Native Windows, macOS and iOS apps (but don't break them needlessly). Distributing them without warnings needs paid signing: Apple's $99/year developer program (iOS also needs a Mac to build, and free installs expire after 7 days), and Windows code signing (Microsoft's Artifact Signing is open to individuals only in the US and Canada). Not worth it for a personal project. On those devices, use the web UI from `shelf-server` in a browser.
 - Play Store distribution. This is what allows the Android all-files-access approach.
@@ -49,11 +49,11 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 | Positions | EPUB CFI strings | Stable across screen sizes, fonts and devices |
 | Progress storage | One file per book and user, `books/<id>/progress/<user>.json`, last writer wins | Conflicts are out of scope. Under the book, so it follows the file through moves and copies. When a book is gone, the startup sync deletes only its metadata and thumbnail: progress is small, and keeping it means a book that was removed, briefly missing or re-added resumes where each user left it (at the cost of never cleaning it up). One file per user, so two people reading the same book never conflict in the sync tool |
 | Book ID | SHA-1 of the file's bytes | Stable across moves and renames; needs nothing from the EPUB |
-| Extracted metadata | Stored in the library's `.shelf/`; deterministic apart from each copy's `last_update_time` | Each book is extracted once, not on every device, and syncs with the library |
+| Extracted metadata | Stored in the library's `.shelf/`; deterministic apart from each copy's `last_update_time` | The library folder is self-contained: moved to a server or another device, its books aren't extracted again |
 | Settings | Per user, `.shelf/users/<user>/config.json`, merged by partial patches | Every setting is a personal preference (reader layout, theme, margins), so each user, readers included, sets their own; stored in the library, so they follow the user to every device |
 | App-to-server HTTP | From Rust (`reqwest` via tauri-plugin-http), behind the same `Library` trait as local folders | No CORS or cookie issues in the WebView; the frontend has one backend per platform |
 | Covers and books in the app | Raw bytes over IPC (`ipc::Response`) → Blob → object URL | WebKitGTK won't load custom URI schemes from the `http://` dev page |
-| Android storage | All files access (`MANAGE_EXTERNAL_STORAGE`) and a small Kotlin plugin, with plain `std::fs` paths | The simplest way to read a synced folder; fine for a sideloaded app |
+| Android storage | All files access (`MANAGE_EXTERNAL_STORAGE`) and a small Kotlin plugin, with plain `std::fs` paths | The simplest way to read a folder of books on the phone; fine for a sideloaded app |
 | App logging | `tracing-subscriber` JSON, as on the server, into Shelf's own log files, one per app start; `tauri-plugin-log` only carries frontend records in | The planned `tauri-plugin-log` formatter would get `tracing` fields flattened into the message text, so they couldn't be top-level keys. Owning the writer also lets a new kept-file count apply without a restart |
 | Server users | `/data/data.json`: user id → password, **in plain text**, plus every other per-user server datum (role, sessions, and later library root and book access). The server rewrites it (sessions, password changes), re-reading it first, and reloads it when its mtime changes | The owner's choice for a personal server: easy to edit by hand and nothing to hash. The cost is that anyone who can read the `/data` volume or its backups sees every password, so the file is created with mode `600`, lives outside the library so it never syncs, and is never logged. See [server.md](server.md#server-data) |
 | Sign-up | Anyone can ask for an account on the sign-in page; it waits in `data.json` (`user_requests`) until an admin approves it, choosing the role (`READER`, `CONTRIBUTOR` or `LIBRARIAN`; `ADMIN` only from an owner), or denies it | Adding household members shouldn't need a shell on the server, but a public server shouldn't hand out accounts either. Names are unique among users only, checked when asking and again when approving. The instant "already taken" reveals which names exist, accepted for a household server; at most 20 requests wait at once so strangers can't grow the file |
@@ -63,7 +63,7 @@ All three use the same on-disk format, so they can be mixed: laptops in Local mo
 | Server sessions | Opaque 32-byte tokens, sent as `Authorization: Bearer` on every API request (covers and files too). Only their SHA-256 is stored, under the user in `data.json`, with a 90-day expiry pushed back at most once a day. No cookies: the browser keeps the token in `localStorage`, the app in its private data | One mechanism for the browser and the app, with nothing cookie-specific (`Secure`, `SameSite`, CSRF). The frontend already fetches covers and files with `fetch`, so a header works everywhere. The cost: a script running in the page could read the token, and the only scripts there are Shelf's own (books render in foliate-js's sandboxed iframe). All auth data in one file is the owner's choice: one place to look and edit. Hashing the tokens costs nothing and keeps a copied file or backup from holding working tokens |
 | Login rate limit | Per username, in memory: 5 wrong passwords in a row lock it for a minute | Nothing about the client's device is logged or kept (no IPs), and behind the same-host proxy every client has the proxy's address anyway. The cost: someone guessing can keep a user locked out |
 | Users in `.shelf/` | Only the username, as a folder or file name. No passwords, hashes or sessions in the library | The library syncs to every device, so credentials in it would spread with it, and a local library has no server to check them against |
-| Local-library user (planned) | The app asks which username to use, with no password and no role: every feature is available | The users, passwords and roles live in the server's `/data/data.json`, which a local library never sees, and credentials stay out of `.shelf/`. The username only picks whose progress files to use. Role-based features in the app apply to remote libraries, with the role the server reports. Locking the app (PIN, fingerprint) would be a separate feature |
+| Local-library user | Works like a signed-in server user, minus the password: the app asks *Who's reading?* (a username, with the names already in `.shelf/users/` offered) when a local library has none, stores it with the library entry, and reads and writes that user's progress, last book and settings. *Switch user* asks again. No roles and no scopes: every feature is available and the whole folder is visible. **Moving a library:** with the same name on both sides, the folder alone carries everything; otherwise a **user data export** (`UserData`: progress per book id, last book, settings) with **no username** is imported as whoever imports it, into any library with the same books (ids are file hashes, not paths), replacing the importer's progress for those books | It behaves like the website and a server in one process, so a local library and a server stay interchangeable. Passwords and roles live in the server's `/data/data.json`, which a local library never sees, and credentials stay out of `.shelf/`; a password on the device would protect nothing, since whoever has the device has the folder. Scopes were left out on purpose (they need an admin and a place to keep them). The export covers a different name on the server, or a library built from copies of the books. Role-based features in the app apply to remote libraries, with the role the server reports. Locking the app (PIN, fingerprint) would be a separate feature |
 
 ### Users and `.shelf/` (partly built)
 
@@ -71,9 +71,9 @@ The server and the app share one `.shelf/` layout, so a library can be read thro
 
 - A user is a **username**: lowercase `a–z`, `0–9`, `-`, `_`, 1 to 32 characters. It's used as a file name, like book IDs. Lowercase only, so it can't collide on a case-insensitive filesystem.
 - **Shared:** book metadata and thumbnails (`books/<id>/`).
-- **Per user:** progress (`books/<id>/progress/<user>.json`, built; the file also stores `user`), settings (`users/<user>/config.json`, built) and the last book opened (`users/<user>/state.json`, built). On the server the user is the one signed in; in the app's local libraries it's `default` until a user can be chosen.
-- **Who the user is:** on the server, the logged-in session. In the app, the server decides for a remote library, from the bearer token. For a local library, the user is stored with the library entry in `AppData`. Using the same name on both gives the same progress.
-- Per-user requests carry a `user` field in their proto message, so the `Library` trait and its impls get the user like any other argument, and HTTP routes and Tauri commands keep mirroring each other. The field is always filled in where the request enters, never trusted from the client: by the server's handlers (from the session) and by the app's `LocalLibrary` (from the app data). `BookLibrary` validates it.
+- **Per user:** progress (`books/<id>/progress/<user>.json`, built; the file also stores `user`), settings (`users/<user>/config.json`, built) and the last book opened (`users/<user>/state.json`, built). On the server the user is the one signed in; in the app's local libraries it's the name chosen on that device.
+- **Who the user is:** on the server, the logged-in session. In the app, the server decides for a remote library, from the bearer token. For a local library, it's the name chosen on the device, stored with the library entry in `AppData`. The same name on both gives the same progress; export and import cover different names.
+- Per-user requests carry a `user` field in their proto message, so the `Library` trait and its impls get the user like any other argument, and HTTP routes and Tauri commands keep mirroring each other. The field is always filled in where the request enters, never trusted from the client: by the server's handlers (from the session) and by the app's `LocalLibrary` (the chosen name). `BookLibrary` validates it.
 
 ### Naming and JSON conventions
 
@@ -94,10 +94,10 @@ The UI works only with book IDs, through one `Backend` interface with an HTTP an
 | The plan said | What was built, and why |
 |---|---|
 | Book ID from the OPF `unique-identifier` (SHA-256, 16 hex chars), file hash as fallback | SHA-1 of the file, always. Simpler; the cost is that editing a book changes its ID (see [roadmap.md](roadmap.md)) |
-| Metadata cache outside the library, keyed by path/size/mtime | Metadata in `.shelf/books/<id>/`, so it's extracted once and syncs. Startup skips hashing a copy whose mtime isn't newer than its location's `last_update_time` (the time this device last hashed it), at the cost of `metadata.json` differing per device |
+| Metadata cache outside the library, keyed by path/size/mtime | Metadata in `.shelf/books/<id>/`, so it moves with the library. Startup skips hashing a copy whose mtime isn't newer than its location's `last_update_time` (the time this machine last hashed it), at the cost of `metadata.json` holding that machine's clock |
 | Progress at `.shelf/progress/<id>.json` with `fraction`, `chapter`, `updated`, `device` | `.shelf/books/<id>/progress/<user>.json` with the CFI and the user |
 | Hand-written serde structs for on-disk files, preserving unknown fields | The generated proto types, via pbjson. Only the `config.json` files keep unknown fields; dropping them from the other files when they're rewritten is intended |
-| Atomic writes staged in `.shelf/tmp/` | A hidden temp file directly in `.shelf/`, then a rename over the target (same filesystem, no extra folder for sync tools to ignore). Every `.shelf/` file |
+| Atomic writes staged in `.shelf/tmp/` | A hidden temp file directly in `.shelf/`, then a rename over the target (same filesystem, no extra folder). Every `.shelf/` file |
 | Reader preferences per device (localStorage / app store) | Per user, in the library (`.shelf/users/<user>/config.json`), except two per-device ones: reader zoom (`localStorage`, like browser zoom) and the app's interface scale (`AppData`, app only). The scale sets the root font size, since the UI is sized in rem: CSS `zoom` would also scale viewport units, and webview zoom doesn't work on Android. Other per-device preferences are on the roadmap |
 | `ProgressChanged` events, resume toast, "jump to newer position" | Dropped: one device at a time |
 | App in Server mode uses the frontend's `HttpBackend` with bearer tokens | The app's Rust `RemoteLibrary` talks to the server; the frontend always uses `tauriBackend` in the app |

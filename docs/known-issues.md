@@ -4,12 +4,11 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 
 ## Data safety
 
-- **Progress of a removed book is kept until someone cleans it up.** The startup sync deletes only the `metadata.json` and thumbnail of a book no file produced, so a book that comes back (same bytes) resumes; its folder and progress stay until an admin runs *Settings → Library → Clean up progress*. Running it while a book is only temporarily missing, after a startup that didn't find it, deletes that book's progress for good. Empty `.shelf/books/<id>/` folders also stay until then. A book that's temporarily absent at startup (a sync tool halfway through, an unmounted folder) is extracted again when it's back. Editing a book's bytes changes its ID, so the edited book starts with no progress; the old ID's progress stays.
-- **`last_update_time` limits** (each copy's stamp is the time this device last hashed it, compared with the file's mtime):
-  - `metadata.json` differs per device, since each writes its own clock. Two devices hashing the same book around the same time can leave sync-conflict copies in `.shelf/books/<id>/` (harmless: only `metadata.json` is read).
-  - A file replaced at the same path by a different one whose mtime is *older* than the stamp (sync tools and `cp -p` preserve mtimes) isn't re-hashed, so its metadata and ID stay stale until the file's mtime moves forward again or the index is rebuilt (*Settings → Library → Rebuild index*).
+- **Progress of a removed book is kept until someone cleans it up.** The startup sync deletes only the `metadata.json` and thumbnail of a book no file produced, so a book that comes back (same bytes) resumes; its folder and progress stay until an admin runs *Settings → Library → Clean up progress*. Running it while a book is only temporarily missing, after a startup that didn't find it, deletes that book's progress for good. Empty `.shelf/books/<id>/` folders also stay until then. A book that's temporarily absent at startup (a copy halfway through, an unmounted folder) is extracted again when it's back. Editing a book's bytes changes its ID, so the edited book starts with no progress; the old ID's progress stays.
+- **`last_update_time` limits** (each copy's stamp is the time this machine last hashed it, compared with the file's mtime):
+  - A file replaced at the same path by a different one whose mtime is *older* than the stamp (`cp -p`, `rsync -t` and sync tools preserve mtimes) isn't re-hashed, so its metadata and ID stay stale until the file's mtime moves forward again or the index is rebuilt (*Settings → Library → Rebuild index*).
   - A file with an mtime in the future is hashed on every start until the clock passes it.
-  - Clock skew between devices shifts the comparison by the same amount.
+- **Syncing a library folder between devices isn't supported** (a library moves by copying the folder and exporting and importing each user's data). If you sync anyway: each device writes its own clock into `metadata.json`, so two devices hashing the same book around the same time can leave conflict copies in `.shelf/books/<id>/` (harmless: only `metadata.json` is read); clock skew shifts the `last_update_time` comparison; one device's startup sync can delete `metadata.json` of a book another device hasn't received yet; and progress written on two devices at once is last-writer-wins.
 - Metadata is only what the OPF declares: a book with no `dc:title` shows its file name and no authors, and an author written without the `dc:` prefix (`<creator xmlns="http://purl.org/dc/elements/1.1/">`) isn't read by rbook.
 
 ## Performance
@@ -23,7 +22,6 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 
 ## Behaviour
 
-- `Library::list_books` and `list_sub_directories` can't fail. A remote library that can't reach its server logs a `warn` and shows an empty folder instead of an error.
 - A book whose file is gone but is still in the index (until the watcher's sync): the server's `/file` returns `ServeFile`'s empty 404, the app's `get_book_file` a 500.
 - A crash or a closed app mid-upload can leave a hidden `.<name>.part-<pid>-<seq>` file next to where the book was going (local libraries and the server). Nothing removes it yet. The app's own `uploads/` cache is cleared on start.
 - Copies are only recognised byte for byte (same SHA-1). The same book from another source is a second book, with its own progress.
@@ -34,7 +32,8 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 - An upload or delete through the API changes the index at once; one done outside Shelf still waits for the watcher's 5 s debounce.
 - **Android file chooser:** uploads use a plain `<input type="file">`, which relies on Tauri's WebView opening the system picker. Not yet tried on the phone.
 - A library can't be renamed or repointed; remove it and add it again (nothing in the library is lost).
-- `RemoteLibrary`: the download cache is never evicted and isn't deleted when the library is removed; there's a 10 s connect timeout but no overall request timeout.
+- `RemoteLibrary`: the download cache is never evicted and isn't deleted when the library is removed. Uploads and downloads have no overall timeout, only the 10 s connect one.
+- **A cached book opens when the server can't be reached,** even if the user lost access to it in the meantime: the access check (a HEAD before using the cached copy) only refuses on the server's answer.
 - Passwords in `/data/data.json` are plain text (by choice): anyone who can read that folder or its backups sees them. Don't reuse a password that matters.
 - **Login tokens are stored in plain text on the devices:** in the browser's `localStorage` (readable by any script running in the page) and in the app's private data (`app_data.json`). Anyone with a copy can use the session until it expires or the password is changed. An OS keyring for the app is a possible follow-up.
 - **The login lockout is per username:** someone guessing a user's password keeps that user locked out a minute at a time.
@@ -44,7 +43,9 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 - **A scope change shows after a refetch:** it applies from the user's next request, but listings they already have open stay until they navigate or reload. A book they're reading that's now hidden stays open until then; its progress saves become 404s.
 - **A scoped admin sees the whole library in *Settings → Admin*:** the folder picker lists every folder and other users' roots are full paths, so the admin's own scope doesn't hide folder names from them (by choice).
 - **A role change shows after a reload:** the frontend caches the user's own role (`me`) for the whole visit, so someone promoted doesn't see the new buttons, and someone demoted still sees buttons that now give a 403, until they reload or switch library. The server's checks apply at once. A ban isn't affected: it signs the user out.
+- **A local library's reader has no password:** anyone using the device can pick any name, including one with someone else's progress. It isn't a security boundary, like having the folder itself. The name list only shows users who've opened a book or changed a setting there (a `.shelf/users/<user>/` folder).
 - Removing a user from `data.json` signs them out on their next request, but the app's remote library just shows the login screen; their `.shelf/users/<user>/` folder stays.
+- **User data export and import:** only books in the index are exported (a removed book's kept progress isn't). The export holds settings this build knows (unknown `config.json` keys aren't carried). Importing replaces progress without comparing which is newer, since progress files have no timestamp. An Android import uses the same `<input type="file">` as uploads, not yet tried on the phone.
 - The server binary's library path (`/books`), data path (`/data`) and bind address (`0.0.0.0:8080`) are fixed: it has no flags or environment variables for them. `shelf_server::Config` takes them, but only the `demo` crate's `server` function sets other values.
 - Reader zoom doesn't scale images: they get the inverse zoom so foliate's px height cap still fits them to the page. An image sized in px in the book's CSS stays that size at any zoom.
 - The interface scale doesn't move breakpoints: media queries (`md:`, Settings' `48rem`) use the browser's default font size, not the root's. At 150% a narrow desktop window keeps the wide layout with bigger controls. Bits sized in px (the 3px position lines, borders) don't scale.

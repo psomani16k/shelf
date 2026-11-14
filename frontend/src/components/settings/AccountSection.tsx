@@ -6,25 +6,51 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { User } from "@/gen/apipb/auth_pb"
 import { IS_TAURI } from "@/lib/platform"
-import { LIBRARIES_KEY } from "@/lib/useAppLibrary"
+import { LIBRARIES_KEY, useCurrentLibrary } from "@/lib/useAppLibrary"
 import { ROLE_NAMES, useMe } from "@/lib/useMe"
 
-/** Who's signed in, changing the password and signing out. A local library has no accounts. */
+/**
+ * Who's signed in, changing the password and signing out. A local library has no accounts, only
+ * the name chosen on this device.
+ */
 export function AccountSection() {
   const me = useMe()
   if (me.isPending) return <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
   if (me.isError) return <p className="text-sm text-destructive">{String(me.error)}</p>
-  if (me.data === null) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        This library is a folder on this device, so it has no accounts.
-      </p>
-    )
-  }
+  if (me.data === null) return <LocalReader />
   return (
     <div className="flex flex-col gap-4">
       <SignedIn user={me.data} />
       <ChangePassword />
+    </div>
+  )
+}
+
+/** App only: a local library's reader, with no password or role. */
+function LocalReader() {
+  const queryClient = useQueryClient()
+  const user = useCurrentLibrary()?.user
+  const switchUser = useMutation({
+    mutationFn: logout,
+    // Shows the screen that asks who's reading.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY }),
+  })
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{user}</p>
+        <p className="text-sm text-muted-foreground">
+          Reading this folder on this device. No password: anyone using it can switch.
+        </p>
+      </div>
+      <Button
+        variant="outline"
+        className="shrink-0"
+        onClick={() => switchUser.mutate()}
+        disabled={switchUser.isPending}
+      >
+        Switch user
+      </Button>
     </div>
   )
 }

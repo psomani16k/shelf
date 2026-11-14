@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "apipb/library.proto",
         "apipb/config.proto",
         "apipb/auth.proto",
+        "apipb/user_data.proto",
         "serverpb/data.proto",
     ];
 

@@ -48,6 +48,12 @@ import {
   SetStateRequestSchema,
 } from "@/gen/apipb/state_pb"
 import { GetConfigRequestSchema, SetConfigRequestSchema } from "@/gen/apipb/config_pb"
+import {
+  ExportUserDataRequestSchema,
+  ImportUserDataRequestSchema,
+  ImportUserDataResponseSchema,
+  UserDataSchema,
+} from "@/gen/apipb/user_data_pb"
 import { ConfigSchema } from "@/gen/configpb/config_pb"
 import { setSignedOut } from "@/lib/session"
 import { ApiError } from "./error"
@@ -81,6 +87,10 @@ export const tauriBackend: Backend = {
   },
   getConfig: () => command("get_config", GetConfigRequestSchema, {}, ConfigSchema),
   setConfig: (patch) => command("set_config", SetConfigRequestSchema, { patch }, ConfigSchema),
+  exportUserData: () =>
+    command("export_user_data", ExportUserDataRequestSchema, {}, UserDataSchema),
+  importUserData: (data) =>
+    command("import_user_data", ImportUserDataRequestSchema, { data }, ImportUserDataResponseSchema),
   rebuildIndex: async () =>
     fromJson(
       RebuildIndexResponseSchema,

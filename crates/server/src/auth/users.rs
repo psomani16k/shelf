@@ -179,8 +179,8 @@ pub async fn set_scope(
 pub async fn list_directories(
     State(library): State<Lib>,
     Json(req): Json<ListDirectoriesRequest>,
-) -> Json<ListDirectoriesResponse> {
-    Json(library.view(&EVERYTHING).list_sub_directories(req).await)
+) -> Result<Json<ListDirectoriesResponse>, ApiErrorResponse> {
+    Ok(Json(library.view(&EVERYTHING).list_sub_directories(req).await?))
 }
 
 #[cfg(test)]

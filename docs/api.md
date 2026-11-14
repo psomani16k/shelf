@@ -44,6 +44,8 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | POST | `/api/state/set` | `SetStateRequest` `{last_book_id?}` | `204` |
 | POST | `/api/config/get` | `GetConfigRequest` `{}` | `Config` |
 | POST | `/api/config/set` | `SetConfigRequest` `{patch}` (`patch` is a partial `Config`) | `Config` (the user's whole merged config) |
+| POST | `/api/user-data/export` | `ExportUserDataRequest` `{}` | `UserData` `{version, progress: [{id, epub_progress}], last_book_id, config}` |
+| POST | `/api/user-data/import` | `ImportUserDataRequest` `{data: UserData}` | `ImportUserDataResponse` `{books, skipped}` |
 | POST | `/api/library/rebuild` | `RebuildIndexRequest` `{}` | `RebuildIndexResponse` `{books, failed, removed}` |
 | POST | `/api/library/progress/clean` | `CleanUpProgressRequest` `{}` | `CleanUpProgressResponse` `{books}` (folders deleted) |
 | POST | `/api/books/upload?parent_directory=…&file_name=…` | the EPUB's raw bytes (`UploadEbookRequest` is the query) | `UploadEbookResponse` `{id, file_name}` (the name it got) |
@@ -67,10 +69,14 @@ Notes:
   - **Denying** deletes the request; an unknown id is a 404.
 - **Roles** (`crates/server/src/auth/users.rs`): `users/list` sends every user's name and role, never passwords or sessions. `users/role/set` checks, in order: changing your own role is a 403 `you can't change your own role`; a role the caller may not give is a 403 `you can't give the X role`; an unknown user is a 404; a user whose current role the caller may not take away is a 403 `you can't change an X's role`. The rule (`may_manage`, shared with approving): `BANNED`, `READER`, `CONTRIBUTOR` and `LIBRARIAN` need `ADMIN` or higher, `ADMIN` needs `OWNER`, and `OWNER` is never given or taken. Banning also deletes all of the user's sessions, so they're signed out at once; unbanning doesn't bring them back. Nothing is written when a check fails.
 - **Scopes** (`users.rs`): `users/list` also sends each user's `library_root` and `books` in `scopes` (not on `User`, which `auth/me` sends the user themselves). `users/scope/set` normalizes the scope (the root goes through the folder-path rules, `/kid/` → `kid`; patterns are trimmed and blank ones dropped) and checks it like `data.json` does: a bad root or pattern is a 400 with the parser's message, and a root that isn't a folder in the library a 400 `there's no folder "x"`. Then, as for roles: your own is a 403, an unknown user a 404, and the caller must be allowed to manage the user's current role (`may_manage`), so admins set the scopes of users below admin, owners admins' too, and an owner's is only set by hand. It applies from the user's next request; their sessions stay. `users/scope/directories` lists folders of the whole library for picking a root. **An admin's own scope doesn't apply to either**: a scoped admin sees and sets full library paths (a choice; see [decisions.md](decisions.md)).
+- **User data** (`LibraryView::export_user_data` / `import_user_data`): moves one user's data between libraries, a device's and a server's in either direction. `UserData` has **no username**, so whoever imports it gets it, and its book ids are file hashes, so it fits any library with the same EPUBs, wherever they are.
+  - **Export:** `version` 1; the progress of every book in the index the user can see (books outside the index, such as removed ones whose progress is kept, aren't exported), sorted by id; the last book if it's visible; the whole config.
+  - **Import:** a `version` other than 1 is a 400 `this isn't a Shelf data export`. Each entry for a visible, indexed book with a non-empty CFI replaces the user's progress for it; the rest count as `skipped`, so the answer doesn't tell a hidden book from a missing one. Only ids from the index are written, so none from the file becomes a path. The last book is set if it's visible; the config is merged like `config/set`. The body falls under axum's 2 MB default (about 15,000 books).
 - **Scopes** (`crates/core/src/library/scope.rs`, `view.rs`): each user sees only their part of the library, set in `/data/data.json` by `library_root` and `books` ([server.md](server.md#server-data)). Every handler that touches books, folders, progress or the last book goes through `ServerLibrary::view(&user.scope)`, a `LibraryView`. A user without either field sees the whole library.
   - **Paths are relative to the user's root**, both ways: their root is `""`, and nothing they get back names it, so the UI shows it as the library root.
   - **A hidden book acts as missing:** a book is visible when one of its copies is under the root and allowed by the patterns. A hidden one is left out of listings, and its cover, file and progress are 404s; a last book that's hidden reads as unset. A copy outside the scope is never deleted.
   - **A hidden folder acts as missing:** with patterns, a folder whose books (as the index sees them) are all hidden is left out of folder listings, lists as empty, and is a 400 as a parent. Folders with no books always show.
+- **Listings** (`books/list`, `directories/list`): a missing or hidden folder lists as empty rather than a 404, so the two can't be told apart. An unsafe path (`..`, a hidden name) is a 400; a storage error a 500.
   - **No leaks:** an upload never answers differently because a hidden file is there (see Upload).
 - `directory_path` is relative to the user's root, `""` is the root; leading and trailing slashes are trimmed. Books are sorted by title (else file name, which also orders copies of one book), folders by name, both case-insensitively. Each copy of a book is its own item, so two copies in one folder are two items with the same `id`. Books come from the in-memory index; folders are read from disk (`LibraryStorage::sub_folders`), so empty folders and folders without books are listed too. Dot-folders never are.
 - **Names and folder paths from clients** (`crates/core/src/library/names.rs`): a file or folder name is trimmed, can't be empty, longer than 255 bytes, contain `/`, `\` or NUL, or start with a dot (so nothing hidden, and never `.shelf/`). A folder path is names joined by `/`. Breaking a rule is a 400.
@@ -100,6 +106,7 @@ Roles are defined in [server.md](server.md#server-data); each can do everything 
 | `POST /api/progress/get`, `/set` | `get_progress`, `set_progress` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/state/get`, `/set` | `get_state`, `set_state` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/config/get`, `/set` | `get_config`, `set_config` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/user-data/export`, `/import` | `export_user_data`, `import_user_data` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/library/rebuild` | `rebuild_index` | built | | | | ✓ | ✓ |
 | `POST /api/library/progress/clean` | `clean_up_progress` | built | | | | ✓ | ✓ |
 | `POST /api/auth/login` | `login` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -161,6 +168,9 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `set_state` | `{ req: SetStateRequest }` | `null` |
 | `get_config` | `{ req: GetConfigRequest }` | `Config` |
 | `set_config` | `{ req: SetConfigRequest }` | `Config` |
+| `export_user_data` | `{ req: ExportUserDataRequest }` | `UserData` |
+| `import_user_data` | `{ req: ImportUserDataRequest }` | `ImportUserDataResponse` |
+| `save_json_file` (app only) | `{ name, contents }` | `bool`: the save picker, then `contents` written to the chosen file; `false` if cancelled |
 | `rebuild_index` | none | `RebuildIndexResponse`. For a remote library, the server rebuilds its own index |
 | `clean_up_progress` | none | `CleanUpProgressResponse`. For a remote library, the server cleans up its own |
 | `get_cover` | `{ id }` | `ArrayBuffer` (JPEG) |
@@ -168,8 +178,9 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `create_directory` | `{ req: CreateDirectoryRequest }` | `CreateDirectoryResponse` |
 | `delete_items` | `{ req: DeleteItemsRequest }` | `DeleteItemsResponse` |
 | `upload_book` | `{ req: UploadEbookRequest, uploadId, offset, data, done }` | `null`, then `UploadEbookResponse` for the call with `done` |
-| `login` | `{ req: LoginRequest }` | `User`. Stores the token in the library's entry in the app data and uses it at once |
-| `logout` | none | `null`. Tells the server when it can, and always forgets the token |
+| `login` | `{ req: LoginRequest }` | `User`. Stores the token in the library's entry in the app data and uses it at once. For a local library, takes the username alone (the password is ignored), stores it as the entry's `user` and answers with that name and `OWNER` |
+| `logout` | none | `null`. Tells the server when it can, and always forgets the token. For a local library, forgets the chosen user |
+| `list_local_users` (app only) | none | `string[]`: the usernames with a folder in the open local library's `.shelf/users/`, sorted |
 | `me` | none | `User`, or `null` for a local library |
 | `change_password` | `{ req: ChangePasswordRequest }` | `null` |
 

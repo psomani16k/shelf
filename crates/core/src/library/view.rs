@@ -1,13 +1,18 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::anyhow;
 use bytes::Bytes;
 use shelf_proto::{
     api::{
-        CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
-        GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse, ListBooksRequest,
-        ListBooksResponse, ListBooksResponseItem, ListDirectoriesRequest, ListDirectoriesResponse,
-        SetProgressRequest, SetStateRequest, UploadEbookRequest, UploadEbookResponse,
+        BookProgressEntry, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest,
+        DeleteItemsResponse, ExportUserDataRequest, GetProgressRequest, GetProgressResponse,
+        GetStateRequest, GetStateResponse, ImportUserDataRequest, ImportUserDataResponse,
+        ListBooksRequest, ListBooksResponse, ListBooksResponseItem, ListDirectoriesRequest,
+        ListDirectoriesResponse, SetProgressRequest, SetStateRequest, UploadEbookRequest,
+        UploadEbookResponse, UserData,
     },
     bookkeeping::{BookProgress, EpubProgress, book_file_type},
 };
@@ -27,6 +32,9 @@ use crate::{
     storage::{FileContent, LibraryStorage, is_epub},
 };
 
+/// `UserData.version` written by exports and accepted by imports.
+pub const USER_DATA_VERSION: u32 = 1;
+
 /// Names tried after a taken one: `name (1)` to `name (99)`.
 const MAX_RENAMES: u32 = 99;
 
@@ -45,76 +53,68 @@ impl BookLibrary {
 }
 
 impl LibraryView<'_> {
-    pub async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
+    /// A missing or hidden folder lists as empty; an unsafe path is `Invalid`.
+    pub async fn list_books(&self, req: ListBooksRequest) -> Result<ListBooksResponse, LibraryError> {
         let dir = req.directory_path.trim_matches('/').to_owned();
+        let folder = self.folder(&dir)?;
         let mut books = Vec::new();
-        if let Some(folder) = self.folder(&dir) {
-            let index = self.lib.metadata.read().await;
-            if self.scope.shows_folder(&index, &folder) {
-                let prefix = if folder.is_empty() { String::new() } else { format!("{folder}/") };
-                for book in index.iter() {
-                    for copy in &book.locations {
-                        let Some(file_name) = copy.path.strip_prefix(&prefix) else {
-                            continue;
-                        };
-                        // Books in subfolders belong to that subfolder's listing.
-                        if file_name.contains('/') || !self.scope.allows(&copy.path) {
-                            continue;
-                        }
-                        books.push(ListBooksResponseItem {
-                            id: book.id.clone(),
-                            file_name: file_name.to_owned(),
-                            title: book.title.clone(),
-                            authors: book.authors.clone(),
-                        });
+        let index = self.lib.metadata.read().await;
+        if self.scope.shows_folder(&index, &folder) {
+            let prefix = if folder.is_empty() { String::new() } else { format!("{folder}/") };
+            for book in index.iter() {
+                for copy in &book.locations {
+                    let Some(file_name) = copy.path.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    // Books in subfolders belong to that subfolder's listing.
+                    if file_name.contains('/') || !self.scope.allows(&copy.path) {
+                        continue;
                     }
+                    books.push(ListBooksResponseItem {
+                        id: book.id.clone(),
+                        file_name: file_name.to_owned(),
+                        title: book.title.clone(),
+                        authors: book.authors.clone(),
+                    });
                 }
             }
         }
+        drop(index);
         books.sort_by_cached_key(|b| {
             let title = b.title.as_deref().unwrap_or(&b.file_name).to_lowercase();
             (title, b.file_name.clone())
         });
-        ListBooksResponse {
+        Ok(ListBooksResponse {
             current_directory: dir,
             books,
-        }
+        })
     }
 
-    /// Read from disk rather than the index, so folders without books show too.
-    pub async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
+    /// Read from disk rather than the index, so folders without books show too. A missing or
+    /// hidden folder lists as empty; an unsafe path is `Invalid`.
+    pub async fn list_sub_directories(
+        &self,
+        req: ListDirectoriesRequest,
+    ) -> Result<ListDirectoriesResponse, LibraryError> {
         let dir = req.directory_path.trim_matches('/').to_owned();
-        let mut sub_directories = match self.folder(&dir) {
-            Some(folder) => {
-                let path = PathBuf::from(&folder);
-                match self.lib.with_storage(move |s| s.sub_folders(&path)).await {
-                    Ok(names) => {
-                        let index = self.lib.metadata.read().await;
-                        if self.scope.shows_folder(&index, &folder) {
-                            names
-                                .into_iter()
-                                .filter(|n| self.scope.shows_folder(&index, &join(&folder, n)))
-                                .collect()
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    Err(e) => {
-                        warn!(dir, error = %format!("{e:#}"), "couldn't list folders");
-                        Vec::new()
-                    }
-                }
-            }
-            None => {
-                warn!(dir, "couldn't list folders: unsafe folder path");
-                Vec::new()
-            }
+        let folder = self.folder(&dir)?;
+        let path = PathBuf::from(&folder);
+        let names = self.lib.with_storage(move |s| s.sub_folders(&path)).await?;
+        let index = self.lib.metadata.read().await;
+        let mut sub_directories: Vec<String> = if self.scope.shows_folder(&index, &folder) {
+            names
+                .into_iter()
+                .filter(|n| self.scope.shows_folder(&index, &join(&folder, n)))
+                .collect()
+        } else {
+            Vec::new()
         };
+        drop(index);
         sub_directories.sort_by_cached_key(|d| d.to_lowercase());
-        ListDirectoriesResponse {
+        Ok(ListDirectoriesResponse {
             current_directory: dir,
             sub_directories,
-        }
+        })
     }
 
     pub async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
@@ -221,6 +221,105 @@ impl LibraryView<'_> {
         state.last_book_id = req.last_book_id;
         self.lib.storage.write_state(&req.user, &state).await?;
         Ok(())
+    }
+
+    /// The user's progress for every book they can see, their last book and their settings,
+    /// without their name, so it can be imported as anyone.
+    pub async fn export_user_data(
+        &self,
+        req: ExportUserDataRequest,
+    ) -> Result<UserData, LibraryError> {
+        validate_user(&req.user)?;
+        let mut ids: Vec<String> = self.visible_ids().await.into_iter().collect();
+        ids.sort();
+        let user = req.user.clone();
+        let progress = self
+            .lib
+            .with_storage(move |s| {
+                let mut entries = Vec::new();
+                for id in ids {
+                    match s.book_progress(&id, &user) {
+                        Ok(progress) => {
+                            if let Some(e) = progress.and_then(|p| p.epub_progress) {
+                                entries.push(BookProgressEntry {
+                                    id,
+                                    epub_progress: e.cfi,
+                                });
+                            }
+                        }
+                        Err(e) => warn!(%id, error = %e, "unreadable progress file"),
+                    }
+                }
+                Ok(entries)
+            })
+            .await?;
+        let state = GetStateRequest {
+            user: req.user.clone(),
+        };
+        let last_book_id = self.get_state(state).await?.last_book_id;
+        let config = self.lib.storage.read_config(&req.user).await?;
+        Ok(UserData {
+            version: USER_DATA_VERSION,
+            progress,
+            last_book_id,
+            config: Some(config),
+        })
+    }
+
+    /// Imported progress replaces the user's own; books this view doesn't have are skipped.
+    /// Only ids in the index are written, so none from the file becomes a path.
+    pub async fn import_user_data(
+        &self,
+        req: ImportUserDataRequest,
+    ) -> Result<ImportUserDataResponse, LibraryError> {
+        validate_user(&req.user)?;
+        let data = req.data.unwrap_or_default();
+        if data.version != USER_DATA_VERSION {
+            return Err(LibraryError::Invalid("this isn't a Shelf data export".to_owned()));
+        }
+        let visible = self.visible_ids().await;
+        let total = data.progress.len();
+        let entries: Vec<BookProgressEntry> = data
+            .progress
+            .into_iter()
+            .filter(|e| !e.epub_progress.is_empty() && visible.contains(&e.id))
+            .collect();
+        let books = entries.len();
+
+        let user = req.user.clone();
+        self.lib
+            .with_storage(move |s| {
+                for entry in entries {
+                    let progress = BookProgress {
+                        file_type: book_file_type::Value::Epub as i32,
+                        epub_progress: Some(EpubProgress {
+                            cfi: entry.epub_progress,
+                        }),
+                        user: user.clone(),
+                    };
+                    s.set_book_progress(&entry.id, &user, progress)?;
+                }
+                Ok(())
+            })
+            .await?;
+        if let Some(id) = data.last_book_id
+            && visible.contains(&id)
+        {
+            let mut state = self.lib.storage.read_state(&req.user).await?;
+            state.last_book_id = Some(id);
+            self.lib.storage.write_state(&req.user, &state).await?;
+        }
+        if let Some(config) = data.config {
+            let _guard = self.lib.config_lock.lock().await;
+            self.lib.storage.update_config(&req.user, &config).await?;
+        }
+
+        let skipped = total - books;
+        info!(books, skipped, "imported user data");
+        Ok(ImportUserDataResponse {
+            books: books as u32,
+            skipped: skipped as u32,
+        })
     }
 
     /// A copy of a book already in the library is fine: it becomes another location. Names the
@@ -439,6 +538,15 @@ impl LibraryView<'_> {
         })
     }
 
+    async fn visible_ids(&self) -> HashSet<String> {
+        let index = self.lib.metadata.read().await;
+        index
+            .iter()
+            .filter(|b| self.scope.allows_book(b))
+            .map(|b| b.id.clone())
+            .collect()
+    }
+
     async fn has_book(&self, id: &str) -> bool {
         self.lib
             .metadata
@@ -449,9 +557,9 @@ impl LibraryView<'_> {
     }
 
     /// A folder path from the client as a library path; `None` if it isn't a valid one.
-    fn folder(&self, client: &str) -> Option<String> {
-        let path = folder_path(client).ok()?;
-        Some(self.scope.to_library(&path).to_string_lossy().into_owned())
+    fn folder(&self, client: &str) -> Result<String, LibraryError> {
+        let path = folder_path(client)?;
+        Ok(self.scope.to_library(&path).to_string_lossy().into_owned())
     }
 
     /// Whether `client`, a folder path relative to the user's root, is a folder they can see.
@@ -585,14 +693,111 @@ mod tests {
             .list_books(ListBooksRequest {
                 directory_path: dir.into(),
             })
-            .await;
+            .await
+            .unwrap();
         let folders = view
             .list_sub_directories(ListDirectoriesRequest {
                 directory_path: dir.into(),
             })
-            .await;
+            .await
+            .unwrap();
         let books = books.books.into_iter().map(|b| b.file_name).collect();
         (books, folders.sub_directories)
+    }
+
+    async fn save_progress(view: &LibraryView<'_>, user: &str, contents: &str, cfi: &str) {
+        let req = SetProgressRequest {
+            id: sha1_hex(contents.as_bytes()),
+            epub_progress: Some(cfi.into()),
+            user: user.into(),
+        };
+        view.set_progress(req).await.unwrap();
+    }
+
+    async fn progress_of(view: &LibraryView<'_>, user: &str, contents: &str) -> Option<String> {
+        let req = GetProgressRequest {
+            id: sha1_hex(contents.as_bytes()),
+            user: user.into(),
+        };
+        view.get_progress(req).await.unwrap().epub_progress
+    }
+
+    fn export(user: &str) -> ExportUserDataRequest {
+        ExportUserDataRequest { user: user.into() }
+    }
+
+    fn import(user: &str, data: UserData) -> ImportUserDataRequest {
+        ImportUserDataRequest {
+            user: user.into(),
+            data: Some(data),
+        }
+    }
+
+    #[tokio::test]
+    async fn user_data_moves_to_another_library_as_another_user() {
+        let (_from_root, from) = library(&[("a.epub", "a"), ("b.epub", "b")]).await;
+        let view = from.view(&EVERYTHING);
+        save_progress(&view, "parth", "a", "cfi-a").await;
+        save_progress(&view, "parth", "b", "cfi-b").await;
+        let state = SetStateRequest {
+            last_book_id: Some(sha1_hex(b"a")),
+            user: "parth".into(),
+        };
+        view.set_state(state).await.unwrap();
+        let patch = serde_json::from_str(r#"{ "ui": { "theme": "DARK" } }"#).unwrap();
+        let config = shelf_proto::api::SetConfigRequest {
+            user: "parth".into(),
+            patch: Some(patch),
+        };
+        from.set_config(config).await.unwrap();
+
+        let data = view.export_user_data(export("parth")).await.unwrap();
+        assert_eq!(data.progress.len(), 2);
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(!json.contains("parth"), "{json}");
+
+        // Same `a`, a different `c`, and `kid` already has progress in `a`.
+        let (_to_root, to) = library(&[("other/a.epub", "a"), ("c.epub", "c")]).await;
+        let view = to.view(&EVERYTHING);
+        save_progress(&view, "kid", "a", "old").await;
+        let res = view.import_user_data(import("kid", data)).await.unwrap();
+        assert_eq!((res.books, res.skipped), (1, 1));
+
+        assert_eq!(progress_of(&view, "kid", "a").await.as_deref(), Some("cfi-a"));
+        let state = GetStateRequest { user: "kid".into() };
+        assert_eq!(view.get_state(state).await.unwrap().last_book_id, Some(sha1_hex(b"a")));
+        let config = to.get_config(shelf_proto::api::GetConfigRequest { user: "kid".into() });
+        let config = serde_json::to_value(config.await.unwrap()).unwrap();
+        assert_eq!(config["ui"]["theme"], "DARK");
+    }
+
+    #[tokio::test]
+    async fn user_data_follows_the_scope_both_ways() {
+        let (_root, lib) = library(&[("x.epub", "x"), ("hidden/y.epub", "y")]).await;
+        let everything = lib.view(&EVERYTHING);
+        save_progress(&everything, "a", "x", "cfi-x").await;
+        save_progress(&everything, "a", "y", "cfi-y").await;
+        let scoped = scope("", &["!hidden/**"]);
+        let view = lib.view(&scoped);
+
+        let data = view.export_user_data(export("a")).await.unwrap();
+        let ids: Vec<_> = data.progress.iter().map(|e| e.id.clone()).collect();
+        assert_eq!(ids, [sha1_hex(b"x")]);
+
+        let mut data = everything.export_user_data(export("a")).await.unwrap();
+        data.config = None;
+        let res = view.import_user_data(import("b", data)).await.unwrap();
+        assert_eq!((res.books, res.skipped), (1, 1));
+        assert_eq!(progress_of(&everything, "b", "y").await, None);
+    }
+
+    #[tokio::test]
+    async fn only_version_1_user_data_is_imported() {
+        let (_root, lib) = library(&[("x.epub", "x")]).await;
+        let view = lib.view(&EVERYTHING);
+        let data = UserData::default();
+        let res = view.import_user_data(import("a", data)).await;
+        assert!(matches!(res, Err(LibraryError::Invalid(_))));
     }
 
     fn upload(dir: &str, name: &str) -> UploadEbookRequest {
@@ -617,6 +822,15 @@ mod tests {
         assert_eq!(names(&view, "").await, (vec!["a.epub".into()], vec!["sub".into()]));
         assert_eq!(names(&view, "sub").await, (vec!["c.epub".into()], vec![]));
         assert_eq!(names(&view, "scary").await, (vec![], vec![]));
+        let unsafe_dir = ListBooksRequest {
+            directory_path: "../other".into(),
+        };
+        assert!(matches!(view.list_books(unsafe_dir).await, Err(LibraryError::Invalid(_))));
+        let unsafe_dir = ListDirectoriesRequest {
+            directory_path: "a/../..".into(),
+        };
+        let folders = view.list_sub_directories(unsafe_dir).await;
+        assert!(matches!(folders, Err(LibraryError::Invalid(_))));
 
         let hidden = sha1_hex(b"b");
         assert!(matches!(view.get_book(&hidden).await, Err(LibraryError::NotFound)));

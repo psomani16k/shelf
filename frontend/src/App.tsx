@@ -9,7 +9,7 @@ import { useSignedOut } from "@/lib/session"
 import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { useSystemInsets } from "@/lib/useSystemInsets"
 import { Home } from "@/screens/Home"
-import { Login } from "@/screens/Login"
+import { ChooseReader, Login } from "@/screens/Login"
 import { OpenFailed } from "@/screens/OpenFailed"
 import { PickLibrary } from "@/screens/PickLibrary"
 import { Syncing } from "@/screens/Syncing"
@@ -69,8 +69,8 @@ function AppFlow() {
   if (open.isError) {
     return <OpenFailed library={current} error={open.error} onRetry={() => void open.refetch()} />
   }
-  if (current.kind === "remote" && (!current.signed_in || signedOut)) {
-    return <Login library={current} />
+  if (!current.signed_in || signedOut) {
+    return current.kind === "local" ? <ChooseReader library={current} /> : <Login library={current} />
   }
   return (
     // In memory, and keyed, so each library starts at "/" and no URL survives a switch.

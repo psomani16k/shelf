@@ -28,8 +28,8 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 
 ### App, local libraries
 
-- [ ] Ask for the username to use (stored as the entry's `user` in `AppData` and used by `LocalLibrary` already, always `default` today) when adding it, from the names that already have progress or typed in. No password and no role: every feature is available. Existing entries get asked once on open.
-- [ ] Show the current user in the library slideover too; changing a local library's user is allowed (it's not a security boundary).
+- [x] A local library asks who's reading (a name, no password, no role or scope) and reads as them; *Settings → Account → Switch user* asks again ([app.md](app.md)).
+- [x] Export and import a user's data (progress, last book, settings), with no username in the file, so a library can move between a device and a server both ways (*Settings → Library*; [api.md](api.md)).
 
 ## Server
 
@@ -53,7 +53,7 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 - [ ] **Stream uploads to disk** instead of holding the whole book in memory, on the server and in the app.
 - [ ] **Extraction concurrency:** measure the startup sync's two jobs per CPU against one (32 vs 16 on a 16-thread machine, and up to that many books in memory) and keep whichever is faster. Then share one cap (a `Semaphore` in `BookLibrary`) between the startup sync, *Rebuild index* and the watcher, which today each cap themselves.
 - [ ] **Wire up S3 libraries.** `S3LibraryStorage` is written and tested but unused. Left: a dispatch enum over the storage backends (the trait returns `impl Future`, so no `dyn`), used by `BookLibrary`, `EbookExtractor`, `IndexSync` and `sync_library`; `BookLibrary::open` skipping the watcher for S3; and configuration (server env var, maybe an app library kind).
-- [ ] Make `list_books` / `list_sub_directories` fallible in the `Library` trait, so a remote library's network errors show as errors, not an empty folder.
+- [x] Make `list_books` / `list_sub_directories` fallible in the `Library` trait, so a remote library's network errors show as errors, not an empty folder.
 - [x] Move rayon work onto tokio (`spawn_blocking`), per the "tokio everywhere" rule. Done: the startup sync uses `shelf_utility::routines::transform_concurrent_blocking`, and rayon is out of the workspace.
 - [ ] Fixture-based tests with 2–3 small public-domain EPUBs (one without a cover): extraction, ID stability across renames, progress round-trips, the watcher with `start_paused` (M1). Also each step of `find_cover` (a declared cover, the `cover` item's page, a `<meta>` holding a path, the landmarks page) and a cover that can't be decoded; tiny EPUBs built in memory with the `zip` crate as a dev-dependency would do.
 - [ ] Report to rbook: a `<creator xmlns="http://purl.org/dc/elements/1.1/">` (the Dublin Core namespace without the `dc:` prefix) isn't read as an author (seen in *PoC or GTFO, Volume 2*).
@@ -66,7 +66,8 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 - [x] **Multiple libraries** in the UI: named libraries, a switcher in the library slideover, add/remove in Settings ([frontend.md](frontend.md#libraries-libuseapplibraryts)).
 - [x] **Android back button**: closes the open drawer or settings first ([frontend.md](frontend.md#android-back-button-libbackbuttonts)).
 - [ ] **Offline reading in Remote mode** (M9): books and covers are already cached after download; still needed are offline listings and queued progress writes.
-- [ ] Remote cache housekeeping: evict old files, delete the cache when a library is removed, an overall request timeout.
+- [ ] Remote cache housekeeping: evict old files, delete the cache when a library is removed.
+- [x] Remote: an overall timeout for JSON calls (30 s), and an access check before opening a cached book ([app.md](app.md)).
 - [ ] Device name setting (default hostname, or "android"), used for the progress `device` field below.
 
 ## Reading and library UI

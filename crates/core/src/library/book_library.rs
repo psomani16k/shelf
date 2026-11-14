@@ -6,6 +6,7 @@ use bytes::Bytes;
 use shelf_proto::{
     api::{
         CleanUpProgressResponse, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
@@ -30,7 +31,7 @@ pub struct BookLibrary {
     pub(super) storage: LocalLibraryStorage,
     pub(super) metadata: Arc<RwLock<Vec<BookMetadata>>>,
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
-    config_lock: Mutex<()>,
+    pub(super) config_lock: Mutex<()>,
     // Uploads, new folders and deletes check what's on disk, then change it.
     pub(super) files_lock: Mutex<()>,
     // Watcher jobs hold it to read and a rebuild to write, so a rebuild never interleaves with
@@ -107,12 +108,22 @@ impl BookLibrary {
     }
 }
 
+impl BookLibrary {
+    /// The users with data in `.shelf/users/`, sorted; what a local library offers to sign in as.
+    pub async fn user_names(&self) -> Result<Vec<String>> {
+        self.with_storage(|s| s.user_names()).await
+    }
+}
+
 impl Library for BookLibrary {
-    async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
+    async fn list_books(&self, req: ListBooksRequest) -> Result<ListBooksResponse, LibraryError> {
         self.view(&EVERYTHING).list_books(req).await
     }
 
-    async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
+    async fn list_sub_directories(
+        &self,
+        req: ListDirectoriesRequest,
+    ) -> Result<ListDirectoriesResponse, LibraryError> {
         self.view(&EVERYTHING).list_sub_directories(req).await
     }
 
@@ -153,6 +164,17 @@ impl Library for BookLibrary {
         let patch = req.patch.unwrap_or_default();
         let _guard = self.config_lock.lock().await;
         Ok(self.storage.update_config(&req.user, &patch).await?)
+    }
+
+    async fn export_user_data(&self, req: ExportUserDataRequest) -> Result<UserData, LibraryError> {
+        self.view(&EVERYTHING).export_user_data(req).await
+    }
+
+    async fn import_user_data(
+        &self,
+        req: ImportUserDataRequest,
+    ) -> Result<ImportUserDataResponse, LibraryError> {
+        self.view(&EVERYTHING).import_user_data(req).await
     }
 
     /// Waits for uploads, deletes and watcher jobs, so none of them interleaves with it.

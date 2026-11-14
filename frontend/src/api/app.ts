@@ -8,8 +8,10 @@ export type LibraryInfo = {
   kind: "local" | "remote"
   /** The folder for a local library, the server URL for a remote one. */
   location: string
-  /** Whether a remote library has a login key; always true for a local one. */
+  /** Whether a remote library has a login key, or a local one has a chosen user. */
   signed_in: boolean
+  /** Local only: who reads it on this device, once chosen. */
+  user?: string
 }
 
 export type Libraries = {
@@ -19,6 +21,9 @@ export type Libraries = {
 }
 
 export const listLibraries = () => invokeCommand<Libraries>("list_libraries")
+
+/** The users with data in the open local library, sorted, to choose who's reading. */
+export const listLocalUsers = () => invokeCommand<string[]>("list_local_users")
 
 /** Names are required and unique (ignoring case); a bad one rejects with a 400. */
 export const addLocalLibrary = (name: string, path: string) =>
@@ -98,6 +103,10 @@ export const saveLogs = () => invokeCommand<boolean>("save_logs")
 
 /** Asks where to save, then copies that one log file there. `false` if cancelled. */
 export const saveLogFile = (name: string) => invokeCommand<boolean>("save_log_file", { name })
+
+/** Asks where to save, then writes `contents` there as `name`. `false` if cancelled. */
+export const saveJsonFile = (name: string, contents: string) =>
+  invokeCommand<boolean>("save_json_file", { name, contents })
 
 /** The watcher synced a book. Returns the unsubscribe function. */
 export function onLibraryChanged(callback: () => void): () => void {

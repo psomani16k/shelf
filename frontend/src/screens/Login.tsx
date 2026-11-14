@@ -1,13 +1,13 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { ApiError, login, signUp } from "@/api"
-import type { LibraryInfo } from "@/api/app"
+import { type LibraryInfo, listLocalUsers } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
 import { LibrarySwitcher } from "@/components/LibrarySwitcher"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { IS_TAURI } from "@/lib/platform"
-import { resetLibraryCache, useLibraries } from "@/lib/useAppLibrary"
+import { resetLibraryCache, resetUserCache, useLibraries } from "@/lib/useAppLibrary"
 
 /**
  * Shown with no key or after a 401, with a mode for asking for an account. In the app, `library`
@@ -141,6 +141,75 @@ export function Login({ library }: { library?: LibraryInfo }) {
         </Button>
       </form>
       {library && <OtherLibraries />}
+    </CenteredScreen>
+  )
+}
+
+/**
+ * App only: who reads a local library on this device. A name alone, with no password: whoever
+ * has the device has the folder anyway.
+ */
+export function ChooseReader({ library }: { library: LibraryInfo }) {
+  const queryClient = useQueryClient()
+  const [username, setUsername] = useState("")
+  const names = useQuery({ queryKey: ["local-users", library.name], queryFn: listLocalUsers })
+  const choose = useMutation({
+    mutationFn: (name: string) => login(name, ""),
+    onSuccess: () => resetUserCache(queryClient),
+  })
+  // Usernames are lowercase; phone keyboards capitalise the first letter.
+  const name = username.trim().toLowerCase()
+  const known = names.data ?? []
+
+  return (
+    <CenteredScreen>
+      <form
+        className="flex w-full max-w-xs flex-col gap-3 text-left"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (name && !choose.isPending) choose.mutate(name)
+        }}
+      >
+        <div className="mb-2 text-center">
+          <h1 className="text-lg font-medium">Who's reading?</h1>
+          <p className="truncate text-sm text-muted-foreground">
+            {library.name} ({library.location})
+          </p>
+        </div>
+        {known.map((known) => (
+          <Button
+            key={known}
+            type="button"
+            variant="outline"
+            onClick={() => choose.mutate(known)}
+            disabled={choose.isPending}
+          >
+            {known}
+          </Button>
+        ))}
+        {known.length > 0 && (
+          <p className="text-center text-sm text-muted-foreground">or someone new:</p>
+        )}
+        <Input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Name"
+          aria-label="Name"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+        <p className="text-sm text-muted-foreground">
+          Progress, the last book and settings are kept under this name. Use your account's name
+          on a Shelf server, and they stay yours if this folder moves there.
+        </p>
+        {choose.error && <p className="text-sm text-destructive">{choose.error.message}</p>}
+        <Button type="submit" disabled={!name || choose.isPending}>
+          Continue
+        </Button>
+      </form>
+      <OtherLibraries />
     </CenteredScreen>
   )
 }

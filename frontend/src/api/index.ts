@@ -18,6 +18,8 @@ export const {
   setState,
   getConfig,
   setConfig,
+  exportUserData,
+  importUserData,
   rebuildIndex,
   cleanUpProgress,
   getCover,
