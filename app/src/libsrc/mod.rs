@@ -8,6 +8,7 @@ use shelf_core::{
 use shelf_proto::{
     api::{
         CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
+        ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
@@ -43,7 +44,7 @@ impl LibrarySource {
     /// A local library has no accounts, so it counts as signed in.
     pub fn signed_in(&self) -> bool {
         match self {
-            Self::Local(_) => true,
+            Self::Local(builder) => builder.user().is_some(),
             Self::Remote(builder) => builder.signed_in(),
         }
     }
@@ -71,6 +72,13 @@ impl AnyLibrary {
             Self::Remote(lib) => Some(lib),
         }
     }
+
+    pub fn local(&self) -> Option<&LocalLibrary> {
+        match self {
+            Self::Local(lib) => Some(lib),
+            Self::Remote(_) => None,
+        }
+    }
 }
 
 macro_rules! dispatch {
@@ -83,11 +91,14 @@ macro_rules! dispatch {
 }
 
 impl Library for AnyLibrary {
-    async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
+    async fn list_books(&self, req: ListBooksRequest) -> Result<ListBooksResponse, LibraryError> {
         dispatch!(self, lib => lib.list_books(req).await)
     }
 
-    async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
+    async fn list_sub_directories(
+        &self,
+        req: ListDirectoriesRequest,
+    ) -> Result<ListDirectoriesResponse, LibraryError> {
         dispatch!(self, lib => lib.list_sub_directories(req).await)
     }
 
@@ -124,6 +135,17 @@ impl Library for AnyLibrary {
 
     async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
         dispatch!(self, lib => lib.set_config(req).await)
+    }
+
+    async fn export_user_data(&self, req: ExportUserDataRequest) -> Result<UserData, LibraryError> {
+        dispatch!(self, lib => lib.export_user_data(req).await)
+    }
+
+    async fn import_user_data(
+        &self,
+        req: ImportUserDataRequest,
+    ) -> Result<ImportUserDataResponse, LibraryError> {
+        dispatch!(self, lib => lib.import_user_data(req).await)
     }
 
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {

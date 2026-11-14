@@ -15,7 +15,8 @@ use shelf_proto::{
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        LoginRequest, UploadEbookRequest, UploadEbookResponse, User,
+        LoginRequest, UploadEbookRequest, UploadEbookResponse, User, ExportUserDataRequest,
+        ImportUserDataRequest, ImportUserDataResponse, UserData, role::Value as Role,
     },
     config::Config,
 };
@@ -26,6 +27,7 @@ use tauri_plugin_http::reqwest::Url;
 use crate::{
     app_data::validate_name,
     error::CommandError,
+    logging::save_with_picker,
     libsrc::{
         AnyLibrary, LibrarySource, app_library::AppLibrary, local::LocalLibraryBuilder,
         remote::{RemoteLibrary, RemoteLibraryBuilder},
@@ -42,8 +44,11 @@ pub struct LibraryInfo {
     kind: &'static str,
     /// The folder for a local library, the server URL for a remote one.
     location: String,
-    /// Whether a remote library has a login key; a local one has no accounts and is always true.
+    /// Whether a remote library has a login key, or a local one has a chosen user.
     signed_in: bool,
+    /// Who reads a local library on this device; never set for a remote one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
 }
 
 impl From<&LibrarySource> for LibraryInfo {
@@ -55,12 +60,14 @@ impl From<&LibrarySource> for LibraryInfo {
                 kind: "local",
                 location: b.root().to_owned(),
                 signed_in,
+                user: b.user().map(str::to_owned),
             },
             LibrarySource::Remote(b) => Self {
                 name: b.name().to_owned(),
                 kind: "remote",
                 location: b.base_url().to_owned(),
                 signed_in,
+                user: None,
             },
         }
     }
@@ -229,10 +236,22 @@ fn remote(library: &AnyLibrary) -> Result<&RemoteLibrary> {
     })
 }
 
-/// Signs in to the open remote library and keeps the key, so this device stays signed in.
+/// Signs in to the open remote library and keeps the key, so this device stays signed in. A local
+/// library takes the username alone, with no password, and reads as that user from now on.
 #[tauri::command]
 pub async fn login(app: AppHandle, state: State<'_, AppState>, req: LoginRequest) -> Result<User> {
     let library = state.library().await?;
+    if let Some(local) = library.local() {
+        local.set_user(Some(req.username.clone())).await?;
+        let mut data = state.data.lock().await;
+        data.set_local_user(&library.get_name(), Some(req.username.clone()))?;
+        data.save(&app)?;
+        tracing::info!("local library user chosen");
+        return Ok(User {
+            username: req.username,
+            role: Role::Owner as i32,
+        });
+    }
     let res = remote(&library)?.login(&req).await?;
     let mut data = state.data.lock().await;
     data.set_remote_token(&library.get_name(), Some(res.token))?;
@@ -240,10 +259,18 @@ pub async fn login(app: AppHandle, state: State<'_, AppState>, req: LoginRequest
     Ok(res.user.unwrap_or_default())
 }
 
-/// Forgets the key on this device even if the server can't be reached.
+/// Forgets the key on this device even if the server can't be reached. For a local library, forgets
+/// who's reading, so the next open asks again.
 #[tauri::command]
 pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
     let library = state.library().await?;
+    if let Some(local) = library.local() {
+        local.set_user(None).await?;
+        let mut data = state.data.lock().await;
+        data.set_local_user(&library.get_name(), None)?;
+        data.save(&app)?;
+        return Ok(());
+    }
     if let Err(e) = remote(&library)?.logout().await {
         tracing::warn!(error = ?e, "couldn't sign out on the server");
     }
@@ -253,7 +280,17 @@ pub async fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
-/// The signed-in user; `None` for a local library.
+/// The users with data in the open local library, to choose who's reading.
+#[tauri::command]
+pub async fn list_local_users(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let library = state.library().await?;
+    let local = library.local().ok_or_else(|| {
+        CommandError::from(LibraryError::Invalid("this isn't a local library".to_owned()))
+    })?;
+    Ok(local.user_names().await?)
+}
+
+/// The signed-in user; `None` for a local library, which has no accounts or roles.
 #[tauri::command]
 pub async fn me(state: State<'_, AppState>) -> Result<Option<User>> {
     let library = state.library().await?;
@@ -335,7 +372,7 @@ pub async fn list_books(
     state: State<'_, AppState>,
     req: ListBooksRequest,
 ) -> Result<ListBooksResponse> {
-    Ok(state.library().await?.list_books(req).await)
+    Ok(state.library().await?.list_books(req).await?)
 }
 
 #[tauri::command]
@@ -343,7 +380,7 @@ pub async fn list_directories(
     state: State<'_, AppState>,
     req: ListDirectoriesRequest,
 ) -> Result<ListDirectoriesResponse> {
-    Ok(state.library().await?.list_sub_directories(req).await)
+    Ok(state.library().await?.list_sub_directories(req).await?)
 }
 
 #[tauri::command]
@@ -380,6 +417,29 @@ pub async fn get_config(state: State<'_, AppState>, req: GetConfigRequest) -> Re
 #[tauri::command]
 pub async fn set_config(state: State<'_, AppState>, req: SetConfigRequest) -> Result<Config> {
     Ok(state.library().await?.set_config(req).await?)
+}
+
+/// The signed-in user's data (a local library's chosen reader), without their name.
+#[tauri::command]
+pub async fn export_user_data(
+    state: State<'_, AppState>,
+    req: ExportUserDataRequest,
+) -> Result<UserData> {
+    Ok(state.library().await?.export_user_data(req).await?)
+}
+
+#[tauri::command]
+pub async fn import_user_data(
+    state: State<'_, AppState>,
+    req: ImportUserDataRequest,
+) -> Result<ImportUserDataResponse> {
+    Ok(state.library().await?.import_user_data(req).await?)
+}
+
+/// Asks where to save, then writes `contents` there. `false` if the user cancelled.
+#[tauri::command]
+pub async fn save_json_file(app: AppHandle, name: String, contents: String) -> Result<bool> {
+    save_with_picker(app, &name, ("JSON files", &["json"]), move || Ok(contents.into_bytes())).await
 }
 
 /// Takes as long as hashing every book: for a local library, every file is read.

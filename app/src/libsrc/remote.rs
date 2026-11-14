@@ -20,6 +20,7 @@ use shelf_proto::{
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexRequest, CleanUpProgressRequest, CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
         LoginRequest, LoginResponse, LogoutRequest, UploadEbookRequest, UploadEbookResponse, User,
+        ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
     },
     config::Config,
 };
@@ -28,6 +29,9 @@ use tokio::{fs, io::AsyncWriteExt, sync::RwLock};
 use tracing::warn;
 
 use crate::libsrc::{LibrarySource, app_library::AppLibrary};
+
+/// For JSON calls. Uploads, downloads and the whole-library jobs have none: they can take minutes.
+const API_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct RemoteLibraryBuilder {
@@ -122,15 +126,27 @@ impl RemoteLibrary {
         }
     }
 
-    /// POSTs `req` as JSON to `/api{path}` and decodes the JSON reply.
+    /// POSTs `req` as JSON to `/api{path}` and decodes the JSON reply, within `API_TIMEOUT`.
     async fn api_call<S: Serialize, T: DeserializeOwned>(&self, req: &S, path: &str) -> Result<T> {
+        self.post_json(req, path, Some(API_TIMEOUT)).await
+    }
+
+    async fn post_json<S: Serialize, T: DeserializeOwned>(
+        &self,
+        req: &S,
+        path: &str,
+        timeout: Option<Duration>,
+    ) -> Result<T> {
         let url = format!("{}/api{path}", self.base_url);
         let body = serde_json::to_vec(req).context("couldn't encode the request")?;
-        let request = self
+        let mut request = self
             .client
             .post(&url)
             .header(header::CONTENT_TYPE, "application/json")
             .body(body);
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
         self.send(request, &url).await
     }
 
@@ -144,18 +160,15 @@ impl RemoteLibrary {
             .await
             .with_context(|| format!("{url} failed"))?;
 
-        let status = response.status();
+        if !response.status().is_success() {
+            let error = status_error(response).await;
+            let context = format!("{url}: {}", error.message);
+            return Err(error).context(context);
+        }
         let bytes = response
             .bytes()
             .await
             .with_context(|| format!("{url}: couldn't read the response"))?;
-        if !status.is_success() {
-            let message = serde_json::from_slice::<ApiError>(&bytes)
-                .map(|e| e.message)
-                .unwrap_or_else(|_| status.canonical_reason().unwrap_or("error").to_owned());
-            let context = format!("{url}: {message}");
-            return Err(HttpStatus { status, message }).context(context);
-        }
         // A 204 has no body; `null` decodes to `()` for the set_* calls.
         let json = if bytes.is_empty() {
             b"null"
@@ -167,7 +180,8 @@ impl RemoteLibrary {
     }
 
     /// GETs `/api/books/{id}/{kind}` into the cache once; ids are content hashes, so a cached file
-    /// never goes stale.
+    /// never goes stale. A cached book is only used after the server says the user may still open
+    /// it (`check_access`).
     async fn cached_file(&self, id: &str, kind: &str, ext: &str) -> Result<PathBuf> {
         // The id becomes a file name, so a server can't send `../` and write outside the cache.
         ensure!(
@@ -176,24 +190,23 @@ impl RemoteLibrary {
         );
         let dir = self.cache_dir.join(kind);
         let path = dir.join(format!("{id}.{ext}"));
+        let url = format!("{}/api/books/{id}/{kind}", self.base_url);
         if fs::try_exists(&path).await? {
+            // A cover's id only comes from a listing the server already filtered.
+            if kind == "file" {
+                self.check_access(&url).await?;
+            }
             return Ok(path);
         }
 
-        let url = format!("{}/api/books/{id}/{kind}", self.base_url);
         let response = self
             .authorized(self.client.get(&url))
             .await
             .send()
             .await
             .with_context(|| format!("GET {url} failed"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let bytes = response.bytes().await.unwrap_or_default();
-            let message = serde_json::from_slice::<ApiError>(&bytes)
-                .map(|e| e.message)
-                .unwrap_or_default();
-            return Err(HttpStatus { status, message }).context(format!("GET {url} failed"));
+        if !response.status().is_success() {
+            return Err(status_error(response).await).context(format!("GET {url} failed"));
         }
 
         fs::create_dir_all(&dir).await?;
@@ -205,6 +218,38 @@ impl RemoteLibrary {
         fs::rename(&tmp, &path).await?;
         Ok(path)
     }
+
+    /// The cache is shared by every account on this server and scopes change, so a HEAD asks
+    /// whether this user may still open the book. If the server can't be reached or fails
+    /// (5xx), the cached copy is used.
+    async fn check_access(&self, url: &str) -> Result<()> {
+        let request = self.authorized(self.client.head(url).timeout(API_TIMEOUT)).await;
+        match request.send().await {
+            Ok(response) if response.status().is_client_error() => {
+                Err(status_error(response).await).context(format!("HEAD {url} failed"))
+            }
+            Ok(response) => {
+                if !response.status().is_success() {
+                    warn!(status = %response.status(), "server error; opening the cached book");
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!(error = %e, "couldn't reach the server; opening the cached book");
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A failed response as an `HttpStatus`, with the server's message when the body has one.
+async fn status_error(response: Response) -> HttpStatus {
+    let status = response.status();
+    let bytes = response.bytes().await.unwrap_or_default();
+    let message = serde_json::from_slice::<ApiError>(&bytes)
+        .map(|e| e.message)
+        .unwrap_or_else(|_| status.canonical_reason().unwrap_or("error").to_owned());
+    HttpStatus { status, message }
 }
 
 /// Signing in to the server. Not `Library` operations: a local library has no accounts.
@@ -321,30 +366,19 @@ fn to_library_error(e: anyhow::Error) -> LibraryError {
 }
 
 impl Library for RemoteLibrary {
-    async fn list_books(&self, req: ListBooksRequest) -> ListBooksResponse {
-        let directory = req.directory_path.clone();
+    async fn list_books(&self, req: ListBooksRequest) -> Result<ListBooksResponse, LibraryError> {
         self.api_call(&req, "/books/list")
             .await
-            .unwrap_or_else(|e| {
-                warn!(error = %format!("{e:#}"), "couldn't list books");
-                ListBooksResponse {
-                    current_directory: directory,
-                    books: Vec::new(),
-                }
-            })
+            .map_err(to_library_error)
     }
 
-    async fn list_sub_directories(&self, req: ListDirectoriesRequest) -> ListDirectoriesResponse {
-        let directory = req.directory_path.clone();
+    async fn list_sub_directories(
+        &self,
+        req: ListDirectoriesRequest,
+    ) -> Result<ListDirectoriesResponse, LibraryError> {
         self.api_call(&req, "/directories/list")
             .await
-            .unwrap_or_else(|e| {
-                warn!(error = %format!("{e:#}"), "couldn't list directories");
-                ListDirectoriesResponse {
-                    current_directory: directory,
-                    sub_directories: Vec::new(),
-                }
-            })
+            .map_err(to_library_error)
     }
 
     async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
@@ -400,15 +434,30 @@ impl Library for RemoteLibrary {
             .map_err(to_library_error)
     }
 
+    async fn export_user_data(&self, req: ExportUserDataRequest) -> Result<UserData, LibraryError> {
+        self.api_call(&req, "/user-data/export")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn import_user_data(
+        &self,
+        req: ImportUserDataRequest,
+    ) -> Result<ImportUserDataResponse, LibraryError> {
+        self.api_call(&req, "/user-data/import")
+            .await
+            .map_err(to_library_error)
+    }
+
     /// The server rebuilds its own index; nothing here is cached by path.
     async fn rebuild_index(&self) -> Result<RebuildIndexResponse, LibraryError> {
-        self.api_call(&RebuildIndexRequest {}, "/library/rebuild")
+        self.post_json(&RebuildIndexRequest {}, "/library/rebuild", None)
             .await
             .map_err(to_library_error)
     }
 
     async fn clean_up_progress(&self) -> Result<CleanUpProgressResponse, LibraryError> {
-        self.api_call(&CleanUpProgressRequest {}, "/library/progress/clean")
+        self.post_json(&CleanUpProgressRequest {}, "/library/progress/clean", None)
             .await
             .map_err(to_library_error)
     }

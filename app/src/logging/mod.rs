@@ -199,12 +199,14 @@ pub async fn copy_logs(app: AppHandle, files: State<'_, Arc<LogFiles>>) -> Resul
     Ok(())
 }
 
+const LOG_FILTER: (&str, &[&str]) = ("Log files", &["log"]);
+
 /// Asks where to save, then writes every log file into one. `false` if the user cancelled.
 #[tauri::command]
 pub async fn save_logs(app: AppHandle, files: State<'_, Arc<LogFiles>>) -> Result<bool> {
     let files = files.inner().clone();
     let name = format!("shelf-logs-{}.log", Time::now());
-    save_with_picker(app, &name, move || {
+    save_with_picker(app, &name, LOG_FILTER, move || {
         files.read_all().context("couldn't read the logs")
     })
     .await
@@ -222,7 +224,7 @@ pub async fn save_log_file(
     }
     let files = files.inner().clone();
     let suggested = name.clone();
-    save_with_picker(app, &suggested, move || {
+    save_with_picker(app, &suggested, LOG_FILTER, move || {
         files
             .read(&name)
             .with_context(|| format!("couldn't read {name}"))
@@ -230,11 +232,13 @@ pub async fn save_log_file(
     .await
 }
 
-/// The system save picker, then `contents` written to the chosen file. Reading happens after
-/// the picker closes, so a saved log includes everything up to that moment.
-async fn save_with_picker(
+/// The system save picker, offering `filter` (a name and extensions), then `contents` written to
+/// the chosen file. Reading happens after the picker closes, so a saved log includes everything
+/// up to that moment. `false` if the user cancelled.
+pub(crate) async fn save_with_picker(
     app: AppHandle,
     suggested_name: &str,
+    filter: (&str, &[&str]),
     contents: impl FnOnce() -> anyhow::Result<Vec<u8>> + Send + 'static,
 ) -> Result<bool> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -242,7 +246,7 @@ async fn save_with_picker(
         .file()
         // Colons aren't allowed in names on Android's shared storage.
         .set_file_name(suggested_name.replace(':', ""))
-        .add_filter("Log files", &["log"])
+        .add_filter(filter.0, filter.1)
         .save_file(move |path| {
             let _ = tx.send(path);
         });

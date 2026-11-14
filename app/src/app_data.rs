@@ -133,6 +133,16 @@ impl AppData {
         Ok(())
     }
 
+    /// Who reads a local library on this device; `None` asks again on the next open.
+    pub fn set_local_user(&mut self, name: &str, user: Option<String>) -> Result<()> {
+        match self.libraries.iter_mut().find(|l| l.name() == name) {
+            Some(LibrarySource::Local(builder)) => builder.set_user(user),
+            Some(LibrarySource::Remote(_)) => bail!("{name} is a remote library; sign in instead"),
+            None => bail!("there's no library called {name}"),
+        }
+        Ok(())
+    }
+
     pub fn log_files(&self) -> u32 {
         self.log_files
     }
