@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
-import { getConfig } from "@/api"
+import { getConfig, setConfig } from "@/api"
 import { type Appearance, resolveAppearance } from "@/lib/appearance"
 import { LIBRARY_CONFIG_KEY } from "@/lib/queryKeys"
 import { useMediaQuery } from "@/lib/useMediaQuery"
@@ -12,6 +12,15 @@ export function useLibraryConfig() {
     queryFn: getConfig,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+  })
+}
+
+/** Saves a partial config and puts the merged result in the cache. */
+export function useSetConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setConfig,
+    onSuccess: (updated) => queryClient.setQueryData(LIBRARY_CONFIG_KEY, updated),
   })
 }
 

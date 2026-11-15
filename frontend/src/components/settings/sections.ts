@@ -65,39 +65,40 @@ const MARGIN_CHOICES = [
 const scrolled = (c: Config) =>
   (c.reader?.flow ?? ReaderFlow_Value.SCROLLED) === ReaderFlow_Value.SCROLLED
 
+/** Also in the reader's *Aa* popup. */
+export const READER_FLOW: Setting = {
+  id: "reader.flow",
+  label: "Layout",
+  description: "Scroll through a chapter, or turn it page by page.",
+  choices: [
+    { value: ReaderFlow_Value.SCROLLED, label: "Scrolled" },
+    { value: ReaderFlow_Value.PAGINATED, label: "Paginated" },
+  ],
+  read: (c) => c.reader?.flow,
+  patch: (flow) => ({ reader: { flow } }),
+}
+
+/** Also in the reader's *Aa* popup. */
+export const READER_THEME: Setting = {
+  id: "reader.theme",
+  label: "Theme",
+  description: "Colours of the book's pages.",
+  choices: [
+    { value: ReaderTheme_Value.MATCH_UI, label: "Match interface" },
+    { value: ReaderTheme_Value.LIGHT, label: "Light" },
+    { value: ReaderTheme_Value.DARK, label: "Dark" },
+  ],
+  read: (c) => c.reader?.theme,
+  patch: (theme) => ({ reader: { theme } }),
+}
+
 const SECTIONS: Section[] = [
   {
     slug: "reader",
     label: "Reader",
     icon: BookOpen,
     groups: [
-      {
-        settings: [
-          {
-            id: "reader.flow",
-            label: "Layout",
-            description: "Scroll through a chapter, or turn it page by page.",
-            choices: [
-              { value: ReaderFlow_Value.SCROLLED, label: "Scrolled" },
-              { value: ReaderFlow_Value.PAGINATED, label: "Paginated" },
-            ],
-            read: (c) => c.reader?.flow,
-            patch: (flow) => ({ reader: { flow } }),
-          },
-          {
-            id: "reader.theme",
-            label: "Theme",
-            description: "Colours of the book's pages.",
-            choices: [
-              { value: ReaderTheme_Value.MATCH_UI, label: "Match interface" },
-              { value: ReaderTheme_Value.LIGHT, label: "Light" },
-              { value: ReaderTheme_Value.DARK, label: "Dark" },
-            ],
-            read: (c) => c.reader?.theme,
-            patch: (theme) => ({ reader: { theme } }),
-          },
-        ],
-      },
+      { settings: [READER_FLOW, READER_THEME] },
       {
         label: "Margins",
         settings: [

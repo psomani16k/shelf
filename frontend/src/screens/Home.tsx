@@ -142,6 +142,9 @@ export function Home() {
               }}
               onLocation={setTocId}
               onOpenLibrary={openLibrary}
+              onOpenSettings={() =>
+                void navigate(`${SETTINGS_PATH}/reader`, { state: { depth: 1 } })
+              }
               bars={bars}
               onBarsChange={setBars}
             />

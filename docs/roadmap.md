@@ -91,7 +91,7 @@ Built today: interface theme (system/light/dark), reader theme (match interface/
   - line height and paragraph spacing;
   - justification and hyphenation;
   - a *Use publisher's styles* toggle: off overrides the book's fonts and spacing, on leaves them alone.
-- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* popup has zoom (per device, `lib/readerZoom.ts`).
+- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* popup (`components/ReaderQuickSettings.tsx`) has zoom (per device, `lib/readerZoom.ts`), theme and layout; font and size come with *Typography*.
 - [ ] **Dark-theme images**: an option to dim images in dark themes, so a white illustration doesn't flash.
 - [ ] **Interface accent colour**, and an interface theme that follows the reader theme (so sepia reading gets a matching drawer and settings).
 - [ ] App only: **keep the screen on** while reading.

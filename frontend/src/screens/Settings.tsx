@@ -1,16 +1,13 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, ChevronRight, LoaderCircle, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Navigate, useLocation, useNavigate, useParams } from "react-router"
-import { setConfig } from "@/api"
 import { ScreenHeader } from "@/components/ScreenHeader"
 import { ChoiceRow } from "@/components/settings/ChoiceRow"
 import { type Group, type Section, useVisibleSections } from "@/components/settings/sections"
 import { SettingsGroup } from "@/components/settings/SettingsGroup"
 import { Button } from "@/components/ui/button"
 import { useBackButton } from "@/lib/backButton"
-import { LIBRARY_CONFIG_KEY } from "@/lib/queryKeys"
-import { useLibraryConfig } from "@/lib/useAppearance"
+import { useLibraryConfig, useSetConfig } from "@/lib/useAppearance"
 import { useLatest } from "@/lib/useLatest"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { cn } from "cn"
@@ -146,12 +143,8 @@ export function Settings() {
 
 /** The user's own settings, stored in the library (`users/<user>/config.json`), one `Select` each. */
 function ConfigSettings({ groups }: { groups: Group[] }) {
-  const queryClient = useQueryClient()
   const config = useLibraryConfig()
-  const save = useMutation({
-    mutationFn: setConfig,
-    onSuccess: (updated) => queryClient.setQueryData(LIBRARY_CONFIG_KEY, updated),
-  })
+  const save = useSetConfig()
 
   if (config.isPending) {
     return <LoaderCircle className="mx-auto mt-8 size-6 animate-spin text-muted-foreground" />

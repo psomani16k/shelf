@@ -1,26 +1,18 @@
 import { useQuery } from "@tanstack/react-query"
 import type { Renderer, TocItem, View } from "foliate-js/view.js"
-import {
-  ALargeSmall,
-  ChevronLeft,
-  ChevronRight,
-  LoaderCircle,
-  Minus,
-  Plus,
-  RotateCcw,
-} from "lucide-react"
+import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { getBookFile, getProgress } from "@/api"
 import { CenteredMessage } from "@/components/CenteredMessage"
 import { ProgressBar } from "@/components/ProgressBar"
+import { ReaderQuickSettings } from "@/components/ReaderQuickSettings"
 import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { type Appearance, readerBackground, readerLayout, type Scheme } from "@/lib/appearance"
 import { applyAppearance, sectionFraction, turn } from "@/lib/foliate"
 import { type Direction, swipeDirection, wheelTurner } from "@/lib/gestures"
 import { progressSaver } from "@/lib/progressSaver"
 import { openBookKey } from "@/lib/queryKeys"
-import { stepZoom, useReaderZoom, ZOOM_STEPS } from "@/lib/readerZoom"
+import { useReaderZoom } from "@/lib/readerZoom"
 import { useUiScale } from "@/lib/uiScale"
 import { useLatest } from "@/lib/useLatest"
 import { useMediaQuery } from "@/lib/useMediaQuery"
@@ -37,6 +29,8 @@ type Props = {
   /** The `id` of the TOC entry the reader is in, as pages turn. */
   onLocation: (tocId: number | undefined) => void
   onOpenLibrary: () => void
+  /** Settings → Reader, from the *Aa* popup. */
+  onOpenSettings: () => void
   /** Whether the header and the bottom bar show. Hidden, only their 3px position lines do. */
   bars: boolean
   onBarsChange: (shown: boolean) => void
@@ -80,6 +74,7 @@ export function Reader({
   onOpen,
   onLocation,
   onOpenLibrary,
+  onOpenSettings,
   bars,
   onBarsChange,
   ref,
@@ -161,8 +156,11 @@ export function Reader({
 
     const onKey = (e: KeyboardEvent) => {
       if (!view || latest.current.paused) return
+      const target = e.target as Element | null
+      // An open dropdown's list (the *Aa* popup's) takes the arrows itself.
+      if (target?.closest?.('[role="listbox"]')) return
       // Space or an arrow on a focused button isn't reading.
-      const control = (e.target as Element | null)?.closest?.("button, input, select, textarea")
+      const control = target?.closest?.("button, input, select, textarea")
       if (READING_KEYS.has(e.key) && !control) hideBars()
       if (e.key === "ArrowLeft") void turn(view, "left", unit())
       if (e.key === "ArrowRight") void turn(view, "right", unit())
@@ -372,7 +370,12 @@ export function Reader({
           <p className="text-sm text-muted-foreground tabular-nums">
             {Math.round(bookFraction * 100)}%
           </p>
-          <ZoomControl zoom={zoom} onZoom={setZoom} bars={bars} />
+          <ReaderQuickSettings
+            zoom={zoom}
+            onZoom={setZoom}
+            bars={bars}
+            onOpenSettings={onOpenSettings}
+          />
           <BarButton side="right" unit={unit} onClick={() => go("right")} />
         </footer>
       </div>
@@ -385,58 +388,6 @@ export const BAR_MOTION = "transition-transform duration-200 ease-out motion-red
 
 const label = (side: Direction, unit: "page" | "section") =>
   `${side === "left" ? "Previous" : "Next"} ${unit}`
-
-/** − / + in 10% steps, and back to 100%. Relative to the interface scale. */
-function ZoomControl({
-  zoom,
-  onZoom,
-  bars,
-}: {
-  zoom: number
-  onZoom: (zoom: number) => void
-  bars: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    // Taps in the book's iframes don't reach the popup's outside-click check, so it closes
-    // with the bars instead.
-    <Popover open={open && bars} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button variant="ghost" size="icon" aria-label="Zoom" />}>
-        <ALargeSmall />
-      </PopoverTrigger>
-      <PopoverContent side="top" align="end" className="w-auto flex-row items-center gap-1 p-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Zoom out"
-          disabled={zoom === ZOOM_STEPS[0]}
-          onClick={() => onZoom(stepZoom(zoom, -1))}
-        >
-          <Minus />
-        </Button>
-        <span className="w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Zoom in"
-          disabled={zoom === ZOOM_STEPS.at(-1)}
-          onClick={() => onZoom(stepZoom(zoom, 1))}
-        >
-          <Plus />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Reset zoom"
-          disabled={zoom === 1}
-          onClick={() => onZoom(1)}
-        >
-          <RotateCcw />
-        </Button>
-      </PopoverContent>
-    </Popover>
-  )
-}
 
 function BarButton({ side, unit, onClick }: Omit<PageButtonProps, "scheme" | "className">) {
   return (
