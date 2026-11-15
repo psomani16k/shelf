@@ -57,8 +57,7 @@ fn normalize(scope: UserScope) -> Result<UserScope, LibraryError> {
 impl Auth {
     /// Sorted by name: `users` is a `BTreeMap`.
     pub async fn list_users(&self, now: Time) -> ListUsersResponse {
-        let mut inner = self.inner.lock().await;
-        inner.file.refresh(now).await;
+        let inner = self.fresh(now).await;
         let data = inner.file.data();
         let users = data
             .users

@@ -1,8 +1,9 @@
 import { onBackButtonPress } from "@tauri-apps/api/app"
 import type { PluginListener } from "@tauri-apps/api/core"
-import { type RefObject, useEffect, useRef } from "react"
+import { type RefObject, useEffect } from "react"
 import { log } from "@/lib/log"
 import { IS_ANDROID } from "@/lib/platform"
+import { useLatest } from "@/lib/useLatest"
 
 type Handler = RefObject<() => void>
 
@@ -36,12 +37,9 @@ export function addBackHandler(handler: Handler): () => void {
 
 /** Android only: while `active`, the back button calls `onBack`, unless a newer layer opens. */
 export function useBackButton(onBack: () => void, active = true) {
-  const ref = useRef(onBack)
-  useEffect(() => {
-    ref.current = onBack
-  })
+  const ref = useLatest(onBack)
   useEffect(() => {
     if (!IS_ANDROID || !active) return
     return addBackHandler(ref)
-  }, [active])
+  }, [active, ref])
 }

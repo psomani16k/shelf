@@ -2,7 +2,6 @@ import { Select } from "@base-ui/react/select"
 import { CheckIcon, ChevronsUpDown } from "lucide-react"
 import type { LibraryInfo } from "@/api/app"
 import { useCurrentLibrary, useLibraries, useSwitchLibrary } from "@/lib/useAppLibrary"
-import { cn } from "cn"
 
 /** App only: picks which library is open. Each entry shows its name and where it lives. */
 export function LibrarySwitcher({
@@ -65,15 +64,9 @@ export function LibrarySwitcher({
 }
 
 /** The name, with the folder path or server URL under it. */
-export function LibraryLabel({
-  library,
-  className,
-}: {
-  library: LibraryInfo
-  className?: string
-}) {
+function LibraryLabel({ library }: { library: LibraryInfo }) {
   return (
-    <span className={cn("flex min-w-0 flex-1 flex-col", className)}>
+    <span className="flex min-w-0 flex-1 flex-col">
       <span className="truncate font-medium">{library.name}</span>
       <span className="truncate text-xs text-muted-foreground">{library.location}</span>
     </span>

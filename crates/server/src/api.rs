@@ -3,9 +3,9 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, FromRef, Path, Query, Request, State},
+    extract::{DefaultBodyLimit, FromRef, FromRequest, FromRequestParts, Path, Query, Request, State},
     http::{HeaderValue, StatusCode, header},
-    middleware::{self, Next},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -26,6 +26,7 @@ use shelf_proto::{
     config::Config,
 };
 
+use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -35,7 +36,6 @@ use crate::{
     library::ServerLibrary,
 };
 
-/// Like a Go server struct the handlers hang off; each handler takes only the part it needs.
 #[derive(Clone)]
 pub struct AppState {
     pub library: Lib,
@@ -83,14 +83,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/books/upload",
             post(upload_book).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
-        .route_layer(middleware::from_fn(|req: Request, next: Next| {
-            auth::require(Role::Contributor, req, next)
-        }));
+        .route_layer(middleware::from_fn_with_state(Role::Contributor, auth::require));
     let librarian = Router::new()
         .route("/library/delete", post(delete_items))
-        .route_layer(middleware::from_fn(|req: Request, next: Next| {
-            auth::require(Role::Librarian, req, next)
-        }));
+        .route_layer(middleware::from_fn_with_state(Role::Librarian, auth::require));
     let admin = Router::new()
         .route("/library/rebuild", post(rebuild_index))
         .route("/library/progress/clean", post(clean_up_progress))
@@ -101,9 +97,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/users/role/set", post(auth::users::set_role))
         .route("/users/scope/set", post(auth::users::set_scope))
         .route("/users/scope/directories", post(auth::users::list_directories))
-        .route_layer(middleware::from_fn(|req: Request, next: Next| {
-            auth::require(Role::Admin, req, next)
-        }));
+        .route_layer(middleware::from_fn_with_state(Role::Admin, auth::require));
     // `route_layer` only wraps routes that matched, so an unknown path stays a 404.
     let signed_in = reader
         .merge(contributor)
@@ -120,7 +114,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .fallback(|| async { ApiErrorResponse(LibraryError::NotFound) })
 }
 
-// Paths are relative to the user's root, and books outside their scope act as missing.
 async fn list_books(
     State(library): State<Lib>,
     user: CurrentUser,
@@ -137,78 +130,105 @@ async fn list_directories(
     Ok(Json(library.view(&user.scope).list_sub_directories(req).await?))
 }
 
-// The user in progress, state and config requests comes from the session, never the client.
+/// A request whose `user` is the signed-in user's, never the client's.
+struct Own<T>(CurrentUser, T);
+
+trait ForUser {
+    fn set_user(&mut self, user: String);
+}
+
+macro_rules! for_user {
+    ($($req:ty),*) => {
+        $(impl ForUser for $req {
+            fn set_user(&mut self, user: String) {
+                self.user = user;
+            }
+        })*
+    };
+}
+
+for_user!(
+    GetProgressRequest,
+    SetProgressRequest,
+    GetStateRequest,
+    SetStateRequest,
+    GetConfigRequest,
+    SetConfigRequest,
+    ExportUserDataRequest,
+    ImportUserDataRequest
+);
+
+impl<S: Send + Sync, T: ForUser + DeserializeOwned + Send> FromRequest<S> for Own<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (mut parts, body) = req.into_parts();
+        let user = CurrentUser::from_request_parts(&mut parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let Json(mut req) = Json::<T>::from_request(Request::from_parts(parts, body), state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        req.set_user(user.id.clone());
+        Ok(Own(user, req))
+    }
+}
+
 async fn get_progress(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<GetProgressRequest>,
+    Own(user, req): Own<GetProgressRequest>,
 ) -> Result<Json<GetProgressResponse>, ApiErrorResponse> {
-    req.user = user.id.clone();
     Ok(Json(library.view(&user.scope).get_progress(req).await?))
 }
 
 async fn set_progress(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<SetProgressRequest>,
+    Own(user, req): Own<SetProgressRequest>,
 ) -> Result<StatusCode, ApiErrorResponse> {
-    req.user = user.id.clone();
     library.view(&user.scope).set_progress(req).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_state(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<GetStateRequest>,
+    Own(user, req): Own<GetStateRequest>,
 ) -> Result<Json<GetStateResponse>, ApiErrorResponse> {
-    req.user = user.id.clone();
     Ok(Json(library.view(&user.scope).get_state(req).await?))
 }
 
 async fn set_state(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<SetStateRequest>,
+    Own(user, req): Own<SetStateRequest>,
 ) -> Result<StatusCode, ApiErrorResponse> {
-    req.user = user.id.clone();
     library.view(&user.scope).set_state(req).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_config(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<GetConfigRequest>,
+    Own(_, req): Own<GetConfigRequest>,
 ) -> Result<Json<Config>, ApiErrorResponse> {
-    req.user = user.id;
     Ok(Json(library.get_config(req).await?))
 }
 
 async fn set_config(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<SetConfigRequest>,
+    Own(_, req): Own<SetConfigRequest>,
 ) -> Result<Json<Config>, ApiErrorResponse> {
-    req.user = user.id;
     Ok(Json(library.set_config(req).await?))
 }
 
 async fn export_user_data(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<ExportUserDataRequest>,
+    Own(user, req): Own<ExportUserDataRequest>,
 ) -> Result<Json<UserData>, ApiErrorResponse> {
-    req.user = user.id.clone();
     Ok(Json(library.view(&user.scope).export_user_data(req).await?))
 }
 
 async fn import_user_data(
     State(library): State<Lib>,
-    user: CurrentUser,
-    Json(mut req): Json<ImportUserDataRequest>,
+    Own(user, req): Own<ImportUserDataRequest>,
 ) -> Result<Json<ImportUserDataResponse>, ApiErrorResponse> {
-    req.user = user.id.clone();
     Ok(Json(library.view(&user.scope).import_user_data(req).await?))
 }
 
@@ -320,7 +340,7 @@ mod tests {
             } }"#;
             std::fs::write(data.path().join("data.json"), users).unwrap();
             std::fs::create_dir_all(books.path().join("kid/sub")).unwrap();
-            let library = ServerLibrary::open(books.path().to_owned(), || {}).await.unwrap();
+            let library = ServerLibrary::open(books.path().to_owned()).await.unwrap();
             let file = DataFile::load(data.path(), Time::now()).await.unwrap();
             let state = AppState {
                 library: Arc::new(library),
@@ -363,7 +383,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_route_but_health_and_login_needs_a_session() {
+    async fn every_route_but_health_login_and_signup_needs_a_session() {
         let server = TestServer::new().await;
 
         assert_eq!(server.call("GET", "/health", None, "").await.0, StatusCode::OK);

@@ -19,14 +19,12 @@ declare module "foliate-js/view.js" {
 
   export interface LoadDetail {
     doc: Document
-    index: number
   }
 
   /** The paginator for reflowable books. Its `flow` attribute is `scrolled` or `paginated`. */
   export interface Renderer extends HTMLElement {
     /** CSS added to every section's document. */
     setStyles(css: string): void
-    readonly scrolled: boolean
     /** Scroll offset, viewport size and content size along the reading axis, in px. */
     readonly start: number
     readonly size: number

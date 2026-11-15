@@ -1,7 +1,8 @@
 import { useState } from "react"
+import { UI_SCALE_CHOICES } from "@/lib/uiScale"
 
 /** 50% to 200% in 10% steps. The book also scales with the interface (`lib/uiScale.ts`). */
-export const ZOOM_STEPS = Array.from({ length: 16 }, (_, i) => (50 + 10 * i) / 100)
+export const ZOOM_STEPS = UI_SCALE_CHOICES.map((percent) => percent / 100)
 
 const MIN = 0.5
 const MAX = 2
@@ -9,7 +10,7 @@ const MAX = 2
 // Per device, like browser zoom, so it lives here and not in the user's config.
 const KEY = "shelf.reader-zoom"
 
-export function loadZoom(): number {
+function loadZoom(): number {
   try {
     return snapZoom(Number(localStorage.getItem(KEY)))
   } catch {

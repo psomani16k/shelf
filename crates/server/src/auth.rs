@@ -17,7 +17,7 @@ use shelf_proto::{
 };
 use shelf_utility::timeutil::{Duration, Instant, Time};
 use subtle::ConstantTimeEq;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, warn};
 
 use crate::{data::DataFile, error::ApiErrorResponse};
@@ -27,15 +27,14 @@ pub mod users;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const SESSION_LIFETIME: Duration = Duration::from_secs(90 * 24 * 60 * 60);
-/// Failed logins in a row before the user is locked out for `LOCK_TIME`.
+/// Wrong passwords in a row before the user is locked out for `LOCK_TIME`.
 const MAX_FAILURES: u32 = 5;
 const LOCK_TIME: Duration = Duration::from_secs(60);
 const MAX_PASSWORD_CHARS: usize = 256;
 /// Compared against when the username is unknown, so the reply takes as long as for a real user.
 const DUMMY_PASSWORD: &str = "not a real password, only here for the timing";
 
-/// Users, their sessions and the login lockouts. One lock: every check may reload or write
-/// `data.json`.
+/// Users, sessions and lockouts, under one lock: every check may reload or write `data.json`.
 pub struct Auth {
     inner: Mutex<Inner>,
 }
@@ -51,8 +50,7 @@ struct Failures {
     locked_until: Option<Instant>,
 }
 
-/// The signed-in user, put in the request's extensions by `authenticate`. No `Debug`, so the
-/// session's hash can't end up in a log line.
+/// The signed-in user, from `authenticate`. No `Debug`, so the session hash never reaches a log.
 #[derive(Clone)]
 pub struct CurrentUser {
     pub id: String,
@@ -81,31 +79,24 @@ impl Auth {
         self.inner.lock().await.file.data().users.len()
     }
 
+    /// Locks, with `data.json` reloaded if it was edited by hand.
+    async fn fresh(&self, now: Time) -> MutexGuard<'_, Inner> {
+        let mut inner = self.inner.lock().await;
+        inner.file.refresh(now).await;
+        inner
+    }
+
     pub async fn login(
         &self,
         username: &str,
         password: &str,
         now: Time,
     ) -> Result<LoginResponse, LibraryError> {
-        let mut inner = self.inner.lock().await;
-        inner.file.refresh(now).await;
+        let mut inner = self.fresh(now).await;
         let found = inner.file.data().users.get(username);
         let Some((role, ok)) = found.map(|u| (u.role(), password_matches(&u.password, password)))
         else {
-            let _ = password_matches(DUMMY_PASSWORD, password);
-            let pending = inner.file.data().user_requests.iter();
-            if pending
-                .filter(|r| r.user_name == username)
-                .any(|r| password_matches(&r.password, password))
-            {
-                info!("login refused: waiting for approval");
-                return Err(LibraryError::Forbidden(
-                    "this account is waiting for an admin's approval".to_owned(),
-                ));
-            }
-            // Not the name: it may be a password typed into the wrong field.
-            info!("login failed: unknown user");
-            return Err(wrong_password());
+            return Err(inner.refuse_unknown(username, password));
         };
         inner.check_lock(username)?;
         if !ok {
@@ -149,12 +140,10 @@ impl Auth {
         })
     }
 
-    /// The session's user, with the role `data.json` gives them now. Pushes the expiry back to a
-    /// full `SESSION_LIFETIME`, at most once a day.
+    /// The session's user, with their current role. Extends the session at most once a day.
     pub async fn authenticate(&self, token: &str, now: Time) -> Result<CurrentUser, LibraryError> {
         let session = hash(token);
-        let mut inner = self.inner.lock().await;
-        inner.file.refresh(now).await;
+        let mut inner = self.fresh(now).await;
         let found = inner.file.data().users.iter().find_map(|(id, user)| {
             let expires = user.sessions.get(&session)?.expires.parse::<Time>().ok()?;
             Some((id.clone(), user.role(), expires))
@@ -213,8 +202,7 @@ impl Auth {
         now: Time,
     ) -> Result<(), LibraryError> {
         check_new_password(&req.new_password)?;
-        let mut inner = self.inner.lock().await;
-        inner.file.refresh(now).await;
+        let mut inner = self.fresh(now).await;
         inner.check_lock(&user.id)?;
         let ok = inner
             .file
@@ -247,6 +235,24 @@ impl Auth {
 }
 
 impl Inner {
+    /// A login as a user that doesn't exist: refused, taking as long as a real check.
+    fn refuse_unknown(&self, username: &str, password: &str) -> LibraryError {
+        let _ = password_matches(DUMMY_PASSWORD, password);
+        let pending = self.file.data().user_requests.iter();
+        if pending
+            .filter(|r| r.user_name == username)
+            .any(|r| password_matches(&r.password, password))
+        {
+            info!("login refused: waiting for approval");
+            return LibraryError::Forbidden(
+                "this account is waiting for an admin's approval".to_owned(),
+            );
+        }
+        // Not the name: it may be a password typed into the wrong field.
+        info!("login failed: unknown user");
+        wrong_password()
+    }
+
     fn check_lock(&self, user: &str) -> Result<(), LibraryError> {
         let locked = self
             .failures
@@ -282,6 +288,10 @@ fn wrong_password() -> LibraryError {
     LibraryError::Unauthorized("wrong username or password".to_owned())
 }
 
+fn sign_in_first() -> LibraryError {
+    LibraryError::Unauthorized("sign in first".to_owned())
+}
+
 fn check_new_password(password: &str) -> Result<(), LibraryError> {
     if !(1..=MAX_PASSWORD_CHARS).contains(&password.chars().count()) {
         return Err(LibraryError::Invalid(format!(
@@ -315,8 +325,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 /// handler, or any body extractor, runs.
 pub async fn authenticate(State(auth): State<Arc<Auth>>, mut req: Request, next: Next) -> Response {
     let Some(token) = bearer(req.headers()).map(str::to_owned) else {
-        let e = LibraryError::Unauthorized("sign in first".to_owned());
-        return ApiErrorResponse(e).into_response();
+        return ApiErrorResponse(sign_in_first()).into_response();
     };
     let user = match auth.authenticate(&token, Time::now()).await {
         Ok(user) => user,
@@ -330,17 +339,14 @@ pub async fn authenticate(State(auth): State<Arc<Auth>>, mut req: Request, next:
 }
 
 /// Middleware after `authenticate`: a user below `min` gets a 403.
-pub async fn require(min: Role, req: Request, next: Next) -> Response {
+pub async fn require(State(min): State<Role>, req: Request, next: Next) -> Response {
     match req.extensions().get::<CurrentUser>().map(|user| user.role) {
         Some(role) if role >= min => next.run(req).await,
         Some(_) => {
             let message = format!("this needs the {} role or higher", min.as_str_name());
             ApiErrorResponse(LibraryError::Forbidden(message)).into_response()
         }
-        None => {
-            let e = LibraryError::Unauthorized("sign in first".to_owned());
-            ApiErrorResponse(e).into_response()
-        }
+        None => ApiErrorResponse(sign_in_first()).into_response(),
     }
 }
 
@@ -348,9 +354,11 @@ impl<S: Send + Sync> FromRequestParts<S> for CurrentUser {
     type Rejection = ApiErrorResponse;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<CurrentUser>().cloned().ok_or_else(|| {
-            ApiErrorResponse(LibraryError::Unauthorized("sign in first".to_owned()))
-        })
+        parts
+            .extensions
+            .get::<CurrentUser>()
+            .cloned()
+            .ok_or_else(|| ApiErrorResponse(sign_in_first()))
     }
 }
 

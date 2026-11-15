@@ -1,4 +1,5 @@
 import { type CSSProperties, type PointerEvent, type ReactNode, useEffect, useRef } from "react"
+import { BAR_MOTION } from "@/components/Reader"
 import { useBackButton } from "@/lib/backButton"
 import { settle } from "@/lib/settle"
 
@@ -196,7 +197,7 @@ export function SlideDrawer({
           )}
         </div>
         <div
-          className={`absolute inset-x-0 top-0 z-20 touch-pan-y bg-background transition-transform duration-200 ease-out motion-reduce:transition-none ${headerHidden ? "-translate-y-full" : ""}`}
+          className={`absolute inset-x-0 top-0 z-20 touch-pan-y bg-background ${BAR_MOTION} ${headerHidden ? "-translate-y-full" : ""}`}
           inert={headerHidden}
           {...dragHandlers}
         >

@@ -1,6 +1,6 @@
 # Shelf docs
 
-Shelf is an EPUB reader where the library is a plain folder of `.epub` files. Shelf keeps its own data (metadata, cover thumbnails, reading progress, settings) in a hidden `.shelf/` folder inside that library, so the data travels with the books when the folder is synced between devices (Syncthing, Nextcloud, a NAS share, …).
+Shelf is an EPUB reader where the library is a plain folder of `.epub` files. Shelf keeps its own data (metadata, cover thumbnails, each reader's progress and settings) in a hidden `.shelf/` folder inside that library, so the data moves with the books when the folder is moved or copied.
 
 It runs in three ways, all with the same React UI:
 

@@ -13,23 +13,28 @@ export function swipeDirection({ dx, dy, ms }: { dx: number; dy: number; ms: num
   return dx < 0 ? "left" : "right"
 }
 
+/** px of horizontal wheel movement that make one step. */
+const WHEEL_THRESHOLD = 80
+const WHEEL_QUIET_MS = 250
+
 /**
  * Turns a stream of horizontal wheel deltas into single steps. A touchpad swipe sends many small
- * deltas, so after a step the rest of the stream is ignored until it's been quiet for `quietMs`.
+ * deltas, so after a step the rest of the stream is ignored until it's been quiet for
+ * `WHEEL_QUIET_MS`.
  */
-export function wheelTurner({ threshold = 80, quietMs = 250 } = {}) {
+export function wheelTurner() {
   let sum = 0
   let fired = false
   let last = -Infinity
   return (deltaX: number, now: number): -1 | 0 | 1 => {
-    if (now - last > quietMs) {
+    if (now - last > WHEEL_QUIET_MS) {
       sum = 0
       fired = false
     }
     last = now
     if (fired) return 0
     sum += deltaX
-    if (Math.abs(sum) < threshold) return 0
+    if (Math.abs(sum) < WHEEL_THRESHOLD) return 0
     fired = true
     return sum < 0 ? -1 : 1
   }

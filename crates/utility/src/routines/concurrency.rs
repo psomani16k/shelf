@@ -6,10 +6,7 @@ where
     F: FnMut(usize, &I) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2);
-    for_each_concurrent(items, n, f).await;
+    for_each_concurrent(items, cpus(), f).await;
 }
 
 pub async fn for_each_concurrent<I, F, Fut>(items: &[I], in_flight: usize, mut f: F)
@@ -33,10 +30,7 @@ where
     Fut: Future<Output = Result<O>> + Send + 'static,
     O: Send + 'static,
 {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2);
-    transform_concurrent(items, n, f).await
+    transform_concurrent(items, cpus(), f).await
 }
 
 pub async fn transform_concurrent<I, F, O, Fut>(
@@ -49,18 +43,12 @@ where
     Fut: Future<Output = Result<O>> + Send + 'static,
     O: Send + 'static,
 {
-    let mut tagged = transform_concurrent_unordered(items, in_flight, |i, item| {
-        let fut = f(i, item); // borrow of f and item ends here
+    let tagged = transform_concurrent_unordered(items, in_flight, |i, item| {
+        let fut = f(i, item);
         async move { fut.await.map(|o| (i, o)).map_err(|e| (i, e)) }
     })
     .await;
-    tagged.sort_by_key(|r| match r {
-        Ok((i, _)) | Err((i, _)) => *i,
-    });
-    tagged
-        .into_iter()
-        .map(|r| r.map(|(_, o)| o).map_err(|(_, e)| e))
-        .collect()
+    untag(tagged)
 }
 
 pub async fn transform_concurrent_unordered<I, F, O, E, Fut>(
@@ -78,18 +66,17 @@ where
     let mut set = JoinSet::new();
     let mut result: Vec<Result<O, E>> = Vec::with_capacity(items.len());
 
-    for (i, item) in items.into_iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         if set.len() >= in_flight
             && let Some(j) = set.join_next().await
         {
             result.push(flatten_result(j));
         }
         let fut = f(i, item);
-        set.spawn(async move { fut.await });
+        set.spawn(fut);
     }
     while let Some(j) = set.join_next().await {
-        let p = flatten_result(j);
-        result.push(p);
+        result.push(flatten_result(j));
     }
     result
 }
@@ -99,10 +86,7 @@ where
     F: FnMut(usize, &I) -> Job,
     Job: FnOnce() + Send + 'static,
 {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2);
-    for_each_concurrent_blocking(items, n, f).await;
+    for_each_concurrent_blocking(items, cpus(), f).await;
 }
 
 pub async fn for_each_concurrent_blocking<I, F, Job>(items: &[I], in_flight: usize, mut f: F)
@@ -126,10 +110,7 @@ where
     Job: FnOnce() -> Result<O> + Send + 'static,
     O: Send + 'static,
 {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2);
-    transform_concurrent_blocking(items, n, f).await
+    transform_concurrent_blocking(items, cpus(), f).await
 }
 
 pub async fn transform_concurrent_blocking<I, F, O, Job>(
@@ -142,18 +123,12 @@ where
     Job: FnOnce() -> Result<O> + Send + 'static,
     O: Send + 'static,
 {
-    let mut tagged = transform_concurrent_unordered_blocking(items, in_flight, |i, item| {
+    let tagged = transform_concurrent_unordered_blocking(items, in_flight, |i, item| {
         let job = f(i, item);
         move || job().map(|o| (i, o)).map_err(|e| (i, e))
     })
     .await;
-    tagged.sort_by_key(|r| match r {
-        Ok((i, _)) | Err((i, _)) => *i,
-    });
-    tagged
-        .into_iter()
-        .map(|r| r.map(|(_, o)| o).map_err(|(_, e)| e))
-        .collect()
+    untag(tagged)
 }
 
 pub async fn transform_concurrent_unordered_blocking<I, F, O, E, Job>(
@@ -180,16 +155,32 @@ where
         set.spawn_blocking(f(i, item));
     }
     while let Some(j) = set.join_next().await {
-        let p = flatten_result(j);
-        result.push(p);
+        result.push(flatten_result(j));
     }
     result
+}
+
+/// The number of CPUs, or 2 if it can't be told.
+pub fn cpus() -> usize {
+    std::thread::available_parallelism().map_or(2, |n| n.get())
+}
+
+/// Puts results tagged with their item's index back in item order.
+fn untag<O, E>(mut tagged: Vec<Result<(usize, O), (usize, E)>>) -> Vec<Result<O, E>> {
+    tagged.sort_by_key(|r| match r {
+        Ok((i, _)) | Err((i, _)) => *i,
+    });
+    tagged
+        .into_iter()
+        .map(|r| r.map(|(_, o)| o).map_err(|(_, e)| e))
+        .collect()
 }
 
 fn flatten_result<T, E>(res: Result<Result<T, E>, JoinError>) -> Result<T, E> {
     match res {
         Ok(Ok(t)) => Ok(t),
-        Err(e) => std::panic::resume_unwind(e.into_panic()), // this should never happen
+        // A job panicked: re-raise it in the caller.
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
         Ok(Err(e)) => Err(e),
     }
 }

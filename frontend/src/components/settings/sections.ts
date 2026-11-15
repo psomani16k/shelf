@@ -65,7 +65,7 @@ const MARGIN_CHOICES = [
 const scrolled = (c: Config) =>
   (c.reader?.flow ?? ReaderFlow_Value.SCROLLED) === ReaderFlow_Value.SCROLLED
 
-export const SECTIONS: Section[] = [
+const SECTIONS: Section[] = [
   {
     slug: "reader",
     label: "Reader",

@@ -13,7 +13,7 @@ The same operations exist as HTTP routes (`shelf-server`) and as Tauri commands 
 - **Enums live in wrapper messages** (`ReaderFlow.Value`) so their values stay plain names like `PAGINATED` rather than `READER_FLOW_PAGINATED`. `buf.yaml` disables the lint rules that would object.
 - **Raw bytes exception:** covers and EPUB files are sent as raw bytes, not JSON: downloads as the response, uploads as the request body (with the request in the query).
 - **Changing the schema:** edit `.proto` files only, never renumber or reuse a field number, then rebuild (Rust regenerates on `cargo build`; the frontend on `pnpm dev`/`build`/`test`). Run `buf lint`.
-- **Registering a new file:** `crates/proto/build.rs` has an explicit list of `.proto` files. Add new ones there. (`proto/apipb/cover.proto` is empty and isn't in the list.)
+- **Registering a new file:** `crates/proto/build.rs` has an explicit list of `.proto` files. Add new ones there.
 
 ## HTTP routes (`crates/server/src/api.rs`)
 

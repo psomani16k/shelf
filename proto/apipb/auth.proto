@@ -33,23 +33,17 @@ message LoginResponse {
 
 message LogoutRequest {}
 
-message LogoutResponse {}
-
 // Also signs out every other session of the user.
 message ChangePasswordRequest {
   string current_password = 1;
   string new_password = 2;
 }
 
-message ChangePasswordResponse {}
-
 // Asks for an account; an admin approves it and picks the role.
 message SignUpRequest {
   string username = 1;
   string password = 2;
 }
-
-message SignUpResponse {}
 
 // A pending sign-up, as an admin sees it. The password is never sent.
 message UserRequest {
@@ -72,13 +66,9 @@ message ApproveUserRequestRequest {
   Role.Value role = 2;
 }
 
-message ApproveUserRequestResponse {}
-
 message DenyUserRequestRequest {
   string id = 1;
 }
-
-message DenyUserRequestResponse {}
 
 // Every user, by name.
 message ListUsersRequest {}
@@ -103,13 +93,9 @@ message SetUserRoleRequest {
   Role.Value role = 2;
 }
 
-message SetUserRoleResponse {}
-
 // Applies from the user's next request. Admins set the scopes of users below admin,
 // owners admins' too; nobody sets their own or an owner's.
 message SetUserScopeRequest {
   string username = 1;
   UserScope scope = 2;
 }
-
-message SetUserScopeResponse {}

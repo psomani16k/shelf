@@ -23,24 +23,24 @@ use crate::{
     library::{
         LibraryError,
         book_library::BookLibrary,
-        locations::{location, remove_from_index, under},
+        locations::{has_copy, location, remove_from_index, under},
         names::{entry_name, folder_path},
         scope::Scope,
         user::validate_user,
     },
     routines::index_sync::IndexSync,
-    storage::{FileContent, LibraryStorage, is_epub},
+    storage::{FileContent, LibraryStorage, LocalLibraryStorage, is_epub},
 };
 
 /// `UserData.version` written by exports and accepted by imports.
-pub const USER_DATA_VERSION: u32 = 1;
+const USER_DATA_VERSION: u32 = 1;
 
 /// Names tried after a taken one: `name (1)` to `name (99)`.
 const MAX_RENAMES: u32 = 99;
 
 /// The library as one user sees it: paths from and to the client are relative to the scope's
 /// root, and books it hides act as if they didn't exist (404s, missing from listings, never
-/// touched). Like Go's `fs.Sub`, plus a filter.
+/// touched).
 pub struct LibraryView<'a> {
     lib: &'a BookLibrary,
     scope: &'a Scope,
@@ -118,9 +118,7 @@ impl LibraryView<'_> {
     }
 
     pub async fn get_cover(&self, id: &str) -> Result<FileContent, LibraryError> {
-        if !self.has_book(id).await {
-            return Err(LibraryError::NotFound);
-        }
+        self.require_book(id).await?;
         // A book without a cover image has no thumbnail.
         self.lib
             .storage
@@ -160,19 +158,10 @@ impl LibraryView<'_> {
         req: GetProgressRequest,
     ) -> Result<GetProgressResponse, LibraryError> {
         validate_user(&req.user)?;
-        if !self.has_book(&req.id).await {
-            return Err(LibraryError::NotFound);
-        }
+        self.require_book(&req.id).await?;
 
         let (id, user) = (req.id.clone(), req.user);
-        let progress = self.lib.with_storage(move |s| s.book_progress(&id, &user)).await;
-        let epub_progress = match progress {
-            Ok(progress) => progress.and_then(|p| p.epub_progress).map(|e| e.cfi),
-            Err(e) => {
-                warn!(id = %req.id, error = %e, "unreadable progress file");
-                None
-            }
-        };
+        let epub_progress = self.lib.with_storage(move |s| Ok(read_cfi(&s, &id, &user))).await?;
         Ok(GetProgressResponse {
             id: req.id,
             epub_progress,
@@ -181,18 +170,12 @@ impl LibraryView<'_> {
 
     pub async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
         validate_user(&req.user)?;
-        if !self.has_book(&req.id).await {
-            return Err(LibraryError::NotFound);
-        }
+        self.require_book(&req.id).await?;
         let Some(cfi) = req.epub_progress else {
             return Ok(());
         };
 
-        let progress = BookProgress {
-            file_type: book_file_type::Value::Epub as i32,
-            epub_progress: Some(EpubProgress { cfi }),
-            user: req.user.clone(),
-        };
+        let progress = epub_progress(cfi, req.user.clone());
         self.lib
             .with_storage(move |s| s.set_book_progress(&req.id, &req.user, progress))
             .await?;
@@ -217,10 +200,7 @@ impl LibraryView<'_> {
         {
             return Err(LibraryError::NotFound);
         }
-        let mut state = self.lib.storage.read_state(&req.user).await?;
-        state.last_book_id = req.last_book_id;
-        self.lib.storage.write_state(&req.user, &state).await?;
-        Ok(())
+        self.set_last_book(&req.user, req.last_book_id).await
     }
 
     /// The user's progress for every book they can see, their last book and their settings,
@@ -236,20 +216,13 @@ impl LibraryView<'_> {
         let progress = self
             .lib
             .with_storage(move |s| {
-                let mut entries = Vec::new();
-                for id in ids {
-                    match s.book_progress(&id, &user) {
-                        Ok(progress) => {
-                            if let Some(e) = progress.and_then(|p| p.epub_progress) {
-                                entries.push(BookProgressEntry {
-                                    id,
-                                    epub_progress: e.cfi,
-                                });
-                            }
-                        }
-                        Err(e) => warn!(%id, error = %e, "unreadable progress file"),
-                    }
-                }
+                let entries = ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        let epub_progress = read_cfi(&s, &id, &user)?;
+                        Some(BookProgressEntry { id, epub_progress })
+                    })
+                    .collect();
                 Ok(entries)
             })
             .await?;
@@ -290,13 +263,7 @@ impl LibraryView<'_> {
         self.lib
             .with_storage(move |s| {
                 for entry in entries {
-                    let progress = BookProgress {
-                        file_type: book_file_type::Value::Epub as i32,
-                        epub_progress: Some(EpubProgress {
-                            cfi: entry.epub_progress,
-                        }),
-                        user: user.clone(),
-                    };
+                    let progress = epub_progress(entry.epub_progress, user.clone());
                     s.set_book_progress(&entry.id, &user, progress)?;
                 }
                 Ok(())
@@ -305,9 +272,7 @@ impl LibraryView<'_> {
         if let Some(id) = data.last_book_id
             && visible.contains(&id)
         {
-            let mut state = self.lib.storage.read_state(&req.user).await?;
-            state.last_book_id = Some(id);
-            self.lib.storage.write_state(&req.user, &state).await?;
+            self.set_last_book(&req.user, Some(id)).await?;
         }
         if let Some(config) = data.config {
             let _guard = self.lib.config_lock.lock().await;
@@ -359,13 +324,15 @@ impl LibraryView<'_> {
         };
 
         let id = {
-            let book = book.clone();
-            self.lib.with_storage(move |_| Ok(sha1_hex(&book))).await?
-        };
-        {
             let rel = rel.clone();
-            self.lib.with_storage(move |s| s.add_book(&rel, &book)).await?;
-        }
+            self.lib
+                .with_storage(move |s| {
+                    let id = sha1_hex(&book);
+                    s.add_book(&rel, &book)?;
+                    Ok(id)
+                })
+                .await?
+        };
         let sync = IndexSync::new(self.lib.storage.clone(), self.lib.metadata.clone());
         let abs = self.lib.storage.library_root().join(&rel);
         let synced = self.lib.with_storage(move |_| sync.sync_path(&abs)).await;
@@ -374,13 +341,7 @@ impl LibraryView<'_> {
         }
         // This copy, not just the book: another copy may already be indexed.
         let path = rel.to_string_lossy().into_owned();
-        let indexed = self
-            .lib
-            .metadata
-            .read()
-            .await
-            .iter()
-            .any(|m| m.id == id && location(m, &path).is_some());
+        let indexed = has_copy(&self.lib.metadata.read().await, &id, &path);
         if synced.is_err() || !indexed {
             self.lib.with_storage(move |s| s.delete_book_file(&rel)).await?;
             return Err(LibraryError::Invalid(format!("{name} isn't a readable EPUB")));
@@ -432,13 +393,12 @@ impl LibraryView<'_> {
             if path.as_os_str().is_empty() {
                 return Err(LibraryError::Invalid("can't delete the whole library".to_owned()));
             }
-            dirs.push(self.scope.to_library(&path).to_string_lossy().into_owned());
+            dirs.push(self.library_string(&path));
         }
         let mut copies = Vec::new();
         for copy in &req.books {
             let path = folder_path(&copy.directory_path)?.join(entry_name(&copy.file_name)?);
-            let path = self.scope.to_library(&path).to_string_lossy().into_owned();
-            copies.push((copy.id.as_str(), path));
+            copies.push((copy.id.as_str(), self.library_string(&path)));
         }
 
         let _guard = self.lib.files_lock.lock().await;
@@ -446,8 +406,7 @@ impl LibraryView<'_> {
             let index = self.lib.metadata.read().await;
             let mut books: Vec<String> = Vec::new();
             for (id, path) in copies {
-                let indexed = index.iter().any(|m| m.id == id && location(m, &path).is_some());
-                if indexed && self.scope.allows(&path) {
+                if has_copy(&index, id, &path) && self.scope.allows(&path) {
                     books.push(path);
                 }
             }
@@ -466,7 +425,42 @@ impl LibraryView<'_> {
         }
         let deleted_books = books.len();
 
-        // Checked on disk, not in the index: a book not indexed yet must be kept too.
+        let whole_dirs = self.split_partly_hidden(dirs, &mut books).await?;
+
+        // Each success is kept even if a later delete fails, so the index matches the disk.
+        let (gone_books, gone_dirs, failure) = self
+            .lib
+            .with_storage(move |s| {
+                let mut failure = None;
+                let gone_books = delete_each(books, |b| s.delete_book_file(b), &mut failure);
+                let gone_dirs = delete_each(whole_dirs, |d| s.delete_folder(d), &mut failure);
+                Ok((gone_books, gone_dirs, failure))
+            })
+            .await?;
+
+        // Now rather than when the watcher's events arrive.
+        let in_gone_dir: Vec<_> = gone_dirs.iter().map(|d| under(d)).collect();
+        let gone = |p: &str| gone_books.iter().any(|b| b == p) || in_gone_dir.iter().any(|f| f(p));
+        remove_from_index(&mut *self.lib.metadata.write().await, gone);
+        info!(books = gone_books.len(), folders = gone_dirs.len(), "deleted");
+
+        if let Some(e) = failure {
+            return Err(e.into());
+        }
+        Ok(DeleteItemsResponse {
+            books: deleted_books as u32,
+            directories: req.directory_paths.len() as u32,
+        })
+    }
+
+    /// The folders to delete whole. One holding books the user can't see is kept, and only its
+    /// visible books are added to `books`. Checked on disk, not in the index: a book not indexed
+    /// yet must be kept too.
+    async fn split_partly_hidden(
+        &self,
+        dirs: Vec<String>,
+        books: &mut Vec<String>,
+    ) -> Result<Vec<String>, LibraryError> {
         let mut whole_dirs = Vec::new();
         for dir in dirs {
             let inside = if self.scope.has_patterns() {
@@ -493,49 +487,14 @@ impl LibraryView<'_> {
                 books.extend(inside.into_iter().filter(|p| self.scope.allows(p)));
             }
         }
+        Ok(whole_dirs)
+    }
 
-        // Each success is kept even if a later delete fails, so the index matches the disk.
-        let (gone_books, gone_dirs, failure) = self
-            .lib
-            .with_storage(move |s| {
-                let mut failure = None;
-                let gone_books: Vec<String> = books
-                    .into_iter()
-                    .filter(|b| match s.delete_book_file(Path::new(b)) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            failure.get_or_insert(e);
-                            false
-                        }
-                    })
-                    .collect();
-                let gone_dirs: Vec<String> = whole_dirs
-                    .into_iter()
-                    .filter(|d| match s.delete_folder(Path::new(d)) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            failure.get_or_insert(e);
-                            false
-                        }
-                    })
-                    .collect();
-                Ok((gone_books, gone_dirs, failure))
-            })
-            .await?;
-
-        // Now rather than when the watcher's events arrive.
-        let in_gone_dir: Vec<_> = gone_dirs.iter().map(|d| under(d)).collect();
-        let gone = |p: &str| gone_books.iter().any(|b| b == p) || in_gone_dir.iter().any(|f| f(p));
-        remove_from_index(&mut *self.lib.metadata.write().await, gone);
-        info!(books = gone_books.len(), folders = gone_dirs.len(), "deleted");
-
-        if let Some(e) = failure {
-            return Err(e.into());
-        }
-        Ok(DeleteItemsResponse {
-            books: deleted_books as u32,
-            directories: req.directory_paths.len() as u32,
-        })
+    async fn set_last_book(&self, user: &str, id: Option<String>) -> Result<(), LibraryError> {
+        let mut state = self.lib.storage.read_state(user).await?;
+        state.last_book_id = id;
+        self.lib.storage.write_state(user, &state).await?;
+        Ok(())
     }
 
     async fn visible_ids(&self) -> HashSet<String> {
@@ -556,10 +515,22 @@ impl LibraryView<'_> {
             .any(|m| m.id == id && self.scope.allows_book(m))
     }
 
-    /// A folder path from the client as a library path; `None` if it isn't a valid one.
+    async fn require_book(&self, id: &str) -> Result<(), LibraryError> {
+        if self.has_book(id).await {
+            Ok(())
+        } else {
+            Err(LibraryError::NotFound)
+        }
+    }
+
+    /// A path relative to the user's root as a library path string.
+    fn library_string(&self, client: &Path) -> String {
+        self.scope.to_library(client).to_string_lossy().into_owned()
+    }
+
+    /// A folder path from the client as a library path; `Invalid` if it isn't a valid one.
     fn folder(&self, client: &str) -> Result<String, LibraryError> {
-        let path = folder_path(client)?;
-        Ok(self.scope.to_library(&path).to_string_lossy().into_owned())
+        Ok(self.library_string(&folder_path(client)?))
     }
 
     /// Whether `client`, a folder path relative to the user's root, is a folder they can see.
@@ -606,11 +577,7 @@ impl LibraryView<'_> {
                 return Ok(self.scope.allows(&path));
             }
         }
-        let folder = {
-            let rel = rel.to_owned();
-            self.lib.with_storage(move |s| s.is_folder(&rel)).await?
-        };
-        Ok(folder && self.scope.shows_folder(&self.lib.metadata.read().await, &path))
+        self.shows_dir(rel).await
     }
 }
 
@@ -624,6 +591,43 @@ fn candidates(name: &str, keep_extension: bool) -> impl Iterator<Item = String> 
         Some(ext) => format!("{stem} ({n}).{ext}"),
         None => format!("{stem} ({n})"),
     }))
+}
+
+fn epub_progress(cfi: String, user: String) -> BookProgress {
+    BookProgress {
+        file_type: book_file_type::Value::Epub as i32,
+        epub_progress: Some(EpubProgress { cfi }),
+        user,
+    }
+}
+
+/// The book's saved position; an unreadable progress file counts as none.
+fn read_cfi(storage: &LocalLibraryStorage, id: &str, user: &str) -> Option<String> {
+    match storage.book_progress(id, user) {
+        Ok(progress) => progress.and_then(|p| p.epub_progress).map(|e| e.cfi),
+        Err(e) => {
+            warn!(%id, error = %e, "unreadable progress file");
+            None
+        }
+    }
+}
+
+/// Deletes each path with `delete`, keeping the first error, and returns the ones deleted.
+fn delete_each(
+    paths: Vec<String>,
+    delete: impl Fn(&Path) -> anyhow::Result<()>,
+    failure: &mut Option<anyhow::Error>,
+) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|p| match delete(Path::new(p)) {
+            Ok(()) => true,
+            Err(e) => {
+                failure.get_or_insert(e);
+                false
+            }
+        })
+        .collect()
 }
 
 fn already_exists(client: &Path) -> LibraryError {
@@ -651,6 +655,7 @@ mod tests {
     use shelf_proto::{api::BookCopy, bookkeeping::BookMetadata};
 
     use super::*;
+    use crate::testutil::{scope, temp_library};
     use crate::{
         library::{Library, scope::EVERYTHING},
         storage::LocalLibraryStorage,
@@ -659,8 +664,7 @@ mod tests {
     /// Book files whose `metadata.json` is already in `.shelf/`, so they're refreshed rather
     /// than parsed (they aren't real EPUBs). The contents give each book its id.
     async fn library(books: &[(&str, &str)]) -> (tempfile::TempDir, BookLibrary) {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (root, storage) = temp_library();
         for (path, contents) in books {
             let file = root.path().join(path);
             fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -681,11 +685,6 @@ mod tests {
         };
         storage.set_book_metadata(&id, &meta).unwrap();
         id
-    }
-
-    fn scope(root: &str, patterns: &[&str]) -> Scope {
-        let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
-        Scope::new(root, &patterns).unwrap()
     }
 
     async fn names(view: &LibraryView<'_>, dir: &str) -> (Vec<String>, Vec<String>) {
@@ -923,8 +922,8 @@ mod tests {
 
     #[tokio::test]
     async fn clean_up_progress_deletes_only_removed_books() {
-        let (root, lib) = library(&[("a.epub", "a")]).await;
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, lib) = library(&[("a.epub", "a")]).await;
+        let storage = &lib.storage;
         let (kept, gone) = (sha1_hex(b"a"), sha1_hex(b"gone"));
         for id in [&kept, &gone] {
             let progress = storage.book_dir_by_id(id).join("progress/default.json");

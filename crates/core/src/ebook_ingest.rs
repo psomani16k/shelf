@@ -111,8 +111,7 @@ impl EbookExtractor<Uncached> {
         let state = if let Some(book) = self.storage.read_book(&self.relative_path)? {
             let book: Arc<[u8]> = book.into();
             let hash = sha1_hex(&book);
-            // Failing here would leave the id unproduced, and the startup sync would delete the
-            // book's folder, progress included. Missing means it's extracted again instead.
+            // Failing here would let the startup sync delete the book's folder and progress.
             let metadata = self.storage.book_metadata(&hash).unwrap_or_else(|e| {
                 warn!(id = %hash, error = %format!("{e:#}"), "unreadable metadata, extracting again");
                 None
@@ -153,13 +152,13 @@ impl EbookExtractor<Cached> {
     /// the copies it knows of and writes `metadata.json`.
     pub fn extract(&self, force: bool) -> anyhow::Result<Option<BookMetadata>> {
         debug!(path = %self.rel_path(), force, "extracting");
-        let (book, hash, metadata) = match &self.state {
-            Cached::Gone => return Ok(None),
-            Cached::Present {
-                book,
-                hash,
-                metadata,
-            } => (book, hash, metadata),
+        let Cached::Present {
+            book,
+            hash,
+            metadata,
+        } = &self.state
+        else {
+            return Ok(None);
         };
         let meta = match metadata {
             Some(known) if !force => self.refresh(hash, known.clone())?,
@@ -280,7 +279,7 @@ impl EbookExtractor<Cached> {
 /// The book's cover image and how it was found. Falls back for EPUBs that declare it wrongly:
 /// first the declared cover, then the image on the item `cover`, then the EPUB 2 cover `<meta>`
 /// read as a path instead of an id, then the image on the landmarks/guide cover page.
-fn find_cover<'a>(epub: &'a Epub) -> Option<(EpubManifestEntry<'a>, &'static str)> {
+fn find_cover(epub: &Epub) -> Option<(EpubManifestEntry<'_>, &'static str)> {
     let manifest = epub.manifest();
     if let Some(cover) = manifest.cover_image() {
         return Some((cover, "declared"));
@@ -374,12 +373,9 @@ mod tests {
     };
 
     use super::*;
+    use crate::testutil::{EMPTY_SHA1, MTIME};
     use shelf_utility::timeutil::Duration;
 
-    /// 2025-10-26T04:45:00Z
-    const MTIME: u64 = 1_761_453_900;
-    /// The SHA-1 of an empty file.
-    const EMPTY_SHA1: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
 
     /// `predict_id_change_using_modified_time` and `refresh` only look at the file's mtime, so an empty file stands in for a book.
     fn book(nanos: u32) -> (tempfile::TempDir, EbookExtractor) {

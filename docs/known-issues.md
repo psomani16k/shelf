@@ -60,12 +60,8 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 
 - `shelf-core` has pre-existing clippy warnings.
 - `core` uses blocking `std::fs` (through `spawn_blocking`), against the "tokio everywhere" rule.
-- Unused frontend code and deps: `bookTitle` in `src/lib/book.ts`, `src/components/ui/sheet.tsx`, the npm packages `@tauri-apps/plugin-http` and `@tauri-apps/plugin-store` (the app uses both plugins from Rust only).
-- Unused proto: the `FolderListing` message in `bookkeeperpb/metadata.proto`; `DeveloperConfig.logging` in `configpb/config.proto` (the app keeps its log-file count in `AppData`).
-- `crates/core/src/library_old.rs` isn't declared in `lib.rs`, so it never compiles.
-- The demo's `debounce` never returns: it calls `tx.closed()` without awaiting it and never drops `tx`, so the `Debounced` task waits forever.
-- `app/Cargo.toml` still has template metadata (`description = "A Tauri App"`, `authors = ["you"]`).
-- `frontend/README.md` is the Vite template's README.
+- `app/Cargo.toml` still has template metadata (`description = "A Tauri App"`, `authors = ["you"]`), and declares `tauri-plugin-http` and `tauri-plugin-store`, which the frontend no longer has npm packages for (the app uses both from Rust only).
+- The `demo` binary exits with status 0 when a command fails; the error is only printed.
 
 ## S3 storage
 

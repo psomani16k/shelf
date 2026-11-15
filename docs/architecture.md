@@ -5,7 +5,7 @@
 | Path | Crate / package | What it is |
 |---|---|---|
 | `crates/core` | `shelf-core` | Library logic: scanning, book IDs, EPUB metadata and thumbnails, `.shelf/` files, the watcher. All reads and writes of book files and `.shelf/` go through the `LibraryStorage` trait (`crates/core/src/storage/`), which takes book paths relative to the library root. The parsing rules for each user's `state.json` and `config.json` are default methods on the trait, so every backend shares them. Backends: `LocalLibraryStorage` (a folder on this machine; callers name it directly, no generics or `dyn` yet) and `S3LibraryStorage` (`storage/s3_storage.rs`, behind the `s3` cargo feature, not wired into the server or app yet; see [library-format.md](library-format.md#s3-storage)). No Tauri or prost dependencies, and no HTTP ones except `object_store`'s client under the `s3` feature. |
-| `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`, and `Debounced`, a per-item debounce over a channel). Used by `core` and the app. |
+| `crates/utility` | `shelf-utility` | Shared helpers with no Shelf types: `timeutil` (clock and `Time`) and `routines` (bounded-concurrency `for_each` / `transform` over a slice, async or `spawn_blocking`, and `Debounced`, a per-item debounce over a channel, plus `cpus()`). Used by `core`, the server, the app and `demo`. |
 | `crates/proto` | `shelf-proto` | Rust types generated from `proto/` at build time (protox → prost + pbjson). Output goes to `target/`, never committed. |
 | `crates/server` | `shelf-server` | axum HTTP server over one `BookLibrary`; embeds `frontend/dist`. |
 | `app/` | `app` (lib `app_lib`) | The Tauri 2 app (what Tauri usually calls `src-tauri`). |
@@ -38,7 +38,7 @@ Everything the UI can do to a library is one method on `shelf_core::library::Lib
 | `create_directory(CreateDirectoryRequest)` | `CreateDirectoryResponse` |
 | `delete_items(DeleteItemsRequest)` | `DeleteItemsResponse`: deletes book copies (one each, or every copy of an id) and folders with everything in them, returns counts |
 
-Errors are `LibraryError::NotFound`, `Invalid(String)` (bad input, a 400), `Conflict(String)` (a taken name, a 409) or `Internal(anyhow::Error)`. The messages of `Invalid` and `Conflict` are for the client; `Internal`'s stay in the logs. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
+Errors are `LibraryError::NotFound`, `Invalid(String)` (bad input, a 400), `Conflict(String)` (a taken name, a 409), the auth errors `Unauthorized(String)` (401), `Forbidden(String)` (403) and `TooManyRequests(String)` (429), or `Internal(anyhow::Error)`. Every message but `Internal`'s is for the client; `Internal`'s stays in the logs. The methods use `impl Future` in the trait (RPITIT), so the trait isn't dyn-compatible; the app uses an enum (`AnyLibrary`) instead of `Box<dyn Library>`.
 
 Four implementations:
 

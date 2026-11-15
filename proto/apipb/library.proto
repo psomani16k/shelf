@@ -46,7 +46,7 @@ message UploadEbookResponse {
   string file_name = 2;
 }
 
-// Folders by their path relative to the library root; a folder goes with everything in it the
+// Folders by their path relative to the caller's root; a folder goes with everything in it the
 // caller can see.
 message DeleteItemsRequest {
   reserved 1;

@@ -1,11 +1,9 @@
 import {
   create,
   type DescMessage,
-  fromJson,
   type JsonValue,
   type MessageInitShape,
   type MessageShape,
-  toJson,
 } from "@bufbuild/protobuf"
 import {
   ApproveUserRequestRequestSchema,
@@ -75,13 +73,13 @@ import {
 import { type Config, ConfigSchema } from "@/gen/configpb/config_pb"
 import { endSession, getToken, setSignedOut, setToken } from "@/lib/session"
 import { ApiError } from "./error"
+import { decode, encode } from "./proto"
 import type { Backend, DeleteItems } from "./types"
 
 export { ApiError }
 
 // Same origin: the server serves this app, and `pnpm dev` proxies /api to it.
 const BASE = "/api"
-const decodeOptions = { ignoreUnknownFields: true }
 
 export const httpBackend: Backend = {
   listBooks,
@@ -115,7 +113,6 @@ export const httpBackend: Backend = {
   listScopeDirectories,
 }
 
-/** Keeps the key, so this browser stays signed in. */
 export async function login(username: string, password: string): Promise<User> {
   const res = await post(
     "/auth/login",
@@ -128,7 +125,6 @@ export async function login(username: string, password: string): Promise<User> {
   return res.user ?? create(UserSchema, { username })
 }
 
-/** Forgets the key even when the server can't be reached. */
 export async function logout(): Promise<void> {
   try {
     await send("/auth/logout", { method: "POST" })
@@ -139,10 +135,9 @@ export async function logout(): Promise<void> {
 
 export async function me(): Promise<User> {
   const res = await send("/auth/me")
-  return fromJson(UserSchema, (await res.json()) as JsonValue, decodeOptions)
+  return decode(UserSchema, (await res.json()) as JsonValue)
 }
 
-/** Every other device signed in as this user is signed out. */
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   await send("/auth/password", jsonBody(ChangePasswordRequestSchema, { currentPassword, newPassword }))
 }
@@ -194,12 +189,10 @@ export async function listScopeDirectories(directoryPath: string): Promise<strin
   return res.subDirectories
 }
 
-/** `directoryPath` is relative to the library root; `""` is the root. */
 export function listBooks(directoryPath: string): Promise<ListBooksResponse> {
   return post("/books/list", ListBooksRequestSchema, { directoryPath }, ListBooksResponseSchema)
 }
 
-/** `directoryPath` is relative to the library root; `""` is the root. */
 export function listDirectories(directoryPath: string): Promise<ListDirectoriesResponse> {
   return post(
     "/directories/list",
@@ -209,14 +202,10 @@ export function listDirectories(directoryPath: string): Promise<ListDirectoriesR
   )
 }
 
-/** `epubProgress` is unset when the book hasn't been read yet. */
 export function getProgress(id: string): Promise<GetProgressResponse> {
   return post("/progress/get", GetProgressRequestSchema, { id }, GetProgressResponseSchema)
 }
 
-/**
- * `epubProgress` is an EPUB CFI. `keepalive` lets the request finish after the tab closes.
- */
 export async function setProgress(
   id: string,
   epubProgress: string,
@@ -226,7 +215,6 @@ export async function setProgress(
   await send("/progress/set", { ...init, keepalive })
 }
 
-/** `lastBookId` is unset on first use, or when that book has left the library. */
 export function getState(): Promise<GetStateResponse> {
   return post("/state/get", GetStateRequestSchema, {}, GetStateResponseSchema)
 }
@@ -235,12 +223,10 @@ export async function setState(lastBookId: string): Promise<void> {
   await send("/state/set", jsonBody(SetStateRequestSchema, { lastBookId }))
 }
 
-/** The signed-in user's own settings. */
 export function getConfig(): Promise<Config> {
   return post("/config/get", GetConfigRequestSchema, {}, ConfigSchema)
 }
 
-/** Only the fields set in `patch` change; resolves to the user's whole config. */
 export function setConfig(patch: MessageInitShape<typeof ConfigSchema>): Promise<Config> {
   return post("/config/set", SetConfigRequestSchema, { patch }, ConfigSchema)
 }
@@ -276,7 +262,6 @@ export async function getCover(id: string): Promise<Blob> {
   return res.blob()
 }
 
-/** The EPUB file, ready for foliate-js. */
 export async function getBookFile(id: string): Promise<Blob> {
   const res = await send(`/books/${encodeURIComponent(id)}/file`)
   return res.blob()
@@ -308,7 +293,7 @@ export function uploadBook(
       }
       try {
         const json = JSON.parse(xhr.responseText) as JsonValue
-        resolve(fromJson(UploadEbookResponseSchema, json, decodeOptions))
+        resolve(decode(UploadEbookResponseSchema, json))
       } catch (e) {
         reject(e)
       }
@@ -337,18 +322,17 @@ async function post<Req extends DescMessage, Res extends DescMessage>(
   resSchema: Res,
 ): Promise<MessageShape<Res>> {
   const res = await send(path, jsonBody(reqSchema, req))
-  return fromJson(resSchema, (await res.json()) as JsonValue, decodeOptions)
+  return decode(resSchema, (await res.json()) as JsonValue)
 }
 
 function jsonBody<Desc extends DescMessage>(
   schema: Desc,
   init: MessageInitShape<Desc>,
 ): RequestInit {
-  const json = toJson(schema, create(schema, init), { useProtoFieldName: true })
   return {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(json),
+    body: JSON.stringify(encode(schema, init)),
   }
 }
 
@@ -360,18 +344,14 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(BASE + path, { ...init, headers })
   if (!res.ok) {
     if (res.status === 401 && path !== "/auth/login") endSession()
-    throw await toApiError(res)
+    throw apiErrorFrom(res.status, res.statusText, await res.text().catch(() => ""))
   }
   return res
 }
 
-async function toApiError(res: Response): Promise<ApiError> {
-  return apiErrorFrom(res.status, res.statusText, await res.text().catch(() => ""))
-}
-
 function apiErrorFrom(status: number, statusText: string, body: string): ApiError {
   try {
-    const error = fromJson(ApiErrorSchema, JSON.parse(body) as JsonValue, decodeOptions)
+    const error = decode(ApiErrorSchema, JSON.parse(body) as JsonValue)
     return new ApiError(status, error.message || statusText)
   } catch {
     // Not an `ApiError` body, e.g. a proxy's error page.

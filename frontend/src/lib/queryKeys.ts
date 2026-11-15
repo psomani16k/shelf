@@ -1,0 +1,25 @@
+// Kept when the library changes (`resetLibraryCache`).
+export const LIBRARIES_KEY = ["libraries"]
+export const UI_SCALE_KEY = ["ui-scale"]
+
+// Also kept when only the user changes (`resetUserCache`).
+export const OPEN_LIBRARY_KEY = ["open-library"]
+export const openLibraryKey = (name: string | undefined) => [...OPEN_LIBRARY_KEY, name]
+
+export const ME_KEY = ["me"]
+export const STATE_KEY = ["state"]
+export const LIBRARY_CONFIG_KEY = ["library-config"]
+export const DIRS_KEY = ["dirs"]
+export const dirsKey = (folder: string) => [...DIRS_KEY, folder]
+export const BOOKS_KEY = ["books"]
+export const booksKey = (folder: string) => [...BOOKS_KEY, folder]
+export const COVER_KEY = ["cover"]
+export const coverKey = (id: string) => [...COVER_KEY, id]
+export const openBookKey = (id: string) => ["open-book", id]
+export const localUsersKey = (library: string) => ["local-users", library]
+export const USERS_KEY = ["users"]
+export const USER_REQUESTS_KEY = ["user-requests"]
+export const scopeDirsKey = (folder: string) => ["scope-dirs", folder]
+export const STORAGE_GRANTED_KEY = ["storage-granted"]
+export const LOG_SETTINGS_KEY = ["log-settings"]
+export const LOG_FILES_KEY = ["log-files"]

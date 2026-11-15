@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
-    io::{ErrorKind, Write},
+    io::{self, ErrorKind, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -58,20 +58,22 @@ impl LocalLibraryStorage {
     }
 
     pub fn book_dir_by_id(&self, hash: &str) -> PathBuf {
-        self.root.join(format!(".shelf/books/{}", hash))
+        self.books_dir().join(hash)
     }
 
     pub fn thumbnail_path(&self, hash: &str) -> PathBuf {
         self.book_dir_by_id(hash).join("thumbnail.jpeg")
     }
 
+    fn metadata_path(&self, hash: &str) -> PathBuf {
+        self.book_dir_by_id(hash).join("metadata.json")
+    }
+
     /// The users with a folder in `.shelf/users/` (anyone who has opened a book or changed a
     /// setting), sorted. Folders that aren't valid usernames are skipped.
     pub fn user_names(&self) -> Result<Vec<String>> {
-        let entries = match fs::read_dir(self.shelf_file_path("users")) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e.into()),
+        let Some(entries) = found(fs::read_dir(self.shelf_file_path("users")))? else {
+            return Ok(Vec::new());
         };
         let mut names = Vec::new();
         for entry in entries {
@@ -89,11 +91,13 @@ impl LocalLibraryStorage {
         self.root.join(".shelf").join(name)
     }
 
-    pub fn config_path(&self, user: &str) -> PathBuf {
+    #[cfg(test)]
+    fn config_path(&self, user: &str) -> PathBuf {
         self.shelf_file_path(&super::config_file(user))
     }
 
-    pub fn state_path(&self, user: &str) -> PathBuf {
+    #[cfg(test)]
+    fn state_path(&self, user: &str) -> PathBuf {
         self.shelf_file_path(&super::state_file(user))
     }
 
@@ -114,22 +118,14 @@ impl LocalLibraryStorage {
             TMP_SEQ.fetch_add(1, Ordering::Relaxed),
         ));
 
-        let result = (|| {
-            let mut file = fs::File::create(&tmp)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            fs::rename(&tmp, path)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        result.with_context(|| format!("couldn't write {}", path.display()))
+        write_and_rename(fs::File::create(&tmp), &tmp, path, bytes)
+            .with_context(|| format!("couldn't write {}", path.display()))
     }
 
     fn walk(&self, dir: &Path, res: &mut HashSet<PathBuf>) -> Result<()> {
         for p in fs::read_dir(dir)? {
             let p = p?;
-            if p.file_name().to_str().is_some_and(|f| f.starts_with(".")) {
+            if p.file_name().to_str().is_some_and(|f| f.starts_with('.')) {
                 continue;
             }
             let t = p.file_type()?;
@@ -145,10 +141,6 @@ impl LocalLibraryStorage {
 }
 
 impl LibraryStorage for LocalLibraryStorage {
-    fn all_book_file_paths(&self) -> Result<HashSet<PathBuf>> {
-        self.book_file_paths_under(Path::new(""))
-    }
-
     fn book_file_paths_under(&self, dir: &Path) -> Result<HashSet<PathBuf>> {
         let mut res = HashSet::new();
         self.walk(&self.root.join(dir), &mut res)?;
@@ -160,10 +152,8 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     fn sub_folders(&self, dir: &Path) -> Result<Vec<String>> {
-        let entries = match fs::read_dir(self.root.join(dir)) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e.into()),
+        let Some(entries) = found(fs::read_dir(self.root.join(dir)))? else {
+            return Ok(Vec::new());
         };
         let mut folders = Vec::new();
         for entry in entries {
@@ -186,16 +176,8 @@ impl LibraryStorage for LocalLibraryStorage {
             std::process::id(),
             TMP_SEQ.fetch_add(1, Ordering::Relaxed),
         ));
-        let result = (|| {
-            let mut file = fs::File::create_new(&tmp)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            fs::rename(&tmp, &target)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        result.with_context(|| format!("couldn't write {}", path.display()))
+        write_and_rename(fs::File::create_new(&tmp), &tmp, &target, bytes)
+            .with_context(|| format!("couldn't write {}", path.display()))
     }
 
     fn create_folder(&self, path: &Path) -> Result<()> {
@@ -204,37 +186,26 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     fn delete_book_file(&self, path: &Path) -> Result<()> {
-        match fs::remove_file(self.root.join(path)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("couldn't delete {}", path.display()))
-            }
-            _ => Ok(()),
-        }
+        found(fs::remove_file(self.root.join(path)))
+            .with_context(|| format!("couldn't delete {}", path.display()))?;
+        Ok(())
     }
 
     fn delete_folder(&self, path: &Path) -> Result<()> {
-        match fs::remove_dir_all(self.root.join(path)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("couldn't delete {}", path.display()))
-            }
-            _ => Ok(()),
-        }
+        found(fs::remove_dir_all(self.root.join(path)))
+            .with_context(|| format!("couldn't delete {}", path.display()))?;
+        Ok(())
     }
 
     fn book_modified(&self, path: &Path) -> Result<Option<Time>> {
-        match fs::metadata(self.root.join(path)) {
-            Ok(meta) => Ok(Some(Time::from(meta.modified()?))),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
+        match found(fs::metadata(self.root.join(path)))? {
+            Some(meta) => Ok(Some(Time::from(meta.modified()?))),
+            None => Ok(None),
         }
     }
 
     fn read_book(&self, path: &Path) -> Result<Option<Vec<u8>>> {
-        match fs::read(self.root.join(path)) {
-            Ok(book) => Ok(Some(book)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(found(fs::read(self.root.join(path)))?)
     }
 
     async fn book_file(&self, path: &Path) -> Result<Option<FileContent>> {
@@ -250,13 +221,13 @@ impl LibraryStorage for LocalLibraryStorage {
         let mut res = HashSet::new();
         for entry in contents {
             let entry = entry?;
-            res.insert(entry.file_name().to_string_lossy().to_string());
+            res.insert(entry.file_name().to_string_lossy().into_owned());
         }
         Ok(res)
     }
 
     fn book_metadata(&self, hash: &str) -> Result<Option<BookMetadata>> {
-        let meta_file = self.book_dir_by_id(hash).join("metadata.json");
+        let meta_file = self.metadata_path(hash);
         if meta_file.exists() {
             let meta = fs::read_to_string(&meta_file)?;
             let meta = serde_json::from_str(&meta)?;
@@ -266,8 +237,8 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     fn set_book_metadata(&self, hash: &str, metadata: &BookMetadata) -> Result<()> {
-        let meta_file = self.book_dir_by_id(hash).join("metadata.json");
-        self.write_atomic(&meta_file, serde_json::to_string_pretty(metadata)?.as_bytes())
+        let json = serde_json::to_string_pretty(metadata)?;
+        self.write_atomic(&self.metadata_path(hash), json.as_bytes())
     }
 
     fn create_book_dir(&self, hash: &str) -> Result<()> {
@@ -287,7 +258,9 @@ impl LibraryStorage for LocalLibraryStorage {
 
     fn set_book_progress(&self, hash: &str, user: &str, progress: BookProgress) -> Result<()> {
         let progress_file = self.progress_path(hash, user);
-        fs::create_dir_all(self.book_dir_by_id(hash).join("progress"))?;
+        if let Some(dir) = progress_file.parent() {
+            fs::create_dir_all(dir)?;
+        }
         self.write_atomic(&progress_file, serde_json::to_string_pretty(&progress)?.as_bytes())
     }
 
@@ -307,7 +280,7 @@ impl LibraryStorage for LocalLibraryStorage {
         let mut cleaned = 0;
         for hash in hashes {
             let mut deleted = false;
-            for file in [self.book_dir_by_id(&hash).join("metadata.json"), self.thumbnail_path(&hash)] {
+            for file in [self.metadata_path(&hash), self.thumbnail_path(&hash)] {
                 match fs::remove_file(&file) {
                     Ok(()) => deleted = true,
                     Err(e) if e.kind() == ErrorKind::NotFound => {}
@@ -321,10 +294,8 @@ impl LibraryStorage for LocalLibraryStorage {
 
     fn clean_up_progress(&self, keep: &HashSet<String>) -> Result<usize> {
         let books = self.books_dir();
-        let entries = match fs::read_dir(&books) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(e.into()),
+        let Some(entries) = found(fs::read_dir(&books))? else {
+            return Ok(0);
         };
         let mut deleted = 0;
         for entry in entries {
@@ -345,11 +316,7 @@ impl LibraryStorage for LocalLibraryStorage {
     }
 
     async fn read_shelf_file(&self, name: &str) -> Result<Option<String>> {
-        match tokio::fs::read_to_string(self.shelf_file_path(name)).await {
-            Ok(json) => Ok(Some(json)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(found(tokio::fs::read_to_string(self.shelf_file_path(name)).await)?)
     }
 
     async fn write_shelf_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
@@ -365,10 +332,8 @@ impl LibraryStorage for LocalLibraryStorage {
 
     async fn clean_up_temp_files(&self) -> Result<()> {
         let dir = self.root.join(".shelf");
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
+        let Some(mut entries) = found(tokio::fs::read_dir(&dir).await)? else {
+            return Ok(());
         };
         while let Some(entry) = entries.next_entry().await? {
             let name = entry.file_name();
@@ -380,6 +345,34 @@ impl LibraryStorage for LocalLibraryStorage {
         }
         Ok(())
     }
+}
+
+/// `None` for a missing file, so "gone" isn't an error.
+fn found<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Writes `bytes` to the new temp file, then renames it over `target`; the temp file is removed
+/// on failure.
+fn write_and_rename(
+    file: io::Result<fs::File>,
+    tmp: &Path,
+    target: &Path,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let result = file.and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(tmp, target)
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(tmp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -465,13 +458,6 @@ mod tests {
         storage.delete_folder(Path::new("a")).unwrap();
         assert!(!root.path().join("a").exists());
         storage.delete_folder(Path::new("a")).unwrap();
-    }
-
-    #[tokio::test]
-    async fn missing_config_is_default() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = storage(&root);
-        assert_eq!(storage.read_config("default").await.unwrap(), Config::default());
     }
 
     #[tokio::test]

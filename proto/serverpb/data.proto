@@ -10,7 +10,7 @@ message ServerData {
   map<string, ServerUser> users = 1;
   // Accounts asked for on the sign-in page, waiting for an admin. Names may repeat here; only
   // `users` keys are unique.
-  repeated ServerUserOnboardingRequests user_requests = 2;
+  repeated PendingUser user_requests = 2;
 }
 
 message ServerUser {
@@ -33,7 +33,7 @@ message Session {
   string expires = 2;
 }
 
-message ServerUserOnboardingRequests {
+message PendingUser {
   string user_name = 1;
   string password = 2;
   // Random; how approve and deny name the request.

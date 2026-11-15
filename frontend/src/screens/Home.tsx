@@ -5,6 +5,7 @@ import { LibraryBig, LoaderCircle, PanelLeft, TableOfContents } from "lucide-rea
 import { useRef, useState } from "react"
 import { Route, Routes, useMatch, useNavigate } from "react-router"
 import { getState, setState } from "@/api"
+import { CenteredMessage } from "@/components/CenteredMessage"
 import { LibraryPanel } from "@/components/LibraryPanel"
 import { Reader, type ReaderHandle } from "@/components/Reader"
 import { ScreenHeader } from "@/components/ScreenHeader"
@@ -12,6 +13,7 @@ import { type DrawerSide, SlideDrawer } from "@/components/SlideDrawer"
 import { TocPanel } from "@/components/TocPanel"
 import { Button } from "@/components/ui/button"
 import { GetStateResponseSchema } from "@/gen/apipb/state_pb"
+import { STATE_KEY } from "@/lib/queryKeys"
 import { useAppearance } from "@/lib/useAppearance"
 import { Settings, SETTINGS_PATH } from "@/screens/Settings"
 
@@ -32,11 +34,12 @@ export function Home() {
   const appearance = useAppearance()
 
   const state = useQuery({
-    queryKey: ["state"],
+    queryKey: STATE_KEY,
     queryFn: getState,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   })
+  const bookId = state.data?.lastBookId
   const pick = useMutation({
     mutationFn: setState,
     onSuccess: (_, id) => {
@@ -46,11 +49,10 @@ export function Home() {
         setTocId(undefined)
         setBars(true)
       }
-      queryClient.setQueryData(["state"], create(GetStateResponseSchema, { lastBookId: id }))
+      queryClient.setQueryData(STATE_KEY, create(GetStateResponseSchema, { lastBookId: id }))
       setDrawer(null)
     },
   })
-  const bookId = state.data?.lastBookId
   const openLibrary = () => setDrawer("left")
   const close = () => setDrawer(null)
 
@@ -123,10 +125,10 @@ export function Home() {
           {state.isPending ? (
             <LoaderCircle className="absolute inset-0 m-auto size-8 animate-spin text-muted-foreground" />
           ) : state.isError ? (
-            <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+            <CenteredMessage>
               <p className="text-destructive">{String(state.error)}</p>
               <Button onClick={() => void state.refetch()}>Try again</Button>
-            </div>
+            </CenteredMessage>
           ) : bookId ? (
             <Reader
               key={bookId}
@@ -144,14 +146,14 @@ export function Home() {
               onBarsChange={setBars}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+            <CenteredMessage>
               <LibraryBig className="size-10 text-muted-foreground" />
               <div>
                 <h2 className="text-lg font-medium">Pick a book to start reading</h2>
                 <p className="text-sm text-muted-foreground">Your books are in the library.</p>
               </div>
               <Button onClick={openLibrary}>Open library</Button>
-            </div>
+            </CenteredMessage>
           )}
         </SlideDrawer>
       </div>

@@ -2,9 +2,7 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tansta
 import { setUiScale, uiScale } from "@/api/app"
 import { log } from "@/lib/log"
 import { IS_TAURI } from "@/lib/platform"
-
-/** Per device, so it survives a library switch. */
-export const UI_SCALE_KEY = ["ui-scale"]
+import { UI_SCALE_KEY } from "@/lib/queryKeys"
 
 /** Percents, matching `validate_ui_scale` in `app/src/app_data.rs`. */
 export const UI_SCALE_CHOICES = Array.from({ length: 16 }, (_, i) => 50 + 10 * i)
@@ -21,7 +19,7 @@ export async function loadUiScale(queryClient: QueryClient) {
     queryClient.setQueryData(UI_SCALE_KEY, percent)
     applyUiScale(percent)
   } catch (e) {
-    log.warn("couldn't read the interface scale", { error: String(e) })
+    log.warn("couldn't read the interface scale", { error: e })
   }
 }
 

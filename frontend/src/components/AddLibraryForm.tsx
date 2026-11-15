@@ -5,6 +5,7 @@ import { ChooseFolder } from "@/components/ChooseFolder"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { IS_ANDROID } from "@/lib/platform"
+import { STORAGE_GRANTED_KEY } from "@/lib/queryKeys"
 import { nameTaken, useAddLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { cn } from "cn"
 
@@ -102,20 +103,18 @@ function hostOf(url: string): string | undefined {
   }
 }
 
-const STORAGE_KEY = ["storage-granted"]
-
 /** On Android the folder can only be read once the user grants all-files access in settings. */
 function LocalFolder({ path, onPick }: { path: string | null; onPick: (path: string) => void }) {
   const queryClient = useQueryClient()
   const storage = useQuery({
-    queryKey: STORAGE_KEY,
+    queryKey: STORAGE_GRANTED_KEY,
     queryFn: storageGranted,
     enabled: IS_ANDROID,
     staleTime: Infinity,
   })
   const grant = useMutation({
     mutationFn: requestStorage,
-    onSuccess: (granted) => queryClient.setQueryData(STORAGE_KEY, granted),
+    onSuccess: (granted) => queryClient.setQueryData(STORAGE_GRANTED_KEY, granted),
   })
 
   if (IS_ANDROID && !storage.data) {

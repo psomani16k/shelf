@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{
-    GetOptions, ObjectMeta, ObjectStore, PutOptions, PutPayload, aws::AmazonS3Builder,
-    path::Path as Key,
+    GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt, PutOptions, PutPayload,
+    aws::AmazonS3Builder, path::Path as Key,
 };
 use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
 use shelf_utility::timeutil::Time;
@@ -93,13 +93,23 @@ impl S3LibraryStorage {
     async fn list(&self, prefix: &Key) -> Result<Vec<ObjectMeta>> {
         Ok(self.store.list(Some(prefix)).try_collect().await?)
     }
+
+    /// Every key under `prefix`. Blocks.
+    fn list_keys(&self, prefix: &Key) -> Result<Vec<Key>> {
+        let keys = self.store.list(Some(prefix)).map_ok(|o| o.location);
+        Ok(self.block_on(keys.try_collect::<Vec<_>>())?)
+    }
+
+    fn book_dir_key(&self, hash: &str) -> Result<Key> {
+        self.key(&format!(".shelf/books/{hash}"))
+    }
+
+    fn shelf_key(&self, name: &str) -> Result<Key> {
+        self.key(&format!(".shelf/{name}"))
+    }
 }
 
 impl LibraryStorage for S3LibraryStorage {
-    fn all_book_file_paths(&self) -> Result<HashSet<PathBuf>> {
-        self.book_file_paths_under(Path::new(""))
-    }
-
     fn book_file_paths_under(&self, dir: &Path) -> Result<HashSet<PathBuf>> {
         let objects = self.block_on(self.list(&self.book_key(dir)?))?;
         Ok(objects
@@ -232,14 +242,12 @@ impl LibraryStorage for S3LibraryStorage {
     fn clean_up_books(&self, hashes: HashSet<String>) -> Result<usize> {
         let mut cleaned = 0;
         for hash in hashes {
-            let dir = self.key(&format!(".shelf/books/{hash}"))?;
             let stale = [
                 self.book_data_key(&hash, "metadata.json")?,
                 self.book_data_key(&hash, "thumbnail.jpeg")?,
             ];
-            let listed = self.store.list(Some(&dir)).map_ok(|o| o.location);
             // Like a local delete: one failed book doesn't stop the rest.
-            let Ok(listed) = self.block_on(listed.try_collect::<Vec<_>>()) else {
+            let Ok(listed) = self.list_keys(&self.book_dir_key(&hash)?) else {
                 continue;
             };
             let mut deleted = false;
@@ -257,10 +265,8 @@ impl LibraryStorage for S3LibraryStorage {
             if keep.contains(&hash) {
                 continue;
             }
-            let dir = self.key(&format!(".shelf/books/{hash}"))?;
             let metadata = self.book_data_key(&hash, "metadata.json")?;
-            let listed = self.store.list(Some(&dir)).map_ok(|o| o.location);
-            let Ok(listed) = self.block_on(listed.try_collect::<Vec<_>>()) else {
+            let Ok(listed) = self.list_keys(&self.book_dir_key(&hash)?) else {
                 continue;
             };
             if listed.contains(&metadata) {
@@ -277,14 +283,14 @@ impl LibraryStorage for S3LibraryStorage {
     }
 
     async fn read_shelf_file(&self, name: &str) -> Result<Option<String>> {
-        match self.get(&self.key(&format!(".shelf/{name}"))?).await? {
+        match self.get(&self.shelf_key(name)?).await? {
             Some(bytes) => Ok(Some(String::from_utf8(bytes.into())?)),
             None => Ok(None),
         }
     }
 
     async fn write_shelf_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
-        let key = self.key(&format!(".shelf/{name}"))?;
+        let key = self.shelf_key(name)?;
         self.put(&key, Bytes::copy_from_slice(bytes)).await
     }
 
@@ -296,7 +302,7 @@ impl LibraryStorage for S3LibraryStorage {
 
 #[cfg(test)]
 mod tests {
-    use object_store::{ObjectStoreExt, memory::InMemory};
+    use object_store::memory::InMemory;
     use shelf_proto::{
         bookkeeping::{BookLocation, EpubProgress, book_file_type},
         config::Config,
@@ -304,9 +310,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::testutil::{EMPTY_SHA1 as ID, OTHER_ID};
 
-    const ID: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
-    const OTHER_ID: &str = "0000000000000000000000000000000000000000";
 
     async fn storage(keys: &[&str]) -> S3LibraryStorage {
         let store = Arc::new(InMemory::new());

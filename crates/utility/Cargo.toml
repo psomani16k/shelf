@@ -4,11 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros", "io-util"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 anyhow = { workspace = true }
 jiff = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
-tokio-stream = {workspace = true}
 
 [dev-dependencies]
 # test-util: `#[tokio::test(start_paused = true)]`

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -15,7 +15,7 @@ use shelf_proto::{
     bookkeeping::BookMetadata,
     config::Config,
 };
-use shelf_utility::routines::Debounced;
+use shelf_utility::{routines::Debounced, timeutil::Duration};
 use tokio::sync::{Mutex, RwLock, mpsc::UnboundedReceiver};
 use tracing::{debug, info, warn};
 
@@ -45,14 +45,18 @@ impl BookLibrary {
     const DEBOUNCE: Duration = Duration::from_secs(5);
 
     /// Starts the watcher, syncs `.shelf/` with the folder, loads every book's metadata, then
-    /// starts the extractor, which calls `on_change` after each book it syncs. Must run inside tokio.
+    /// starts the extractor, which calls `on_change` after each sync that changed the index.
+    /// Must run inside tokio.
     pub async fn open(root: PathBuf, on_change: impl Fn() + Send + Sync + 'static) -> Result<Self> {
-        let (mut watcher, recv) = LibraryWatcher::initialize(&root)?;
-        watcher.watch().await?;
         // Events that arrive during the sync wait in `recv` until the extractor starts.
-        let storage = {
+        let (watcher, recv, storage) = {
             let root = root.clone();
-            tokio::task::spawn_blocking(move || LocalLibraryStorage::new(&root)).await??
+            tokio::task::spawn_blocking(move || -> Result<_> {
+                let (mut watcher, recv) = LibraryWatcher::initialize(&root)?;
+                watcher.watch()?;
+                Ok((watcher, recv, LocalLibraryStorage::new(&root)?))
+            })
+            .await??
         };
         sync_library(&storage, false).await?;
         let listing = storage.clone();
@@ -106,9 +110,7 @@ impl BookLibrary {
         let storage = self.storage.clone();
         tokio::task::spawn_blocking(move || f(storage)).await?
     }
-}
 
-impl BookLibrary {
     /// The users with data in `.shelf/users/`, sorted; what a local library offers to sign in as.
     pub async fn user_names(&self) -> Result<Vec<String>> {
         self.with_storage(|s| s.user_names()).await

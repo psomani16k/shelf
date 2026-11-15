@@ -8,8 +8,7 @@ import { IS_ANDROID } from "@/lib/platform"
 type Props = {
   label: string
   onPick: (path: string) => void
-  disabled?: boolean
-} & Pick<ComponentProps<typeof Button>, "variant" | "size">
+} & Pick<ComponentProps<typeof Button>, "variant">
 
 /** App only: a native folder picker. Resolves to nothing when the user cancels. */
 async function chooseFolder(): Promise<string | null> {
@@ -18,13 +17,11 @@ async function chooseFolder(): Promise<string | null> {
   return (await open({ directory: true, title: "Choose your library folder" })) ?? null
 }
 
-export function ChooseFolder({ label, onPick, disabled, variant, size }: Props) {
+export function ChooseFolder({ label, onPick, variant }: Props) {
   return (
     <Button
       type="button"
       variant={variant}
-      size={size}
-      disabled={disabled}
       onClick={async () => {
         const dir = await chooseFolder()
         if (dir) onPick(dir)

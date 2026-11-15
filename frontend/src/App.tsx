@@ -5,6 +5,7 @@ import { BrowserRouter, MemoryRouter } from "react-router"
 import { onLibraryChanged, openLibrary } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
 import { IS_TAURI } from "@/lib/platform"
+import { BOOKS_KEY, DIRS_KEY, openLibraryKey } from "@/lib/queryKeys"
 import { useSignedOut } from "@/lib/session"
 import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { useSystemInsets } from "@/lib/useSystemInsets"
@@ -35,8 +36,8 @@ function AppFlow() {
   useEffect(
     () =>
       onLibraryChanged(() => {
-        void queryClient.invalidateQueries({ queryKey: ["dirs"] })
-        void queryClient.invalidateQueries({ queryKey: ["books"] })
+        void queryClient.invalidateQueries({ queryKey: DIRS_KEY })
+        void queryClient.invalidateQueries({ queryKey: BOOKS_KEY })
       }),
     [queryClient],
   )
@@ -45,7 +46,7 @@ function AppFlow() {
   const current = useCurrentLibrary()
   const signedOut = useSignedOut()
   const open = useQuery({
-    queryKey: ["open-library", current?.name],
+    queryKey: openLibraryKey(current?.name),
     queryFn: () => openLibrary(current!.name),
     enabled: !!current,
     staleTime: Infinity,

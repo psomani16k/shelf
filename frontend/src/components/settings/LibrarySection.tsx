@@ -1,14 +1,19 @@
 import { fromJsonString, toJsonString } from "@bufbuild/protobuf"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleMinus, LoaderCircle, Plus } from "lucide-react"
-import { type ReactNode, useRef, useState } from "react"
+import { type ComponentProps, useRef, useState } from "react"
 import { cleanUpProgress, exportUserData, importUserData, rebuildIndex } from "@/api"
 import { saveJsonFile } from "@/api/app"
 import { AddLibraryForm } from "@/components/AddLibraryForm"
 import { RemoveLibraryConfirm } from "@/components/RemoveLibraryConfirm"
+import { ActionRow } from "@/components/settings/ActionRow"
+import { NameWithBadge } from "@/components/settings/NameWithBadge"
+import { SettingsGroup } from "@/components/settings/SettingsGroup"
 import { Button } from "@/components/ui/button"
 import { type UserData, UserDataSchema } from "@/gen/apipb/user_data_pb"
+import { plural } from "@/lib/format"
 import { IS_TAURI } from "@/lib/platform"
+import { BOOKS_KEY, DIRS_KEY, STATE_KEY } from "@/lib/queryKeys"
 import { useCurrentLibrary, useLibraries } from "@/lib/useAppLibrary"
 import { usePermissions } from "@/lib/useMe"
 
@@ -46,61 +51,49 @@ function Libraries() {
   const [adding, setAdding] = useState(false)
 
   return (
-    <section aria-label="Libraries">
-      <h3 className="mb-2 px-1 font-medium">Libraries</h3>
-      <div className="divide-y rounded-lg border px-4">
-        {libraries.map((library) =>
-          removing === library.name ? (
-            <div key={library.name} className="py-4">
-              <RemoveLibraryConfirm library={library} onCancel={() => setRemoving(undefined)} />
+    <SettingsGroup label="Libraries">
+      {libraries.map((library) =>
+        removing === library.name ? (
+          <div key={library.name} className="py-4">
+            <RemoveLibraryConfirm library={library} onCancel={() => setRemoving(undefined)} />
+          </div>
+        ) : (
+          <div key={library.name} className="flex items-center gap-3 py-3">
+            <div className="min-w-0 flex-1">
+              <NameWithBadge name={library.name} badge={library.name === current?.name && "Open"} />
+              <p className="truncate text-sm text-muted-foreground">
+                {library.kind === "local" ? "Folder on this device: " : "Shelf server: "}
+                {library.location}
+              </p>
             </div>
-          ) : (
-            <div key={library.name} className="flex items-center gap-3 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 text-sm font-medium">
-                  <span className="truncate">{library.name}</span>
-                  {library.name === current?.name && (
-                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
-                      Open
-                    </span>
-                  )}
-                </p>
-                <p className="truncate text-sm text-muted-foreground">
-                  {library.kind === "local" ? "Folder on this device: " : "Shelf server: "}
-                  {library.location}
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 text-destructive hover:text-destructive"
-                onClick={() => setRemoving(library.name)}
-                aria-label={`Remove ${library.name}`}
-              >
-                <CircleMinus />
-              </Button>
-            </div>
-          ),
-        )}
-        <div className="py-4">
-          {adding ? (
-            <AddLibraryForm onCancel={() => setAdding(false)} />
-          ) : (
-            <Button variant="outline" className="w-full" onClick={() => setAdding(true)}>
-              <Plus />
-              Add library
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 text-destructive hover:text-destructive"
+              onClick={() => setRemoving(library.name)}
+              aria-label={`Remove ${library.name}`}
+            >
+              <CircleMinus />
             </Button>
-          )}
-        </div>
+          </div>
+        ),
+      )}
+      <div className="py-4">
+        {adding ? (
+          <AddLibraryForm onCancel={() => setAdding(false)} />
+        ) : (
+          <Button variant="outline" className="w-full" onClick={() => setAdding(true)}>
+            <Plus />
+            Add library
+          </Button>
+        )}
       </div>
-    </section>
+    </SettingsGroup>
   )
 }
 
 /** The `UserData.version` this build writes and reads. */
 const USER_DATA_VERSION = 1
-
-const books = (n: number) => `${n} book${n === 1 ? "" : "s"}`
 
 function ExportData() {
   const save = useMutation({
@@ -121,7 +114,7 @@ function ExportData() {
     <Row
       title="Export your reading data"
       description="Saves your reading progress, last book and settings as a file, to import into another library: a server, or a folder on a device."
-      status={result?.saved && `Exported your progress for ${books(result.books)}.`}
+      status={result?.saved && `Exported your progress for ${plural(result.books, "book")}.`}
       error={save.isError && String(save.error)}
     >
       <Button
@@ -179,12 +172,12 @@ function ImportData() {
       title="Import reading data"
       description={
         picked
-          ? `Import your progress for ${books(picked.progress.length)}? It replaces your progress for those books, your last book and your settings.`
+          ? `Import your progress for ${plural(picked.progress.length, "book")}? It replaces your progress for those books, your last book and your settings.`
           : "Loads a file exported from Shelf, from this library or another one, as your own data."
       }
       status={
         result &&
-        `Imported your progress for ${books(result.books)}` +
+        `Imported your progress for ${plural(result.books, "book")}` +
           (result.skipped > 0 ? `; ${result.skipped} aren't in this library.` : ".")
       }
       error={
@@ -227,8 +220,8 @@ function RebuildIndex() {
     mutationFn: rebuildIndex,
     onSuccess: () => {
       // IDs can change and books can disappear, including the one that's open.
-      for (const key of ["dirs", "books", "state"]) {
-        void queryClient.invalidateQueries({ queryKey: [key] })
+      for (const queryKey of [DIRS_KEY, BOOKS_KEY, STATE_KEY]) {
+        void queryClient.invalidateQueries({ queryKey })
       }
     },
   })
@@ -271,7 +264,7 @@ function CleanUpProgress() {
           : "Deletes the saved reading progress, for every user, of books that are no longer in the library. A book added back afterwards starts from the beginning."
       }
       status={
-        removed !== undefined && `Removed the progress of ${removed} book${removed === 1 ? "" : "s"}.`
+        removed !== undefined && `Removed the progress of ${plural(removed, "book")}.`
       }
       error={clean.isError && String(clean.error)}
     >
@@ -301,30 +294,11 @@ function CleanUpProgress() {
   )
 }
 
-function Row({
-  title,
-  description,
-  status,
-  error,
-  children,
-}: {
-  title: string
-  description?: ReactNode
-  status?: ReactNode
-  error?: ReactNode
-  children: ReactNode
-}) {
+/** An `ActionRow` in a card of its own. */
+function Row(props: ComponentProps<typeof ActionRow>) {
   return (
     <div className="rounded-lg border px-4">
-      <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{title}</p>
-          {description && <p className="text-sm text-muted-foreground">{description}</p>}
-          {status && <p className="mt-1 text-sm">{status}</p>}
-          {error && <p className="mt-1 text-sm text-destructive">{error}</p>}
-        </div>
-        {children}
-      </div>
+      <ActionRow {...props} />
     </div>
   )
 }

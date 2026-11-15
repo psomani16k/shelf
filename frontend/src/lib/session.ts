@@ -1,12 +1,6 @@
 import { useSyncExternalStore } from "react"
 import { IS_TAURI } from "@/lib/platform"
 
-/**
- * Whether the user has to sign in. On the web the server's login key is kept in this browser's
- * storage, so it stays signed in; the app keeps a remote library's key in Rust. Any 401 marks the
- * session signed out, which shows the login screen.
- */
-
 const TOKEN_KEY = "shelf.token"
 
 /** Web only. */

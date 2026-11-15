@@ -1,8 +1,6 @@
 import { listen } from "@tauri-apps/api/event"
 import { invokeCommand } from "./tauri"
 
-/** App only: the libraries this device knows about, kept in the app's private storage. */
-
 export type LibraryInfo = {
   name: string
   kind: "local" | "remote"
@@ -51,7 +49,7 @@ export const requestStorage = () => invokeCommand<boolean>("request_storage")
 /** Android's folder picker. Rejects when cancelled. */
 export const pickFolder = () => invokeCommand<string>("pick_folder")
 
-export type Insets = { top: number; right: number; bottom: number; left: number }
+type Insets = { top: number; right: number; bottom: number; left: number }
 
 /** Space taken by the status bar, navigation bar and cutout, in CSS px. Zero on desktops. */
 export const systemInsets = () => invokeCommand<Insets>("system_insets")
@@ -62,7 +60,7 @@ export const uiScale = () => invokeCommand<number>("ui_scale")
 /** 50 to 200 in steps of 10, else a 400. Resolves with the saved value. */
 export const setUiScale = (percent: number) => invokeCommand<number>("set_ui_scale", { percent })
 
-export type LogSettings = {
+type LogSettings = {
   /** How many log files are kept, the one being written included. */
   keep_files: number
   max_keep_files: number
@@ -86,7 +84,7 @@ export type LogFileInfo = {
   current: boolean
 }
 
-export type LogFileList = {
+type LogFileList = {
   /** Where the files are. Only meaningful on a desktop; Android's is private to the app. */
   dir: string
   /** Newest first. */

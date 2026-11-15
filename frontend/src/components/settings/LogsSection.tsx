@@ -10,12 +10,13 @@ import {
   saveLogs,
   setLogFiles,
 } from "@/api/app"
+import { ActionRow } from "@/components/settings/ActionRow"
+import { SettingsGroup } from "@/components/settings/SettingsGroup"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { DATE_TIME } from "@/lib/format"
 import { IS_ANDROID } from "@/lib/platform"
-
-const LOG_SETTINGS_KEY = ["log-settings"]
-const LOG_FILES_KEY = ["log-files"]
+import { LOG_FILES_KEY, LOG_SETTINGS_KEY } from "@/lib/queryKeys"
 
 /** App only, under *Developer options*: how many log files this device keeps, and getting them off it. */
 export function LogsSection() {
@@ -43,17 +44,20 @@ function LogFiles() {
   if (list.isError) return <p className="px-1 text-sm text-destructive">{String(list.error)}</p>
 
   return (
-    <section aria-label="Log files">
-      <h3 className="mb-2 px-1 font-medium">Files</h3>
-      <ul className="divide-y rounded-lg border px-4">
-        {list.data.files.map((file) => (
-          <LogFileRow key={file.name} file={file} />
-        ))}
-      </ul>
-      {!IS_ANDROID && (
-        <p className="mt-2 px-1 text-xs break-all text-muted-foreground">In {list.data.dir}</p>
-      )}
-    </section>
+    <SettingsGroup
+      label="Log files"
+      heading="Files"
+      list
+      footer={
+        !IS_ANDROID && (
+          <p className="mt-2 px-1 text-xs break-all text-muted-foreground">In {list.data.dir}</p>
+        )
+      }
+    >
+      {list.data.files.map((file) => (
+        <LogFileRow key={file.name} file={file} />
+      ))}
+    </SettingsGroup>
   )
 }
 
@@ -87,7 +91,6 @@ function LogFileRow({ file }: { file: LogFileInfo }) {
   )
 }
 
-const DATE_TIME = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" })
 
 /** `26 Oct 2026, 10:42 – 10:55`, with the date repeated only if the end is on another day. */
@@ -143,7 +146,7 @@ function KeepFiles() {
   }
 
   return (
-    <Row
+    <ActionRow
       title="Log files to keep"
       description="Each start of the app begins a new file. Past this many, the oldest are deleted."
       error={
@@ -169,14 +172,14 @@ function KeepFiles() {
           if (e.key === "Enter") commit()
         }}
       />
-    </Row>
+    </ActionRow>
   )
 }
 
 function CopyLogs() {
   const copy = useMutation({ mutationFn: copyLogs })
   return (
-    <Row
+    <ActionRow
       title="Copy logs"
       description="The most recent part of the log, to paste into a message or a bug report."
       status={copy.isSuccess && "Copied."}
@@ -186,14 +189,14 @@ function CopyLogs() {
         <ClipboardCopy />
         Copy
       </ActionButton>
-    </Row>
+    </ActionRow>
   )
 }
 
 function SaveLogs() {
   const save = useMutation({ mutationFn: saveLogs })
   return (
-    <Row
+    <ActionRow
       title="Save logs"
       description="All of the log, as one file wherever you choose."
       status={save.data === true && "Saved."}
@@ -203,7 +206,7 @@ function SaveLogs() {
         <Download />
         Save…
       </ActionButton>
-    </Row>
+    </ActionRow>
   )
 }
 
@@ -225,31 +228,5 @@ function ActionButton({
     >
       {pending ? <LoaderCircle className="animate-spin" /> : children}
     </Button>
-  )
-}
-
-function Row({
-  title,
-  description,
-  status,
-  error,
-  children,
-}: {
-  title: string
-  description: string
-  status?: ReactNode
-  error?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-sm text-muted-foreground">{description}</p>
-        {status && <p className="mt-1 text-sm">{status}</p>}
-        {error && <p className="mt-1 text-sm text-destructive">{error}</p>}
-      </div>
-      {children}
-    </div>
   )
 }

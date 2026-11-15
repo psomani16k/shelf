@@ -1,6 +1,6 @@
 # Roadmap
 
-Everything planned but not built, as of 2026-11-10. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
+Everything planned but not built, as of 2026-11-14. It comes from the old `PLAN.md` (removed in commit `aed1ede`) and the earlier `CLAUDE.md` design, checked against the code. Bugs and risks in what *is* built are in [known-issues.md](known-issues.md); the reasoning behind the design is in [decisions.md](decisions.md).
 
 Rough priority within each section is top to bottom. Plan milestones are noted as (M*n*) where they came from one.
 
@@ -10,7 +10,7 @@ From the plan's server design (M4, M5), extended to per-user progress (design in
 
 ### Per-user data in `.shelf/` (core)
 
-Built: progress, the last book and settings are per user ([library-format.md](library-format.md)), with the user in the request's proto message, filled in by the server's handlers (the signed-in user) and by `LocalLibrary` (the library entry's `user`, `default` for now). Old `progress.json`, `config.json` and `state.json` files are ignored (a deliberate breaking change). Book metadata and thumbnails stay shared.
+Built: progress, the last book and settings are per user ([library-format.md](library-format.md)), with the user in the request's proto message, filled in by the server's handlers (the signed-in user) and by `LocalLibrary` (the name chosen on the device, kept as the library entry's `user`). Old `progress.json`, `config.json` and `state.json` files are ignored (a deliberate breaking change). Book metadata and thumbnails stay shared.
 
 - [ ] `users/<user>/` folders (settings and last book) are never deleted automatically.
 
@@ -33,7 +33,7 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 
 ## Server
 
-- [ ] Config file and CLI (`shelf-server serve --config /etc/shelf/config.toml`) with `library`, `bind`, the data folder (today `/data`; never inside the library), `log_bodies`. Today `/books` and `0.0.0.0:8080` are hard-coded.
+- [ ] Config file and CLI (`shelf-server serve --config /etc/shelf/config.toml`) with `library`, `bind`, the data folder (never inside the library), `log_bodies`. `shelf_server::Config` already holds the first three; the binary just always uses its default (`/books`, `/data`, `0.0.0.0:8080`).
 - [ ] `log_bodies = true`: access lines include JSON request and response bodies, cut at about 4 KB. Never for `/api/auth/*` or the raw-byte routes (`/file`, `/cover`).
 - [ ] Integration tests against a temp library: every route, Range requests, progress round-trips (M4). The auth flows, 401s and 403s are covered by `api.rs`'s router tests.
 - [ ] Deployment notes for HTTPS: Tailscale (`tailscale serve`) or Caddy in front of the container (M4/M7).
@@ -42,7 +42,7 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 
 - [x] **Faster startup:** done with `last_update_time` vs the file's mtime ([library-format.md](library-format.md#startup-sync)). Possible follow-up: also record the file's `size`, to catch a same-path replacement with an older mtime.
 - [ ] **Watcher flush cap:** flush a path at the latest 60 s after its first event, so a file that keeps changing still syncs.
-- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`BookLibrary::receive_and_process_library_updates`) checks `predict_id_change_using_modified_time` first. A touch still does.
+- [x] **Watcher modify filtering:** events that don't move the file's mtime (attribute or access changes) no longer re-hash it: the watcher's sync job (`IndexSync::sync_book`) checks `predict_id_change_using_modified_time` before reading the file. A touch still does.
 - [x] **Don't lose progress to a corrupt `metadata.json`:** `EbookExtractor::read` treats one it can't read as missing (with a `warn`), so the book is extracted again and its folder kept ([library-format.md](library-format.md#startup-sync)).
 - [x] **Atomic writes** for `metadata.json`, `progress.json` and thumbnails too ([library-format.md](library-format.md#writes)). Together with the item above, a crash during *Rebuild index* can't cost a book its progress.
 - [x] **Keep progress across a book being missing:** the startup sync deletes only a gone book's `metadata.json` and thumbnail, so its progress is there when the same file comes back ([library-format.md](library-format.md#startup-sync)).

@@ -5,16 +5,13 @@ import { Navigate, useLocation, useNavigate, useParams } from "react-router"
 import { setConfig } from "@/api"
 import { ScreenHeader } from "@/components/ScreenHeader"
 import { ChoiceRow } from "@/components/settings/ChoiceRow"
-import {
-  type Group,
-  type Section,
-  type Setting,
-  useVisibleSections,
-} from "@/components/settings/sections"
+import { type Group, type Section, useVisibleSections } from "@/components/settings/sections"
+import { SettingsGroup } from "@/components/settings/SettingsGroup"
 import { Button } from "@/components/ui/button"
-import type { Config } from "@/gen/configpb/config_pb"
 import { useBackButton } from "@/lib/backButton"
-import { LIBRARY_CONFIG_KEY, useLibraryConfig } from "@/lib/useAppearance"
+import { LIBRARY_CONFIG_KEY } from "@/lib/queryKeys"
+import { useLibraryConfig } from "@/lib/useAppearance"
+import { useLatest } from "@/lib/useLatest"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { cn } from "cn"
 
@@ -44,10 +41,7 @@ export function Settings() {
   const [returnFocus] = useState(() => document.activeElement as HTMLElement | null)
 
   const close = () => (depth ? navigate(-depth) : navigate("/", { replace: true }))
-  const closeRef = useRef(close)
-  useEffect(() => {
-    closeRef.current = close
-  })
+  const closeRef = useLatest(close)
 
   useEffect(() => {
     rootRef.current?.focus()
@@ -60,7 +54,7 @@ export function Settings() {
       window.removeEventListener("keydown", onKey)
       returnFocus?.focus({ preventScroll: true })
     }
-  }, [returnFocus])
+  }, [returnFocus, closeRef])
 
   const section = sections.find((s) => s.slug === slug)
   const backToList = () =>
@@ -81,6 +75,12 @@ export function Settings() {
     else void navigate(to, { state: { depth: depth && depth + 1, fromList: true } })
   }
 
+  const closeButton = (
+    <Button variant="ghost" size="icon" onClick={close} aria-label="Close settings">
+      {wide ? <X /> : <ArrowLeft />}
+    </Button>
+  )
+
   return (
     // tabIndex: clicks on plain text keep focus inside, so Escape still reaches the handler.
     <div ref={rootRef} tabIndex={-1} className="safe-area fixed inset-0 z-50 flex bg-background outline-none">
@@ -89,20 +89,8 @@ export function Settings() {
           <ScreenHeader
             title="Settings"
             className="md:border-b-0"
-            start={
-              !wide && (
-                <Button variant="ghost" size="icon" onClick={close} aria-label="Close settings">
-                  <ArrowLeft />
-                </Button>
-              )
-            }
-            end={
-              wide && (
-                <Button variant="ghost" size="icon" onClick={close} aria-label="Close settings">
-                  <X />
-                </Button>
-              )
-            }
+            start={!wide && closeButton}
+            end={wide && closeButton}
           />
           <ul className="flex flex-col gap-1 p-2">
             {sections.map((s) => (
@@ -146,21 +134,13 @@ export function Settings() {
           />
           <div className="flex-1 overflow-y-auto overscroll-contain p-4 md:px-8 md:pb-8 md:pt-2">
             <div className="mx-auto max-w-2xl">
-              <SectionSettings section={shown} />
+              {shown.groups && <ConfigSettings groups={shown.groups} />}
+              {shown.content && <shown.content />}
             </div>
           </div>
         </main>
       )}
     </div>
-  )
-}
-
-function SectionSettings({ section }: { section: Section }) {
-  return (
-    <>
-      {section.groups && <ConfigSettings groups={section.groups} />}
-      {section.content && <section.content />}
-    </>
   )
 }
 
@@ -183,42 +163,21 @@ function ConfigSettings({ groups }: { groups: Group[] }) {
       {save.isError && <p className="mb-4 text-destructive">{String(save.error)}</p>}
       <div className="flex flex-col gap-8">
         {groups.map((group, i) => (
-          <section key={group.label ?? i} aria-label={group.label}>
-            {group.label && <h3 className="mb-2 px-1 font-medium">{group.label}</h3>}
-            <div className="divide-y rounded-lg border px-4">
-              {group.settings.map((setting) => (
-                <SettingRow
-                  key={setting.id}
-                  setting={setting}
-                  config={config.data}
-                  onChange={(value) => save.mutate(setting.patch(value))}
-                />
-              ))}
-            </div>
-          </section>
+          <SettingsGroup key={group.label ?? i} label={group.label}>
+            {group.settings.map((setting) => (
+              <ChoiceRow
+                key={setting.id}
+                label={setting.label}
+                description={setting.description}
+                choices={setting.choices}
+                value={setting.read(config.data) ?? 0}
+                disabled={setting.disabled?.(config.data) ?? false}
+                onChange={(value) => save.mutate(setting.patch(value))}
+              />
+            ))}
+          </SettingsGroup>
         ))}
       </div>
     </>
-  )
-}
-
-function SettingRow({
-  setting,
-  config,
-  onChange,
-}: {
-  setting: Setting
-  config: Config
-  onChange: (value: number) => void
-}) {
-  return (
-    <ChoiceRow
-      label={setting.label}
-      description={setting.description}
-      choices={setting.choices}
-      value={setting.read(config) ?? 0}
-      disabled={setting.disabled?.(config) ?? false}
-      onChange={onChange}
-    />
   )
 }

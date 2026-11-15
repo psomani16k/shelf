@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 notify = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros", "io-util"] }
+tokio = { workspace = true, features = ["sync", "rt", "fs"] }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 sha1 = { workspace = true }

@@ -15,13 +15,17 @@ import { type ReactNode, useRef, useState } from "react"
 import { createDirectory, deleteItems, listBooks, listDirectories } from "@/api"
 import { BookCover } from "@/components/BookCover"
 import { Breadcrumb } from "@/components/Breadcrumb"
+import { InlineConfirm } from "@/components/InlineConfirm"
 import { LibrarySwitcher } from "@/components/LibrarySwitcher"
+import { PanelHeader } from "@/components/PanelHeader"
 import { UploadList } from "@/components/UploadList"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { ListBooksResponseItem } from "@/gen/apipb/list_pb"
 import { bookAuthors, itemTitle } from "@/lib/book"
+import { joinPath, plural } from "@/lib/format"
 import { IS_TAURI } from "@/lib/platform"
+import { BOOKS_KEY, booksKey, DIRS_KEY, dirsKey, STATE_KEY } from "@/lib/queryKeys"
 import { uploads } from "@/lib/uploads"
 import { useLongPress } from "@/lib/useLongPress"
 import { usePermissions } from "@/lib/useMe"
@@ -52,17 +56,16 @@ export function LibraryPanel({
   onOpenSettings,
 }: Props) {
   const queryClient = useQueryClient()
-  const dirs = useQuery({ queryKey: ["dirs", folder], queryFn: () => listDirectories(folder) })
-  const books = useQuery({ queryKey: ["books", folder], queryFn: () => listBooks(folder) })
+  const dirs = useQuery({ queryKey: dirsKey(folder), queryFn: () => listDirectories(folder) })
+  const books = useQuery({ queryKey: booksKey(folder), queryFn: () => listBooks(folder) })
   const [selection, setSelection] = useState<Selection | null>(null)
   const [form, setForm] = useState<BarForm | null>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
 
   const error = dirs.error ?? books.error
   const subDirs = dirs.data?.subDirectories ?? []
   const bookItems = books.data?.books ?? []
   const empty = dirs.data && books.data && subDirs.length === 0 && bookItems.length === 0
-  const pathOf = (name: string) => (folder ? `${folder}/${name}` : name)
+  const pathOf = (name: string) => joinPath(folder, name)
 
   const goTo = (next: string) => {
     setSelection(null)
@@ -111,29 +114,22 @@ export function LibraryPanel({
     // Some may be gone even when one failed. The open book may be gone too, which `state` shows.
     onSettled: () =>
       Promise.all(
-        [["books"], ["dirs"], ["state"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+        [BOOKS_KEY, DIRS_KEY, STATE_KEY].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       ),
   })
 
   const upload = (files: FileList | null) => {
     if (!files?.length) return
-    const into = folder
-    uploads.enqueue(into, [...files], () => {
-      void queryClient.invalidateQueries({ queryKey: ["books", into] })
+    uploads.enqueue(folder, [...files], () => {
+      void queryClient.invalidateQueries({ queryKey: booksKey(folder) })
     })
   }
 
   return (
     <>
-      <div className="flex items-start gap-2 border-b py-3 pr-2 pl-4">
-        <div className="min-w-0 flex-1">
-          <h2 className="font-medium">Library</h2>
-          <Breadcrumb folder={folder} onNavigate={goTo} />
-        </div>
-        <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close library">
-          <X />
-        </Button>
-      </div>
+      <PanelHeader title="Library" onClose={onClose}>
+        <Breadcrumb folder={folder} onNavigate={goTo} />
+      </PanelHeader>
 
       <div className="flex-1 overflow-y-auto overscroll-contain p-4">
         {(dirs.isPending || books.isPending) && !error && (
@@ -172,113 +168,150 @@ export function LibraryPanel({
         {form === "new-folder" ? (
           <NewFolderForm folder={folder} onDone={() => setForm(null)} />
         ) : form === "confirm-delete" && selection ? (
-          <div className="flex flex-col gap-3 p-2">
-            <p className="text-sm">
-              <span className="font-medium">Delete {describe(selection)}?</span>
-              {selection.dirs.size > 0 && " Folders are deleted with everything in them."} This
-              can't be undone.
-            </p>
-            {remove.isError && <p className="text-sm text-destructive">{String(remove.error)}</p>}
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setForm(null)} disabled={remove.isPending}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => remove.mutate(selection)}
-                disabled={remove.isPending}
-              >
-                Delete
-              </Button>
-            </div>
-          </div>
+          <InlineConfirm
+            className="p-2"
+            confirmLabel="Delete"
+            onConfirm={() => remove.mutate(selection)}
+            onCancel={() => setForm(null)}
+            pending={remove.isPending}
+            error={remove.isError && String(remove.error)}
+          >
+            <span className="font-medium">Delete {describe(selection)}?</span>
+            {selection.dirs.size > 0 && " Folders are deleted with everything in them."} This
+            can't be undone.
+          </InlineConfirm>
         ) : selection ? (
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSelection(null)}
-              aria-label="Stop selecting"
-            >
-              <X />
-            </Button>
-            <span className="flex-1 text-sm">{count} selected</span>
-            <Button variant="ghost" size="sm" onClick={selectAll}>
-              {allSelected ? "Select none" : "Select all"}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-destructive"
-              onClick={() => {
-                remove.reset()
-                setForm("confirm-delete")
-              }}
-              disabled={count === 0}
-              aria-label="Delete selected"
-            >
-              <Trash2 />
-            </Button>
-          </div>
+          <SelectionBar
+            count={count}
+            allSelected={allSelected}
+            onStop={() => setSelection(null)}
+            onSelectAll={selectAll}
+            onDelete={() => {
+              remove.reset()
+              setForm("confirm-delete")
+            }}
+          />
         ) : (
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={onOpenSettings} aria-label="Settings">
-              <Settings />
-            </Button>
-            <div className="flex-1" />
-            {canDelete && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => startSelecting()}
-                disabled={!!empty || !dirs.data || !books.data}
-                aria-label="Select"
-              >
-                <ListChecks />
-              </Button>
-            )}
-            {canAdd && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setForm("new-folder")}
-                  aria-label="New folder"
-                >
-                  <FolderPlus />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => fileInput.current?.click()}
-                  aria-label="Upload books"
-                >
-                  <Upload />
-                </Button>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  multiple
-                  accept=".epub,application/epub+zip"
-                  className="hidden"
-                  onChange={(e) => {
-                    upload(e.target.files)
-                    // So picking the same file again still fires `change`.
-                    e.target.value = ""
-                  }}
-                />
-              </>
-            )}
-          </div>
+          <DefaultBar
+            canDelete={canDelete}
+            canAdd={canAdd}
+            selectDisabled={!!empty || !dirs.data || !books.data}
+            onOpenSettings={onOpenSettings}
+            onSelect={() => startSelecting()}
+            onNewFolder={() => setForm("new-folder")}
+            onUpload={upload}
+          />
         )}
       </div>
     </>
   )
 }
 
+function SelectionBar({
+  count,
+  allSelected,
+  onStop,
+  onSelectAll,
+  onDelete,
+}: {
+  count: number
+  allSelected: boolean
+  onStop: () => void
+  onSelectAll: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="icon" onClick={onStop} aria-label="Stop selecting">
+        <X />
+      </Button>
+      <span className="flex-1 text-sm">{count} selected</span>
+      <Button variant="ghost" size="sm" onClick={onSelectAll}>
+        {allSelected ? "Select none" : "Select all"}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-destructive"
+        onClick={onDelete}
+        disabled={count === 0}
+        aria-label="Delete selected"
+      >
+        <Trash2 />
+      </Button>
+    </div>
+  )
+}
+
+/** Settings, and what the user's role allows: selecting, a new folder, uploading. */
+function DefaultBar({
+  canDelete,
+  canAdd,
+  selectDisabled,
+  onOpenSettings,
+  onSelect,
+  onNewFolder,
+  onUpload,
+}: {
+  canDelete: boolean
+  canAdd: boolean
+  selectDisabled: boolean
+  onOpenSettings: () => void
+  onSelect: () => void
+  onNewFolder: () => void
+  onUpload: (files: FileList | null) => void
+}) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  return (
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="icon" onClick={onOpenSettings} aria-label="Settings">
+        <Settings />
+      </Button>
+      <div className="flex-1" />
+      {canDelete && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onSelect}
+          disabled={selectDisabled}
+          aria-label="Select"
+        >
+          <ListChecks />
+        </Button>
+      )}
+      {canAdd && (
+        <>
+          <Button variant="ghost" size="icon" onClick={onNewFolder} aria-label="New folder">
+            <FolderPlus />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => fileInput.current?.click()}
+            aria-label="Upload books"
+          >
+            <Upload />
+          </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept=".epub,application/epub+zip"
+            className="hidden"
+            onChange={(e) => {
+              onUpload(e.target.files)
+              // So picking the same file again still fires `change`.
+              e.target.value = ""
+            }}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 /** "2 books and 1 folder" */
 function describe({ books, dirs }: Selection): string {
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
   const parts = [
     books.size > 0 && plural(books.size, "book"),
     dirs.size > 0 && plural(dirs.size, "folder"),
@@ -292,7 +325,7 @@ function NewFolderForm({ folder, onDone }: { folder: string; onDone: () => void 
   const create = useMutation({
     mutationFn: () => createDirectory(folder, name.trim()),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["dirs", folder] })
+      await queryClient.invalidateQueries({ queryKey: dirsKey(folder) })
       onDone()
     },
   })

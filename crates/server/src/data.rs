@@ -98,10 +98,10 @@ impl DataFile {
         now: Time,
         change: impl FnOnce(&mut ServerData) -> T,
     ) -> Result<T> {
-        let out = self
+        let Ok(out) = self
             .try_update(now, |data| Ok::<_, Infallible>(change(data)))
             .await?;
-        Ok(out.unwrap_or_else(|never| match never {}))
+        Ok(out)
     }
 
     /// Like `update`, but nothing is written when `change` fails; its error is the inner one.

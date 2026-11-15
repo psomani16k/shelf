@@ -4,9 +4,9 @@ import { useState } from "react"
 import { changePassword, logout } from "@/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { User } from "@/gen/apipb/auth_pb"
 import { IS_TAURI } from "@/lib/platform"
-import { LIBRARIES_KEY, useCurrentLibrary } from "@/lib/useAppLibrary"
+import { LIBRARIES_KEY } from "@/lib/queryKeys"
+import { useCurrentLibrary } from "@/lib/useAppLibrary"
 import { ROLE_NAMES, useMe } from "@/lib/useMe"
 
 /**
@@ -20,7 +20,11 @@ export function AccountSection() {
   if (me.data === null) return <LocalReader />
   return (
     <div className="flex flex-col gap-4">
-      <SignedIn user={me.data} />
+      <AccountRow
+        name={me.data.username}
+        description={ROLE_NAMES[me.data.role]}
+        action="Log out"
+      />
       <ChangePassword />
     </div>
   )
@@ -28,56 +32,51 @@ export function AccountSection() {
 
 /** App only: a local library's reader, with no password or role. */
 function LocalReader() {
-  const queryClient = useQueryClient()
-  const user = useCurrentLibrary()?.user
-  const switchUser = useMutation({
-    mutationFn: logout,
-    // Shows the screen that asks who's reading.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY }),
-  })
+  return (
+    <AccountRow
+      name={useCurrentLibrary()?.user}
+      description="Reading this folder on this device. No password: anyone using it can switch."
+      action="Switch user"
+    />
+  )
+}
+
+/** Who's signed in, and a button that signs them out. */
+function AccountRow({
+  name,
+  description,
+  action,
+}: {
+  name: string | undefined
+  description: string
+  action: string
+}) {
+  const logOut = useLogout()
   return (
     <div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{user}</p>
-        <p className="text-sm text-muted-foreground">
-          Reading this folder on this device. No password: anyone using it can switch.
-        </p>
+        <p className="truncate text-sm font-medium">{name}</p>
+        <p className="text-sm text-muted-foreground">{description}</p>
       </div>
       <Button
         variant="outline"
         className="shrink-0"
-        onClick={() => switchUser.mutate()}
-        disabled={switchUser.isPending}
+        onClick={() => logOut.mutate()}
+        disabled={logOut.isPending}
       >
-        Switch user
+        {action}
       </Button>
     </div>
   )
 }
 
-function SignedIn({ user }: { user: User }) {
+function useLogout() {
   const queryClient = useQueryClient()
-  const signOut = useMutation({
+  return useMutation({
     mutationFn: logout,
-    // The login screen replaces everything; the app's library list now shows it signed out.
+    // Shows the login screen, or for a local library the one that asks who's reading.
     onSettled: () => queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY }),
   })
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{user.username}</p>
-        <p className="text-sm text-muted-foreground">{ROLE_NAMES[user.role]}</p>
-      </div>
-      <Button
-        variant="outline"
-        className="shrink-0"
-        onClick={() => signOut.mutate()}
-        disabled={signOut.isPending}
-      >
-        Log out
-      </Button>
-    </div>
-  )
 }
 
 function ChangePassword() {

@@ -3,11 +3,15 @@ import { useState } from "react"
 import { ApiError, login, signUp } from "@/api"
 import { type LibraryInfo, listLocalUsers } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
-import { LibrarySwitcher } from "@/components/LibrarySwitcher"
+import { OtherLibraries } from "@/components/OtherLibraries"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { IS_TAURI } from "@/lib/platform"
-import { resetLibraryCache, resetUserCache, useLibraries } from "@/lib/useAppLibrary"
+import { localUsersKey } from "@/lib/queryKeys"
+import { resetLibraryCache, resetUserCache } from "@/lib/useAppLibrary"
+
+// Usernames are lowercase; phone keyboards capitalise the first letter.
+const normalizeName = (username: string) => username.trim().toLowerCase()
 
 /**
  * Shown with no key or after a 401, with a mode for asking for an account. In the app, `library`
@@ -20,8 +24,7 @@ export function Login({ library }: { library?: LibraryInfo }) {
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [requested, setRequested] = useState(false)
-  // Usernames are lowercase; phone keyboards capitalise the first letter.
-  const name = username.trim().toLowerCase()
+  const name = normalizeName(username)
 
   const signIn = useMutation({
     // Nothing cached from before, which may have been another user, is shown. On the web it's
@@ -57,6 +60,13 @@ export function Login({ library }: { library?: LibraryInfo }) {
   const canSubmit =
     !!name && !!password && !pending && (!creating || password === confirm)
   const error = creating ? create.error : signIn.error
+  const submitLabel = creating
+    ? create.isPending
+      ? "Sending…"
+      : "Create account"
+    : signIn.isPending
+      ? "Signing in…"
+      : "Sign in"
 
   return (
     <CenteredScreen>
@@ -77,17 +87,7 @@ export function Login({ library }: { library?: LibraryInfo }) {
             </p>
           )}
         </div>
-        <Input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Username"
-          aria-label="Username"
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          required
-        />
+        <UsernameInput label="Username" value={username} onChange={setUsername} required />
         <Input
           type="password"
           value={password}
@@ -128,19 +128,13 @@ export function Login({ library }: { library?: LibraryInfo }) {
           <p className="text-sm">Request sent. You can sign in once an admin approves it.</p>
         )}
         <Button type="submit" disabled={!canSubmit}>
-          {creating
-            ? create.isPending
-              ? "Sending…"
-              : "Create account"
-            : signIn.isPending
-              ? "Signing in…"
-              : "Sign in"}
+          {submitLabel}
         </Button>
         <Button type="button" variant="ghost" onClick={switchMode} disabled={pending}>
           {creating ? "Have an account? Sign in" : "No account? Create one"}
         </Button>
       </form>
-      {library && <OtherLibraries />}
+      {library && <OtherLibraries width="max-w-xs" />}
     </CenteredScreen>
   )
 }
@@ -152,13 +146,12 @@ export function Login({ library }: { library?: LibraryInfo }) {
 export function ChooseReader({ library }: { library: LibraryInfo }) {
   const queryClient = useQueryClient()
   const [username, setUsername] = useState("")
-  const names = useQuery({ queryKey: ["local-users", library.name], queryFn: listLocalUsers })
+  const names = useQuery({ queryKey: localUsersKey(library.name), queryFn: listLocalUsers })
   const choose = useMutation({
     mutationFn: (name: string) => login(name, ""),
     onSuccess: () => resetUserCache(queryClient),
   })
-  // Usernames are lowercase; phone keyboards capitalise the first letter.
-  const name = username.trim().toLowerCase()
+  const name = normalizeName(username)
   const known = names.data ?? []
 
   return (
@@ -190,16 +183,7 @@ export function ChooseReader({ library }: { library: LibraryInfo }) {
         {known.length > 0 && (
           <p className="text-center text-sm text-muted-foreground">or someone new:</p>
         )}
-        <Input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Name"
-          aria-label="Name"
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-        />
+        <UsernameInput label="Name" value={username} onChange={setUsername} />
         <p className="text-sm text-muted-foreground">
           Progress, the last book and settings are kept under this name. Use your account's name
           on a Shelf server, and they stay yours if this folder moves there.
@@ -209,19 +193,33 @@ export function ChooseReader({ library }: { library: LibraryInfo }) {
           Continue
         </Button>
       </form>
-      <OtherLibraries />
+      <OtherLibraries width="max-w-xs" />
     </CenteredScreen>
   )
 }
 
-/** App only. */
-function OtherLibraries() {
-  const others = (useLibraries().data?.libraries.length ?? 0) > 1
-  if (!others) return null
+function UsernameInput({
+  label,
+  value,
+  onChange,
+  required,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  required?: boolean
+}) {
   return (
-    <div className="flex w-full max-w-xs flex-col gap-1 text-left">
-      <p className="text-sm text-muted-foreground">Or open another library:</p>
-      <LibrarySwitcher className="rounded-lg border" />
-    </div>
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={label}
+      aria-label={label}
+      autoComplete="username"
+      autoCapitalize="none"
+      autoCorrect="off"
+      spellCheck={false}
+      required={required}
+    />
   )
 }

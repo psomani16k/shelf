@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { getBookFile, getProgress } from "@/api"
+import { CenteredMessage } from "@/components/CenteredMessage"
 import { ProgressBar } from "@/components/ProgressBar"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -18,8 +19,10 @@ import { type Appearance, readerBackground, readerLayout, type Scheme } from "@/
 import { applyAppearance, sectionFraction, turn } from "@/lib/foliate"
 import { type Direction, swipeDirection, wheelTurner } from "@/lib/gestures"
 import { progressSaver } from "@/lib/progressSaver"
+import { openBookKey } from "@/lib/queryKeys"
 import { stepZoom, useReaderZoom, ZOOM_STEPS } from "@/lib/readerZoom"
 import { useUiScale } from "@/lib/uiScale"
+import { useLatest } from "@/lib/useLatest"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { cn } from "cn"
 
@@ -69,17 +72,7 @@ const READING_KEYS = new Set([
 /** A swipe to the left reveals what's on the right, like the right arrow. */
 const opposite = (d: Direction): Direction => (d === "left" ? "right" : "left")
 
-/**
- * Opens the book at its saved position and saves the position as pages turn.
- *
- * Input depends on the layout and the device:
- * - Paginated: foliate turns pages on swipe; ← → and the buttons do too.
- * - Scrolled: the section scrolls natively, with a line under the header instead of a scrollbar.
- *   A horizontal swipe, a horizontal wheel, ← → or the buttons change section.
- * - Buttons float at the sides for mouse users, and are always in the bottom bar.
- * - The header and the bottom bar cover the page. Reading (a swipe, a scroll, a reading key or
- *   a floating button) hides them; a tap or click on the page, not on a link, toggles them.
- */
+/** Opens the book at its saved position, turns pages on input, and saves the position. */
 export function Reader({
   id,
   paused,
@@ -111,8 +104,7 @@ export function Reader({
   const inset = floating ? Math.round(BUTTON_INSET * uiScale) : 0
   const layout = readerLayout(size, appearance, { clipScrollbar: sectionBar, inset })
 
-  // For listeners that are attached once but must see the latest props.
-  const props = {
+  const latest = useLatest({
     paused,
     appearance,
     bookZoom,
@@ -122,10 +114,6 @@ export function Reader({
     onLocation,
     bars,
     onBarsChange,
-  }
-  const latest = useRef(props)
-  useEffect(() => {
-    latest.current = props
   })
 
   useImperativeHandle(ref, () => ({ goTo: (href) => void viewRef.current?.goTo(href) }), [])
@@ -146,7 +134,7 @@ export function Reader({
 
   // Progress is read once, when the book opens; nothing refetches it while reading.
   const book = useQuery({
-    queryKey: ["open-book", id],
+    queryKey: openBookKey(id),
     queryFn: async () => {
       const [blob, progress] = await Promise.all([getBookFile(id), getProgress(id)])
       // foliate reads `file.name` to detect the format, so a bare Blob won't do.
@@ -220,20 +208,21 @@ export function Reader({
       if (step) void turn(view, step > 0 ? "right" : "left", "section")
     }
 
+    const listeners: [string, EventListener, AddEventListenerOptions?][] = [
+      ["keydown", onKey as EventListener],
+      ["click", onClick as EventListener],
+      ["touchstart", onTouchStart as EventListener, { passive: true }],
+      ["touchend", onTouchEnd as EventListener, { passive: true }],
+      ["wheel", onWheel as EventListener, { passive: false }],
+    ]
     /** Sections are iframes, so each document needs its own listeners. */
     const listen = (target: Document | HTMLElement) => {
-      target.addEventListener("keydown", onKey as EventListener)
-      target.addEventListener("click", onClick as EventListener)
-      target.addEventListener("touchstart", onTouchStart as EventListener, { passive: true })
-      target.addEventListener("touchend", onTouchEnd as EventListener, { passive: true })
-      target.addEventListener("wheel", onWheel as EventListener, { passive: false })
+      for (const [type, listener, options] of listeners) {
+        target.addEventListener(type, listener, options)
+      }
     }
     const unlisten = (target: Document | HTMLElement) => {
-      target.removeEventListener("keydown", onKey as EventListener)
-      target.removeEventListener("click", onClick as EventListener)
-      target.removeEventListener("touchstart", onTouchStart as EventListener)
-      target.removeEventListener("touchend", onTouchEnd as EventListener)
-      target.removeEventListener("wheel", onWheel as EventListener)
+      for (const [type, listener] of listeners) target.removeEventListener(type, listener)
     }
 
     const onHidden = () => {
@@ -297,7 +286,7 @@ export function Reader({
       view?.close()
       view?.remove()
     }
-  }, [id, book.data])
+  }, [id, book.data, latest])
 
   const { marginLeft, marginRight, gapPercent, pageMarginRight } = layout
   useEffect(() => {
@@ -323,11 +312,11 @@ export function Reader({
   const error = book.error ?? openError
   if (error) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+      <CenteredMessage>
         <p className="font-medium">Couldn't open this book</p>
         <p className="max-w-sm text-sm text-destructive">{String(error)}</p>
         <Button onClick={onOpenLibrary}>Open library</Button>
-      </div>
+      </CenteredMessage>
     )
   }
 
@@ -391,8 +380,8 @@ export function Reader({
   )
 }
 
-/** Matches the header's slide in `SlideDrawer`. */
-const BAR_MOTION = "transition-transform duration-200 ease-out motion-reduce:transition-none"
+/** The bars' slide; `SlideDrawer`'s header uses it too. */
+export const BAR_MOTION = "transition-transform duration-200 ease-out motion-reduce:transition-none"
 
 const label = (side: Direction, unit: "page" | "section") =>
   `${side === "left" ? "Previous" : "Next"} ${unit}`

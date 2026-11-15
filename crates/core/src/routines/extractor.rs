@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use shelf_proto::bookkeeping::{BookLocation, BookMetadata};
-use shelf_utility::routines::transform_concurrent_blocking;
+use shelf_utility::routines::{cpus, transform_concurrent_blocking};
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 
@@ -12,8 +12,8 @@ use crate::{
     storage::{LibraryStorage, LocalLibraryStorage},
 };
 
-#[derive(Debug, Default)]
 /// What a sync found and did.
+#[derive(Debug, Default)]
 pub struct SyncReport {
     pub books: usize,
     pub hashed: usize,
@@ -57,7 +57,7 @@ pub async fn sync_library(storage: &LocalLibraryStorage, force: bool) -> Result<
         .collect();
     let known = Arc::new(known);
     // Twice the CPUs: while one job waits on the disk, another can use its core.
-    let in_flight = 2 * std::thread::available_parallelism().map_or(2, |n| n.get());
+    let in_flight = 2 * cpus();
     let results = transform_concurrent_blocking(&files, in_flight, |_, file| {
         let (storage, known, file) = (storage.clone(), known.clone(), file.clone());
         move || sync_file(&storage, &file, &known, force)
@@ -171,29 +171,16 @@ mod tests {
     };
 
     use super::*;
+    use crate::testutil::{EMPTY_SHA1, MTIME, OTHER_ID, temp_library};
 
-    /// The SHA-1 of an empty file.
-    const EMPTY_SHA1: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
-    const OTHER_ID: &str = "0000000000000000000000000000000000000000";
 
     #[tokio::test]
     async fn sync_counts_skips_failures_and_stale_folders() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, storage) = temp_library();
         let library = storage.library_root();
 
-        // Known and unchanged: its stamp is later than its mtime (2025-10-26T04:45:00Z).
-        File::create(library.join("a.epub"))
-            .unwrap()
-            .set_modified(UNIX_EPOCH + Duration::from_secs(1_761_453_900))
-            .unwrap();
-        fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
-        let a = BookMetadata {
-            id: EMPTY_SHA1.into(),
-            locations: vec![copy("a.epub", "2025-10-26T05:00:00Z")],
-            ..Default::default()
-        };
-        storage.set_book_metadata(EMPTY_SHA1, &a).unwrap();
+        // Known and unchanged: its stamp is later than its mtime.
+        empty_book(&storage, "a.epub", &[copy("a.epub", "2025-10-26T05:00:00Z")]);
         // New and not a valid EPUB.
         fs::write(library.join("bad.epub"), "not a zip").unwrap();
         // No file has this id any more.
@@ -221,7 +208,7 @@ mod tests {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         File::create(&file)
             .unwrap()
-            .set_modified(UNIX_EPOCH + Duration::from_secs(1_761_453_900))
+            .set_modified(UNIX_EPOCH + Duration::from_secs(MTIME))
             .unwrap();
         fs::create_dir_all(storage.book_dir_by_id(EMPTY_SHA1)).unwrap();
         let meta = BookMetadata {
@@ -240,8 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_copy_becomes_a_location_and_gone_ones_are_dropped() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, storage) = temp_library();
         let known = [copy("a.epub", "2025-10-26T05:00:00Z"), copy("gone.epub", "2025-10-26T05:00:00Z")];
         empty_book(&storage, "a.epub", &known);
         empty_book(&storage, "b/a.epub", &known);
@@ -257,8 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_gone_book_keeps_only_its_progress() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, storage) = temp_library();
         let gone = BookMetadata {
             id: OTHER_ID.into(),
             locations: vec![copy("gone.epub", "2025-10-26T05:00:00Z")],
@@ -283,8 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn forced_sync_keeps_the_folder_of_a_book_that_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, storage) = temp_library();
         fs::write(storage.library_root().join("bad.epub"), "not a zip").unwrap();
         let id = EbookExtractor::new(storage.clone(), "bad.epub".into())
             .read()
@@ -304,8 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn corrupt_metadata_keeps_the_folder_and_extracts_again() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (_root, storage) = temp_library();
         File::create(storage.library_root().join("a.epub")).unwrap();
         let dir = storage.book_dir_by_id(EMPTY_SHA1);
         fs::create_dir_all(dir.join("progress")).unwrap();

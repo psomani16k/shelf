@@ -6,6 +6,11 @@ pub fn location<'a>(book: &'a BookMetadata, path: &str) -> Option<&'a BookLocati
     book.locations.iter().find(|l| l.path == path)
 }
 
+/// Whether book `id` has a copy at `path`.
+pub fn has_copy(index: &[BookMetadata], id: &str, path: &str) -> bool {
+    index.iter().any(|m| m.id == id && location(m, path).is_some())
+}
+
 /// Adds or replaces the copy at `location.path`. Returns whether anything changed.
 pub fn upsert_location(book: &mut BookMetadata, location: BookLocation) -> bool {
     match book

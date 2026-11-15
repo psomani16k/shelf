@@ -6,7 +6,6 @@ members = ["crates/*", "app"]
 notify = "8"
 tokio = { version = "1", default-features = false }
 tokio-util = "=0.7.13"
-tokio-stream = "0.1"
 tracing = "0.1"
 tempfile = "3"
 anyhow = "1"
@@ -30,3 +29,8 @@ base64 = "0.22"
 futures = "0.3"
 # Features are picked per crate: `aws` brings reqwest and aws-lc-rs.
 object_store = { version = "0.14", default-features = false }
+prost = "0.14"
+pbjson = "0.9"
+prost-build = "0.14"
+pbjson-build = "0.9"
+protox = "0.10"

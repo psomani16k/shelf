@@ -1,11 +1,8 @@
 import {
-  create,
   type DescMessage,
-  fromJson,
   type JsonValue,
   type MessageInitShape,
   type MessageShape,
-  toJson,
 } from "@bufbuild/protobuf"
 import { invoke } from "@tauri-apps/api/core"
 import {
@@ -55,11 +52,10 @@ import {
   UserDataSchema,
 } from "@/gen/apipb/user_data_pb"
 import { ConfigSchema } from "@/gen/configpb/config_pb"
-import { setSignedOut } from "@/lib/session"
+import { endSession, setSignedOut } from "@/lib/session"
 import { ApiError } from "./error"
+import { decode, encode } from "./proto"
 import type { Backend } from "./types"
-
-const decodeOptions = { ignoreUnknownFields: true }
 
 /** Base64 in JSON: IPC on Linux and Android would send raw bytes as an array of numbers. */
 const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024
@@ -78,31 +74,18 @@ export const tauriBackend: Backend = {
   getProgress: (id) =>
     command("get_progress", GetProgressRequestSchema, { id }, GetProgressResponseSchema),
   // No `keepalive`: IPC has no page to outlive.
-  setProgress: async (id, epubProgress) => {
-    await invokeCommand("set_progress", { req: encode(SetProgressRequestSchema, { id, epubProgress }) })
-  },
+  setProgress: (id, epubProgress) =>
+    exec("set_progress", SetProgressRequestSchema, { id, epubProgress }),
   getState: () => command("get_state", GetStateRequestSchema, {}, GetStateResponseSchema),
-  setState: async (lastBookId) => {
-    await invokeCommand("set_state", { req: encode(SetStateRequestSchema, { lastBookId }) })
-  },
+  setState: (lastBookId) => exec("set_state", SetStateRequestSchema, { lastBookId }),
   getConfig: () => command("get_config", GetConfigRequestSchema, {}, ConfigSchema),
   setConfig: (patch) => command("set_config", SetConfigRequestSchema, { patch }, ConfigSchema),
   exportUserData: () =>
     command("export_user_data", ExportUserDataRequestSchema, {}, UserDataSchema),
   importUserData: (data) =>
     command("import_user_data", ImportUserDataRequestSchema, { data }, ImportUserDataResponseSchema),
-  rebuildIndex: async () =>
-    fromJson(
-      RebuildIndexResponseSchema,
-      await invokeCommand<JsonValue>("rebuild_index"),
-      decodeOptions,
-    ),
-  cleanUpProgress: async () =>
-    fromJson(
-      CleanUpProgressResponseSchema,
-      await invokeCommand<JsonValue>("clean_up_progress"),
-      decodeOptions,
-    ),
+  rebuildIndex: () => query("rebuild_index", RebuildIndexResponseSchema),
+  cleanUpProgress: () => query("clean_up_progress", CleanUpProgressResponseSchema),
   // These commands return raw bytes, which arrive as an ArrayBuffer.
   getCover: async (id) =>
     new Blob([await invokeCommand<ArrayBuffer>("get_cover", { id })], { type: "image/jpeg" }),
@@ -125,49 +108,31 @@ export const tauriBackend: Backend = {
     const req = encode(LoginRequestSchema, { username, password })
     const user = await invokeCommand<JsonValue>("login", { req })
     setSignedOut(false)
-    return fromJson(UserSchema, user, decodeOptions)
+    return decode(UserSchema, user)
   },
   logout: async () => {
     try {
       await invokeCommand("logout")
     } finally {
-      setSignedOut(true)
+      endSession()
     }
   },
   me: async () => {
     const user = await invokeCommand<JsonValue | null>("me")
-    return user === null ? null : fromJson(UserSchema, user, decodeOptions)
+    return user === null ? null : decode(UserSchema, user)
   },
-  changePassword: async (currentPassword, newPassword) => {
-    const req = encode(ChangePasswordRequestSchema, { currentPassword, newPassword })
-    await invokeCommand("change_password", { req })
-  },
-  signUp: async (username, password) => {
-    await invokeCommand("sign_up", { req: encode(SignUpRequestSchema, { username, password }) })
-  },
-  listUserRequests: async () => {
-    const res = await invokeCommand<JsonValue>("list_user_requests")
-    return fromJson(ListUserRequestsResponseSchema, res, decodeOptions).requests
-  },
-  approveUserRequest: async (id, role) => {
-    const req = encode(ApproveUserRequestRequestSchema, { id, role })
-    await invokeCommand("approve_user_request", { req })
-  },
-  denyUserRequest: async (id) => {
-    await invokeCommand("deny_user_request", { req: encode(DenyUserRequestRequestSchema, { id }) })
-  },
-  listUsers: async () => {
-    const res = await invokeCommand<JsonValue>("list_users")
-    return fromJson(ListUsersResponseSchema, res, decodeOptions)
-  },
-  setUserRole: async (username, role) => {
-    const req = encode(SetUserRoleRequestSchema, { username, role })
-    await invokeCommand("set_user_role", { req })
-  },
-  setUserScope: async (username, scope) => {
-    const req = encode(SetUserScopeRequestSchema, { username, scope })
-    await invokeCommand("set_user_scope", { req })
-  },
+  changePassword: (currentPassword, newPassword) =>
+    exec("change_password", ChangePasswordRequestSchema, { currentPassword, newPassword }),
+  signUp: (username, password) => exec("sign_up", SignUpRequestSchema, { username, password }),
+  listUserRequests: async () =>
+    (await query("list_user_requests", ListUserRequestsResponseSchema)).requests,
+  approveUserRequest: (id, role) =>
+    exec("approve_user_request", ApproveUserRequestRequestSchema, { id, role }),
+  denyUserRequest: (id) => exec("deny_user_request", DenyUserRequestRequestSchema, { id }),
+  listUsers: () => query("list_users", ListUsersResponseSchema),
+  setUserRole: (username, role) => exec("set_user_role", SetUserRoleRequestSchema, { username, role }),
+  setUserScope: (username, scope) =>
+    exec("set_user_scope", SetUserScopeRequestSchema, { username, scope }),
   listScopeDirectories: async (directoryPath) => {
     const res = await command(
       "list_scope_directories",
@@ -195,7 +160,7 @@ async function uploadBook(
     const res = await invokeCommand<JsonValue>("upload_book", { req, uploadId, offset, data, done })
     offset = end
     onProgress?.(offset)
-    if (done) return fromJson(UploadEbookResponseSchema, res, decodeOptions)
+    if (done) return decode(UploadEbookResponseSchema, res)
   }
 }
 
@@ -212,14 +177,16 @@ function base64(blob: Blob): Promise<string> {
   })
 }
 
-/** `invoke`, with a rejected command's `{ status, message }` turned into an `ApiError`. */
-/** A 401 means the remote library's key is no longer valid (except from `login` itself). */
+/**
+ * `invoke`, with a rejected command's `{ status, message }` turned into an `ApiError`. A 401 means
+ * the remote library's key is no longer valid (except from `login` itself).
+ */
 export async function invokeCommand<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(name, args)
   } catch (e) {
     const error = toApiError(e)
-    if (error.status === 401 && name !== "login") setSignedOut(true)
+    if (error.status === 401 && name !== "login") endSession()
     throw error
   }
 }
@@ -231,10 +198,6 @@ function toApiError(e: unknown): ApiError {
   return new ApiError(500, String(e))
 }
 
-function encode<Desc extends DescMessage>(schema: Desc, init: MessageInitShape<Desc>): JsonValue {
-  return toJson(schema, create(schema, init), { useProtoFieldName: true })
-}
-
 async function command<Req extends DescMessage, Res extends DescMessage>(
   name: string,
   reqSchema: Req,
@@ -242,5 +205,17 @@ async function command<Req extends DescMessage, Res extends DescMessage>(
   resSchema: Res,
 ): Promise<MessageShape<Res>> {
   const json = await invokeCommand<JsonValue>(name, { req: encode(reqSchema, req) })
-  return fromJson(resSchema, json, decodeOptions)
+  return decode(resSchema, json)
+}
+
+async function exec<Desc extends DescMessage>(
+  name: string,
+  schema: Desc,
+  init: MessageInitShape<Desc>,
+): Promise<void> {
+  await invokeCommand(name, { req: encode(schema, init) })
+}
+
+async function query<Res extends DescMessage>(name: string, resSchema: Res): Promise<MessageShape<Res>> {
+  return decode(resSchema, await invokeCommand<JsonValue>(name))
 }

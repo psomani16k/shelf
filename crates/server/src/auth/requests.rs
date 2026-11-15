@@ -7,7 +7,7 @@ use shelf_proto::{
         ApproveUserRequestRequest, DenyUserRequestRequest, ListUserRequestsResponse, SignUpRequest,
         UserRequest, role::Value as Role,
     },
-    server::{ServerData, ServerUser, ServerUserOnboardingRequests},
+    server::{ServerData, ServerUser, PendingUser},
 };
 use shelf_utility::timeutil::Time;
 use tracing::info;
@@ -30,7 +30,7 @@ impl Auth {
             ));
         }
         check_new_password(&req.password)?;
-        let request = ServerUserOnboardingRequests {
+        let request = PendingUser {
             user_name: req.username.clone(),
             password: req.password.clone(),
             id: random_string(16)?,
@@ -58,8 +58,7 @@ impl Auth {
     }
 
     pub async fn list_requests(&self, now: Time) -> ListUserRequestsResponse {
-        let mut inner = self.inner.lock().await;
-        inner.file.refresh(now).await;
+        let inner = self.fresh(now).await;
         let data = inner.file.data();
         let requests = data
             .user_requests

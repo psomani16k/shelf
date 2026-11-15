@@ -16,11 +16,9 @@ pub struct ServerLibrary {
 }
 
 impl ServerLibrary {
-    pub async fn open(
-        root: PathBuf,
-        on_change: impl Fn() + Send + Sync + 'static,
-    ) -> anyhow::Result<Self> {
-        let lib = BookLibrary::open(root, on_change).await?;
+    pub async fn open(root: PathBuf) -> anyhow::Result<Self> {
+        // Nothing to tell: web clients refetch on their own.
+        let lib = BookLibrary::open(root, || {}).await?;
         Ok(Self {
             lib,
             rebuild_lock: Mutex::new(()),

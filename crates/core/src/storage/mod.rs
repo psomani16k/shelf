@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::Result;
 use bytes::Bytes;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use shelf_proto::{
     bookkeeping::{BookMetadata, BookProgress},
@@ -22,12 +23,12 @@ use tracing::warn;
 pub use local_storage::LocalLibraryStorage;
 
 /// Each user's settings, under `.shelf/`; `user` must have passed `validate_user`.
-pub fn config_file(user: &str) -> String {
+fn config_file(user: &str) -> String {
     format!("users/{user}/config.json")
 }
 
 /// Each user's last book, under `.shelf/`; `user` must have passed `validate_user`.
-pub fn state_file(user: &str) -> String {
+fn state_file(user: &str) -> String {
     format!("users/{user}/state.json")
 }
 
@@ -47,7 +48,9 @@ pub enum FileContent {
 /// root, with `/` separators. The non-async methods block.
 pub trait LibraryStorage: Sync {
     /// Every `.epub` file in the library, at any depth, skipping dot-files and dot-folders.
-    fn all_book_file_paths(&self) -> Result<HashSet<PathBuf>>;
+    fn all_book_file_paths(&self) -> Result<HashSet<PathBuf>> {
+        self.book_file_paths_under(Path::new(""))
+    }
 
     /// Every `.epub` file under `dir`, with the same rules as `all_book_file_paths`.
     fn book_file_paths_under(&self, dir: &Path) -> Result<HashSet<PathBuf>>;
@@ -132,15 +135,7 @@ pub trait LibraryStorage: Sync {
     /// The user's state. A missing or unparseable one gives the default state.
     fn read_state(&self, user: &str) -> impl Future<Output = Result<State>> + Send {
         let file = state_file(user);
-        async move {
-            let Some(json) = self.read_shelf_file(&file).await? else {
-                return Ok(State::default());
-            };
-            Ok(serde_json::from_str(&json).unwrap_or_else(|e| {
-                warn!(%file, error = %e, "unparseable state, using the default");
-                State::default()
-            }))
-        }
+        async move { read_or_default(self, &file, "state").await }
     }
 
     fn write_state(&self, user: &str, state: &State) -> impl Future<Output = Result<()>> + Send {
@@ -154,15 +149,7 @@ pub trait LibraryStorage: Sync {
     /// The user's config. A missing or unparseable one gives the default config.
     fn read_config(&self, user: &str) -> impl Future<Output = Result<Config>> + Send {
         let file = config_file(user);
-        async move {
-            let Some(json) = self.read_shelf_file(&file).await? else {
-                return Ok(Config::default());
-            };
-            Ok(serde_json::from_str(&json).unwrap_or_else(|e| {
-                warn!(%file, error = %e, "unparseable config, using the default");
-                Config::default()
-            }))
-        }
+        async move { read_or_default(self, &file, "config").await }
     }
 
     /// Merges the fields set in `patch` into the user's stored config and returns the full
@@ -187,12 +174,27 @@ pub trait LibraryStorage: Sync {
             }
 
             merge(&mut stored, serde_json::to_value(patch)?);
-            let config = serde_json::from_value(stored.clone())?;
             let json = serde_json::to_string_pretty(&stored)?;
+            let config = serde_json::from_value(stored)?;
             self.write_shelf_file(&file, json.as_bytes()).await?;
             Ok(config)
         }
     }
+}
+
+/// A `.shelf/` JSON file; a missing or unparseable one gives the default.
+async fn read_or_default<T: DeserializeOwned + Default>(
+    storage: &(impl LibraryStorage + ?Sized),
+    file: &str,
+    what: &str,
+) -> Result<T> {
+    let Some(json) = storage.read_shelf_file(file).await? else {
+        return Ok(T::default());
+    };
+    Ok(serde_json::from_str(&json).unwrap_or_else(|e| {
+        warn!(%file, error = %e, "unparseable {what}, using the default");
+        T::default()
+    }))
 }
 
 /// Objects merge key by key; anything else, lists included, replaces what's stored.

@@ -3,7 +3,7 @@ import { log } from "@/lib/log"
 
 const SAVE_DELAY_MS = 2000
 
-export type ProgressSaver = {
+type ProgressSaver = {
   /** Saves `cfi` once page turns have stopped for a moment. */
   schedule: (cfi: string) => void
   /** Saves any pending position now, in a request that outlives the page. */

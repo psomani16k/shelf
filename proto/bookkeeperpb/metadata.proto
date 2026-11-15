@@ -22,11 +22,6 @@ message BookLocation {
   string last_update_time = 2;
 }
 
-message FolderListing {
-  repeated string folders = 1;
-  repeated BookMetadata books = 2;
-}
-
 message BookFileType {
   enum Value {
     UNKNOWN = 0;

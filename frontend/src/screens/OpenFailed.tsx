@@ -1,10 +1,9 @@
 import { useState } from "react"
 import type { LibraryInfo } from "@/api/app"
 import { CenteredScreen } from "@/components/CenteredScreen"
-import { LibrarySwitcher } from "@/components/LibrarySwitcher"
+import { OtherLibraries } from "@/components/OtherLibraries"
 import { RemoveLibraryConfirm } from "@/components/RemoveLibraryConfirm"
 import { Button } from "@/components/ui/button"
-import { useLibraries } from "@/lib/useAppLibrary"
 
 /** App only: the library list couldn't be read, or the current library couldn't be opened. */
 export function OpenFailed({
@@ -16,7 +15,6 @@ export function OpenFailed({
   error: unknown
   onRetry: () => void
 }) {
-  const others = (useLibraries().data?.libraries.length ?? 0) > 1
   const [removing, setRemoving] = useState(false)
 
   return (
@@ -38,12 +36,7 @@ export function OpenFailed({
           <RemoveLibraryConfirm library={library} onCancel={() => setRemoving(false)} />
         </div>
       )}
-      {others && (
-        <div className="flex w-full max-w-sm flex-col gap-1 text-left">
-          <p className="text-sm text-muted-foreground">Or open another library:</p>
-          <LibrarySwitcher className="rounded-lg border" />
-        </div>
-      )}
+      <OtherLibraries width="max-w-sm" />
     </CenteredScreen>
   )
 }

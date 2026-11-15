@@ -7,9 +7,9 @@ import {
 } from "@/gen/configpb/config_pb"
 
 export type Scheme = "light" | "dark"
-export type Flow = "scrolled" | "paginated"
+type Flow = "scrolled" | "paginated"
 
-export type MarginSize = "none" | "small" | "medium" | "large"
+type MarginSize = "none" | "small" | "medium" | "large"
 export type Margins = {
   top: MarginSize
   bottom: MarginSize

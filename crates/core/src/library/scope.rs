@@ -47,11 +47,6 @@ impl Scope {
         Ok(Self { root, books })
     }
 
-    /// The root as stored: `/`-separated, no leading or trailing slash; `""` is the whole library.
-    pub fn root(&self) -> &str {
-        &self.root
-    }
-
     /// Whether some books under the root may be hidden.
     pub fn has_patterns(&self) -> bool {
         self.books.is_some()
@@ -153,11 +148,7 @@ mod tests {
     use shelf_proto::bookkeeping::BookLocation;
 
     use super::*;
-
-    fn scope(root: &str, patterns: &[&str]) -> Scope {
-        let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
-        Scope::new(root, &patterns).unwrap()
-    }
+    use crate::testutil::scope;
 
     fn book(path: &str) -> BookMetadata {
         BookMetadata {

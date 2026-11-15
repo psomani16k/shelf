@@ -1,7 +1,7 @@
 import type { TocItem } from "foliate-js/view.js"
-import { ChevronRight, X } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
+import { PanelHeader } from "@/components/PanelHeader"
 import { tocPath } from "@/lib/toc"
 import { cn } from "cn"
 
@@ -34,12 +34,7 @@ export function TocPanel({ toc, currentId, open, onPick, onClose }: Props) {
 
   return (
     <>
-      <div className="flex items-center gap-2 border-b py-3 pr-2 pl-4">
-        <h2 className="flex-1 font-medium">Contents</h2>
-        <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close contents">
-          <X />
-        </Button>
-      </div>
+      <PanelHeader title="Contents" onClose={onClose} />
 
       <div ref={listRef} className="relative flex-1 overflow-y-auto overscroll-contain p-2">
         {toc.length === 0 ? (

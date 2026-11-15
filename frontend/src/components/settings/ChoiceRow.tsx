@@ -1,11 +1,5 @@
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { cn } from "cn"
+import { ActionRow } from "@/components/settings/ActionRow"
+import { ChoiceSelect } from "@/components/settings/ChoiceSelect"
 
 /** A setting's label and description beside a `Select` of its choices. */
 export function ChoiceRow({
@@ -24,35 +18,15 @@ export function ChoiceRow({
   onChange: (value: number) => void
 }) {
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6",
-        disabled && "opacity-60",
-      )}
-    >
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      <Select
-        items={choices}
+    <ActionRow title={label} description={description} className={disabled ? "opacity-60" : undefined}>
+      <ChoiceSelect
+        choices={choices}
         value={value}
         disabled={disabled}
-        onValueChange={(next) => {
-          if (next !== null) onChange(next)
-        }}
-      >
-        <SelectTrigger className="w-full shrink-0 sm:w-44" aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {choices.map((choice) => (
-            <SelectItem key={choice.value} value={choice.value}>
-              {choice.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+        label={label}
+        className="w-full shrink-0 sm:w-44"
+        onChange={onChange}
+      />
+    </ActionRow>
   )
 }

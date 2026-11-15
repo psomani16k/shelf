@@ -2,9 +2,8 @@ import { useQuery } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { getConfig } from "@/api"
 import { type Appearance, resolveAppearance } from "@/lib/appearance"
+import { LIBRARY_CONFIG_KEY } from "@/lib/queryKeys"
 import { useMediaQuery } from "@/lib/useMediaQuery"
-
-export const LIBRARY_CONFIG_KEY = ["library-config"]
 
 /** Read once on load; `setConfig` results are written straight into this cache. */
 export function useLibraryConfig() {

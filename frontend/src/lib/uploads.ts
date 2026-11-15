@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { uploadBook } from "@/api"
 
-export type UploadStatus = "queued" | "uploading" | "done" | "failed"
+type UploadStatus = "queued" | "uploading" | "done" | "failed"
 
 export type Upload = {
   id: number

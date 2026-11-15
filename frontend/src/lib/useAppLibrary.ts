@@ -7,13 +7,9 @@ import {
   removeLibrary,
   selectLibrary,
 } from "@/api/app"
+import { LIBRARIES_KEY, OPEN_LIBRARY_KEY, UI_SCALE_KEY } from "@/lib/queryKeys"
 import { setSignedOut } from "@/lib/session"
-import { UI_SCALE_KEY } from "@/lib/uiScale"
 import { uploads } from "@/lib/uploads"
-
-/** App only: the libraries this device knows and which one is open. */
-
-export const LIBRARIES_KEY = ["libraries"]
 
 export function useLibraries() {
   return useQuery({
@@ -42,11 +38,7 @@ export function nameTaken(libraries: LibraryInfo[] | undefined, name: string): b
  * library, so they're dropped too. Whether it needs a login comes from its `signed_in`.
  */
 export function resetLibraryCache(queryClient: QueryClient) {
-  uploads.dropQueued()
-  setSignedOut(false)
-  const device = [LIBRARIES_KEY[0], UI_SCALE_KEY[0]]
-  queryClient.removeQueries({ predicate: (q) => !device.includes(q.queryKey[0] as string) })
-  return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })
+  return resetCache(queryClient, [LIBRARIES_KEY, UI_SCALE_KEY])
 }
 
 /**
@@ -54,10 +46,15 @@ export function resetLibraryCache(queryClient: QueryClient) {
  * one, but keeps the library open (reopening a local one would sync it again).
  */
 export function resetUserCache(queryClient: QueryClient) {
+  return resetCache(queryClient, [LIBRARIES_KEY, UI_SCALE_KEY, OPEN_LIBRARY_KEY])
+}
+
+/** Drops every query but those under `kept`, and queued uploads. */
+function resetCache(queryClient: QueryClient, kept: string[][]) {
   uploads.dropQueued()
   setSignedOut(false)
-  const kept = [LIBRARIES_KEY[0], UI_SCALE_KEY[0], "open-library"]
-  queryClient.removeQueries({ predicate: (q) => !kept.includes(q.queryKey[0] as string) })
+  const prefixes = kept.map((key) => key[0])
+  queryClient.removeQueries({ predicate: (q) => !prefixes.includes(q.queryKey[0] as string) })
   return queryClient.invalidateQueries({ queryKey: LIBRARIES_KEY })
 }
 
@@ -69,7 +66,7 @@ export function useSwitchLibrary() {
   })
 }
 
-export type NewLibrary =
+type NewLibrary =
   | { kind: "local"; name: string; path: string }
   | { kind: "remote"; name: string; baseUrl: string }
 

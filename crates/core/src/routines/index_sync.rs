@@ -99,11 +99,11 @@ impl IndexSync {
             }
             None => {
                 // The copies `metadata.json` lists may be stale; this one is known to exist.
+                changed.push(meta.id.clone());
                 books.push(BookMetadata {
                     locations: vec![copy],
                     ..meta
                 });
-                changed.push(books[books.len() - 1].id.clone());
             }
         }
         for book in books.iter().filter(|b| changed.contains(&b.id)) {
@@ -120,15 +120,13 @@ mod tests {
     use shelf_proto::bookkeeping::BookLocation;
 
     use super::*;
+    use crate::testutil::{EMPTY_SHA1, temp_library};
 
-    /// The SHA-1 of an empty file.
-    const EMPTY_SHA1: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
     /// The SHA-1 of "x".
     const X_SHA1: &str = "11f6ad8ec52a2984abaafd7c3b516503785c2072";
 
     fn setup(index: Vec<BookMetadata>) -> (tempfile::TempDir, IndexSync) {
-        let root = tempfile::tempdir().unwrap();
-        let storage = LocalLibraryStorage::new(root.path()).unwrap();
+        let (root, storage) = temp_library();
         (root, IndexSync::new(storage, Arc::new(RwLock::new(index))))
     }
 
@@ -241,13 +239,12 @@ mod tests {
         known_file(&sync, "b.epub", "x", &book(X_SHA1, &[]));
 
         assert!(sync.sync_path(&library.join("b.epub")).unwrap());
-        let books = vec![
+        let mut books = vec![
             (X_SHA1.to_owned(), vec!["b.epub".to_owned()]),
             (EMPTY_SHA1.to_owned(), vec!["a.epub".to_owned()]),
         ];
-        let mut sorted = books.clone();
-        sorted.sort();
-        assert_eq!(indexed(&sync), sorted);
+        books.sort();
+        assert_eq!(indexed(&sync), books);
         assert_eq!(stored_paths(&sync, EMPTY_SHA1), ["a.epub"]);
     }
 

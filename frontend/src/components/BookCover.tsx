@@ -1,6 +1,6 @@
 import { BookOpen } from "lucide-react"
 import { useCover } from "@/lib/useCover"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 /**
  * 2:3 box showing the whole cover, with a blurred copy filling the gaps when the cover's shape

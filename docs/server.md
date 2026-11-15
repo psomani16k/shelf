@@ -8,7 +8,7 @@ The crate is a library with a thin binary. `main.rs` installs JSON logging (`ini
 1. Installs JSON logging (`main.rs`).
 2. Loads the server data from **`/data/data.json`** (fixed; see [Server data](#server-data)), creating it if it's missing, into `Auth`, and logs how many users it has.
 3. Opens `ServerLibrary` (a `BookLibrary` plus a lock so only one rebuild runs at a time) at **`/books`** (fixed) with a no-op `on_change`. This runs the startup sync, which hashes only new and modified books (all of them on the very first start). The watcher then keeps it current.
-4. Routes: `/api/*` → `api::router(state)` (`AppState { library, auth }`) with the request-ID and access-log layers; every API route but `health` and `auth/login` goes through `auth::authenticate` ([api.md](api.md#http-routes-cratesserversrcapirs)); everything else → `frontend::serve`. Request bodies are capped at axum's default 2 MB, except `/api/books/upload` at 512 MiB (`MAX_UPLOAD_BYTES` in `api.rs`); behind a reverse proxy, raise its limit too (Caddy has none by default, nginx's `client_max_body_size` is 1 MB).
+4. Routes: `/api/*` → `api::router(state)` (`AppState { library, auth }`) with the request-ID and access-log layers; every API route but `health`, `auth/login` and `auth/signup` goes through `auth::authenticate` ([api.md](api.md#http-routes-cratesserversrcapirs)); everything else → `frontend::serve`. Request bodies are capped at axum's default 2 MB, except `/api/books/upload` at 512 MiB (`MAX_UPLOAD_BYTES` in `api.rs`); behind a reverse proxy, raise its limit too (Caddy has none by default, nginx's `client_max_body_size` is 1 MB).
 5. Listens on **`0.0.0.0:8080`** (fixed). Shuts down gracefully on Ctrl-C or SIGTERM (`docker stop`).
 
 If loading the server data, opening the library or binding fails, it logs one `server failed` JSON line and exits with status 1.
@@ -22,7 +22,7 @@ There is no config file and no TLS: put it behind a reverse proxy that terminate
 | `main.rs` | The binary: logging, then `serve` with the Docker layout; a fatal error is logged as a JSON line and exits 1 |
 | `lib.rs` | `Config` (folders and bind address, defaulting to the Docker layout) and `serve`: startup, router assembly, graceful shutdown |
 | `api.rs` | One handler per library operation, each going through the user's `LibraryView` for anything that touches books, and the router: routes grouped by the lowest role that may call them. `AppState { library, auth }`, with `FromRef` so each handler takes only its part. Routes are listed in [api.md](api.md). |
-| `auth.rs` | `Auth`: login, sessions, the lockout, password change. `auth/requests.rs`: sign-ups and approving them; `auth/users.rs`: listing users and changing roles, with `may_manage`, the one rule for who may give or take which role. The `authenticate` middleware (bearer token → `CurrentUser` in the request's extensions, like a value in a Go `context`), the `CurrentUser` extractor, `require(role)`, and the `/auth/*` handlers. |
+| `auth.rs` | `Auth`: login, sessions, the lockout, password change. `auth/requests.rs`: sign-ups and approving them; `auth/users.rs`: listing users, changing roles and scopes, and the folder list for the scope picker (`list_directories`), with `may_manage`, the one rule for who may give or take which role and scope. The `authenticate` middleware (bearer token → `CurrentUser` in the request's extensions, like a value in a Go `context`), the `CurrentUser` extractor, `require(role)`, and the `/auth/*` handlers. |
 | `data.rs` | `DataFile`: `/data/data.json` in memory, with each user's `Scope` built whenever it's read. `load` (creates it if missing), `refresh` (reloads after a hand edit), `update` (re-reads, changes, writes atomically). |
 | `library.rs` | `ServerLibrary`: wraps the one `BookLibrary`. `view(&scope)` gives a user's part of it; config and `rebuild_index` (the whole library, inside `rebuild_lock`) go to it directly. |
 | `error.rs` | `ApiErrorResponse`: `LibraryError` → status + `ApiError` JSON. The only place request errors are logged (4xx at debug, 500 at error). |
@@ -136,7 +136,7 @@ This flow is in use: the home server runs the image pulled from ghcr.
 
 ## Deploying with compose
 
-`docker-compose.yml` (repo root) is a sample to copy next to the books folder on the server:
+`docker-compose.yml` (repo root) is a sample to copy to the server. In short:
 
 ```yaml
 services:
@@ -145,8 +145,8 @@ services:
     container_name: shelf
     restart: unless-stopped
     ports: ["8080:8080"]
-    volumes: ["~/notes/books:/books", "./data:/data"] # both writable by uid 1000
-    environment: { RUST_LOG: info, TZ: Etc/UTC }
+    volumes: ["path/to/books:/books", "path/to/data/:/data"] # both writable by uid 1000
+    environment: { RUST_LOG: info, TZ: Asia/Kolkata }
     logging:                          # json-file never rotates by default
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

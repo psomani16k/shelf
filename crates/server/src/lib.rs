@@ -52,7 +52,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     // Never log the users themselves: they hold passwords.
     info!(users = auth.user_count().await, "server data loaded");
 
-    let library = ServerLibrary::open(books.clone(), || {})
+    let library = ServerLibrary::open(books.clone())
         .await
         .with_context(|| format!("couldn't open the library at {}", books.display()))?;
 

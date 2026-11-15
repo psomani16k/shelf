@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use shelf_core::{
-    storage::LocalLibraryStorage,
     routines::extractor::{SyncReport, sync_library},
+    storage::LocalLibraryStorage,
 };
 
 command! {

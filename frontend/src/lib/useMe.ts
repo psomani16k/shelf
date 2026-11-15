@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { me } from "@/api"
 import { type User, Role_Value } from "@/gen/apipb/auth_pb"
-
-export const ME_KEY = ["me"]
+import { ME_KEY } from "@/lib/queryKeys"
 
 export const ROLE_NAMES: Record<Role_Value, string> = {
   [Role_Value.BANNED]: "Banned",

@@ -16,14 +16,9 @@ import {
   setUserScope,
 } from "@/api"
 import { Breadcrumb } from "@/components/Breadcrumb"
+import { ChoiceSelect } from "@/components/settings/ChoiceSelect"
+import { NameWithBadge } from "@/components/settings/NameWithBadge"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Role_Value,
@@ -31,11 +26,15 @@ import {
   type UserRequest,
   type UserScope,
 } from "@/gen/apipb/auth_pb"
+import { DATE_TIME, joinPath, plural } from "@/lib/format"
+import { scopeDirsKey, USER_REQUESTS_KEY, USERS_KEY } from "@/lib/queryKeys"
 import { assignableRoles, ROLE_NAMES, useMe } from "@/lib/useMe"
 import { cn } from "cn"
 
-const USERS_KEY = ["users"]
-const USER_REQUESTS_KEY = ["user-requests"]
+const WHOLE_LIBRARY = "Whole library"
+
+const rootDescription = (username: string) =>
+  `${username} sees this folder as their whole library.`
 
 /** What each role may do, mirroring `apipb.Role`. */
 const ROLE_DESCRIPTIONS: Record<Role_Value, string> = {
@@ -121,14 +120,7 @@ function UserRow({ user, scope }: { user: User; scope?: UserScope }) {
         aria-expanded={open}
       >
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 text-sm font-medium">
-            <span className="truncate">{user.username}</span>
-            {isMe && (
-              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
-                You
-              </span>
-            )}
-          </p>
+          <NameWithBadge name={user.username} badge={isMe && "You"} />
           <p className="truncate text-sm text-muted-foreground">{describeScope(scope)}</p>
         </div>
         <span className="shrink-0 text-sm text-muted-foreground">{ROLE_NAMES[user.role]}</span>
@@ -146,9 +138,9 @@ function UserRow({ user, scope }: { user: User; scope?: UserScope }) {
 
 /** "Whole library", "kid", "kid · 2 book rules" */
 function describeScope(scope?: UserScope) {
-  const root = scope?.libraryRoot || "Whole library"
+  const root = scope?.libraryRoot || WHOLE_LIBRARY
   const rules = scope?.books.length ?? 0
-  return rules ? `${root} · ${rules} book rule${rules === 1 ? "" : "s"}` : root
+  return rules ? `${root} · ${plural(rules, "book rule")}` : root
 }
 
 /** A user's role and library access: editable, or read-only with the reason. */
@@ -190,8 +182,8 @@ function UserDetails({ user, scope, isMe }: { user: User; scope?: UserScope; isM
         <ScopeForm username={user.username} scope={scope} />
       ) : (
         <>
-          <Field label="Folder" description={`${user.username} sees this folder as their whole library.`}>
-            <p className="text-sm">{scope?.libraryRoot || "Whole library"}</p>
+          <Field label="Folder" description={rootDescription(user.username)}>
+            <p className="text-sm">{scope?.libraryRoot || WHOLE_LIBRARY}</p>
           </Field>
           <Field label="Books">
             {scope?.books.length ? (
@@ -241,7 +233,7 @@ function ScopeForm({ username, scope }: { username: string; scope?: UserScope })
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-  const changed = root !== savedRoot || books.join("\n") !== (scope?.books ?? []).join("\n")
+  const changed = root !== savedRoot || books.join("\n") !== savedPatterns
   const save = useMutation({
     mutationFn: () => setUserScope(username, { libraryRoot: root, books }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_KEY }),
@@ -260,7 +252,7 @@ function ScopeForm({ username, scope }: { username: string; scope?: UserScope })
         save.mutate()
       }}
     >
-      <Field label="Folder" description={`${username} sees this folder as their whole library.`}>
+      <Field label="Folder" description={rootDescription(username)}>
         <FolderPicker folder={root} onChange={setRoot} />
       </Field>
       <Field
@@ -307,15 +299,14 @@ function ScopeForm({ username, scope }: { username: string; scope?: UserScope })
 /** Walks the whole library's folders; the picked folder is the one it's in. */
 function FolderPicker({ folder, onChange }: { folder: string; onChange: (f: string) => void }) {
   const dirs = useQuery({
-    queryKey: ["scope-dirs", folder],
+    queryKey: scopeDirsKey(folder),
     queryFn: () => listScopeDirectories(folder),
   })
-  const pathOf = (name: string) => (folder ? `${folder}/${name}` : name)
 
   return (
     <div className="rounded-lg border bg-background">
       <div className="border-b px-3 pb-2">
-        <Breadcrumb folder={folder} rootLabel="Whole library" onNavigate={onChange} />
+        <Breadcrumb folder={folder} rootLabel={WHOLE_LIBRARY} onNavigate={onChange} />
       </div>
       {dirs.isPending ? (
         <LoaderCircle className="m-3 size-4 animate-spin text-muted-foreground" />
@@ -330,7 +321,7 @@ function FolderPicker({ folder, onChange }: { folder: string; onChange: (f: stri
               <button
                 type="button"
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
-                onClick={() => onChange(pathOf(name))}
+                onClick={() => onChange(joinPath(folder, name))}
               >
                 <Folder className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{name}</span>
@@ -405,32 +396,22 @@ function RoleSelect({
   label: string
   onChange: (role: Role_Value) => void
 }) {
-  const choices = roles.map((role) => ({ value: role, label: ROLE_NAMES[role] }))
   return (
-    <Select
-      items={choices}
+    <ChoiceSelect
+      choices={roles.map((role) => ({ value: role, label: ROLE_NAMES[role] }))}
       value={value}
       disabled={disabled}
-      onValueChange={(next) => {
-        if (next !== null && next !== value) onChange(next)
+      label={label}
+      className="w-28"
+      onChange={(next) => {
+        if (next !== value) onChange(next)
       }}
-    >
-      <SelectTrigger className="w-28" aria-label={label}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {choices.map((choice) => (
-          <SelectItem key={choice.value} value={choice.value}>
-            {choice.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    />
   )
 }
 
 function formatTime(rfc3339: string) {
   const date = new Date(rfc3339)
   if (Number.isNaN(date.getTime())) return "at an unknown time"
-  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  return DATE_TIME.format(date)
 }

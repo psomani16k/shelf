@@ -11,7 +11,6 @@ pub struct LibraryWatcher {
 }
 
 impl LibraryWatcher {
-    /// Must be called from inside a tokio runtime.
     pub fn initialize(root: &Path) -> anyhow::Result<(Self, UnboundedReceiver<PathBuf>)> {
         let root = root.canonicalize()?;
         let root_len = root.components().count();
@@ -20,20 +19,16 @@ impl LibraryWatcher {
             if let Ok(r) = res
                 && (r.kind.is_create() || r.kind.is_remove() || r.kind.is_modify())
             {
-                let paths = r.paths;
-                let paths: Vec<PathBuf> = paths
-                    .into_iter()
-                    .filter(|p| Self::is_relevant(p, root_len))
-                    .collect();
-                for path in paths {
+                for path in r.paths.into_iter().filter(|p| Self::is_relevant(p, root_len)) {
                     let _ = sender.send(path);
                 }
             }
         })?;
-        anyhow::Ok((Self { inner, root }, receiver))
+        Ok((Self { inner, root }, receiver))
     }
 
-    pub async fn watch(&mut self) -> anyhow::Result<()> {
+    /// Blocks: watching a folder recursively walks it.
+    pub fn watch(&mut self) -> anyhow::Result<()> {
         self.inner.watch(&self.root, RecursiveMode::Recursive)?;
         Ok(())
     }

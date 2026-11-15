@@ -35,6 +35,7 @@ export type Backend = {
   /** `lastBookId` is unset on first use, or when that book has left the library. */
   getState: () => Promise<GetStateResponse>
   setState: (lastBookId: string) => Promise<void>
+  /** The signed-in user's own settings. */
   getConfig: () => Promise<Config>
   /** Only the fields set in `patch` change; resolves to the user's whole config. */
   setConfig: (patch: MessageInitShape<typeof ConfigSchema>) => Promise<Config>

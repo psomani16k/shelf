@@ -37,10 +37,7 @@ impl<T: Hash + Eq + Clone> Debounced<T> {
         F: Fn(T) + Send + Sync + 'static,
         T: Send + 'static,
     {
-        let n = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(2);
-        self.receive_and_process_blocking_concurrent(f, recv, n).await;
+        self.receive_and_process_blocking_concurrent(f, recv, super::cpus()).await;
     }
 
     /// Like `receive_and_process_blocking`, with at most `in_flight` jobs (at least 1) running at once.
@@ -86,7 +83,6 @@ impl<T: Hash + Eq + Clone> Debounced<T> {
             }
         }
 
-        // Drain all the items after the recv closes.
         while let Some(expired) = poll_fn(|cx| self.queue.poll_expired(cx)).await {
             spawn(expired.into_inner());
         }
