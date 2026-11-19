@@ -2,6 +2,7 @@ import type { MessageInitShape } from "@bufbuild/protobuf"
 import type {
   ListUsersResponse,
   Role_Value,
+  SessionInfo,
   User,
   UserRequest,
   UserScopeSchema,
@@ -16,8 +17,10 @@ import type {
 } from "@/gen/apipb/library_pb"
 import type { GetProgressResponse } from "@/gen/apipb/progress_pb"
 import type { GetStateResponse } from "@/gen/apipb/state_pb"
+import type { ListThemesResponse } from "@/gen/apipb/theme_pb"
 import type { ImportUserDataResponse, UserData } from "@/gen/apipb/user_data_pb"
 import type { Config, ConfigSchema } from "@/gen/configpb/config_pb"
+import type { ReaderThemeSpecSchema } from "@/gen/configpb/theme_pb"
 
 /**
  * Everything the UI needs from a library. The server implements it over HTTP, the app over
@@ -39,7 +42,15 @@ export type Backend = {
   getConfig: () => Promise<Config>
   /** Only the fields set in `patch` change; resolves to the user's whole config. */
   setConfig: (patch: MessageInitShape<typeof ConfigSchema>) => Promise<Config>
-  /** The user's progress, last book and settings, without their name, to import elsewhere. */
+  /** The built-in reader themes with the user's own over them, then the user's other themes. */
+  listThemes: () => Promise<ListThemesResponse>
+  /** Creates the user's theme, or replaces their one with the same id; resolves to the list. */
+  setTheme: (spec: MessageInitShape<typeof ReaderThemeSpecSchema>) => Promise<ListThemesResponse>
+  /** Rejects with a 400 for a built-in. Deleting an override brings the built-in back. */
+  deleteTheme: (name: string) => Promise<ListThemesResponse>
+  /** Also moves the config's choice when it was `from`, so refetch the config. */
+  renameTheme: (from: string, to: string) => Promise<ListThemesResponse>
+  /** The user's progress, last book, settings and themes, without their name. */
   exportUserData: () => Promise<UserData>
   /**
    * Replaces the user's progress for the books in `data` this library has, their last book and
@@ -77,6 +88,13 @@ export type Backend = {
   logout: () => Promise<void>
   /** The signed-in user; `null` for an app's local library, which has no accounts. */
   me: () => Promise<User | null>
+  /** The user's sessions on the server, this one first. Not for a local library. */
+  listSessions: () => Promise<SessionInfo[]>
+  /**
+   * Signs out another of the user's devices, by `SessionInfo.id`, and gives the sessions left.
+   * Rejects with a 400 for this device's own session (that's `logout`).
+   */
+  signOutSession: (id: string) => Promise<SessionInfo[]>
   /** Signs out every other device. Rejects with a 400 when `currentPassword` is wrong. */
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   /**

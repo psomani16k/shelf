@@ -68,7 +68,7 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 - [ ] **Offline reading in Remote mode** (M9): books and covers are already cached after download; still needed are offline listings and queued progress writes.
 - [ ] Remote cache housekeeping: evict old files, delete the cache when a library is removed.
 - [x] Remote: an overall timeout for JSON calls (30 s), and an access check before opening a cached book ([app.md](app.md)).
-- [ ] Device name setting (default hostname, or "android"), used for the progress `device` field below.
+- [ ] Device name setting, used for the progress `device` field below. Its default can be what logins already send (`native::device_name`: Android's device name, else `Shelf on <hostname>`); the server would also need a way to rename a session.
 
 ## Reading and library UI
 
@@ -81,17 +81,17 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 
 ## Theming and reading customization
 
-Built today: interface theme (system/light/dark), reader theme (match interface/light/dark), layout (scrolled/paginated) and four margin sizes, all per user in the library's `users/<user>/config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`). Reader zoom is per device, in `localStorage` (`frontend/src/lib/readerZoom.ts`). The app's interface scale is per device, in the app data (`frontend/src/lib/uiScale.ts`), and the book's zoom is multiplied by it.
+Built today: interface theme (system/light/dark), reader themes (15 built-ins, from Light, Paper and Sepia to Nord, Red Night and Amber, plus each user's own theme files, as colour-matrix filters; see [library-format.md](library-format.md) and [frontend.md](frontend.md)), images keeping their colours or not, layout (scrolled/paginated) and four margin sizes, all per user in the library's `users/<user>/config.json` (`proto/configpb/config.proto`, resolved in `frontend/src/lib/appearance.ts`). Reader zoom is per device, in `localStorage` (`frontend/src/lib/readerZoom.ts`). The app's interface scale is per device, in the app data (`frontend/src/lib/uiScale.ts`), and the book's zoom is multiplied by it.
 
 - [ ] **Decide where each preference lives** before adding more. Settings are per user now, the same on all of that user's devices; size-like ones (font size, line height, margins) differ between a phone and a laptop and might belong per device instead (app store / `localStorage`), as zoom and the interface scale do. Record the choice in [decisions.md](decisions.md).
-- [ ] **More reader themes**: sepia, a low-contrast warm "night" theme, and pure black for OLED screens. New `ReaderTheme` enum values (append, never renumber), with `PALETTE` in `appearance.ts` becoming a table of themes and `readerCss` handling each.
+- [ ] **Theme editor, the rest**: renaming and editing a saved theme in place (today: *Start from* it and save under the same name), and swatches in the Theme dropdowns. Built: the *Themes* page and the theme builder ([frontend.md](frontend.md)).
 - [ ] **Typography**:
   - font size, in steps;
   - font family: the book's own, serif, sans-serif, and a dyslexia-friendly option, bundled with the frontend, since Android WebViews ship few fonts;
   - line height and paragraph spacing;
   - justification and hyphenation;
   - a *Use publisher's styles* toggle: off overrides the book's fonts and spacing, on leaves them alone.
-- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* popup (`components/ReaderQuickSettings.tsx`) has zoom (per device, `lib/readerZoom.ts`), theme and layout; font and size come with *Typography*.
+- [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* drawer (`components/ReaderQuickSettings.tsx`) has zoom (per device, `lib/readerZoom.ts`), theme, layout and images; font and size come with *Typography*.
 - [ ] **Dark-theme images**: an option to dim images in dark themes, so a white illustration doesn't flash.
 - [ ] **Interface accent colour**, and an interface theme that follows the reader theme (so sepia reading gets a matching drawer and settings).
 - [ ] App only: **keep the screen on** while reading.

@@ -319,6 +319,7 @@ mod tests {
             let session = Session {
                 created: now().to_string(),
                 expires: (now() + Duration::from_secs(60)).to_string(),
+                device: String::new(),
             };
             data.users.get_mut("a").unwrap().sessions.insert("new".into(), session);
         })

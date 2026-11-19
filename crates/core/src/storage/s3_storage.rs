@@ -294,6 +294,28 @@ impl LibraryStorage for S3LibraryStorage {
         self.put(&key, Bytes::copy_from_slice(bytes)).await
     }
 
+    async fn list_shelf_files(&self, dir: &str) -> Result<Vec<String>> {
+        let prefix = self.shelf_key(dir)?;
+        let objects = self.list(&prefix).await?;
+        Ok(objects
+            .iter()
+            .filter_map(|object| {
+                let parts: Vec<_> = object.location.prefix_match(&prefix)?.collect();
+                match parts.as_slice() {
+                    [name] if !name.as_ref().starts_with('.') => Some(name.as_ref().to_owned()),
+                    _ => None,
+                }
+            })
+            .collect())
+    }
+
+    async fn delete_shelf_file(&self, name: &str) -> Result<()> {
+        match self.store.delete(&self.shelf_key(name)?).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Nothing to clean: a PUT never leaves half an object behind.
     async fn clean_up_temp_files(&self) -> Result<()> {
         Ok(())

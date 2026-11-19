@@ -24,10 +24,12 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | Method | Path | Request body | Response |
 |---|---|---|---|
 | GET | `/api/health` | — | `200 ok` (plain text) |
-| POST | `/api/auth/login` | `LoginRequest` `{username, password}` | `LoginResponse` `{token, user: {username, role}}` |
+| POST | `/api/auth/login` | `LoginRequest` `{username, password, device}` | `LoginResponse` `{token, user: {username, role}}`. `device` is what the client calls itself (below) |
 | POST | `/api/auth/logout` | — | `204`; ends this token's session |
 | GET | `/api/auth/me` | — | `User` `{username, role}` |
 | POST | `/api/auth/password` | `ChangePasswordRequest` `{current_password, new_password}` | `204` |
+| POST | `/api/auth/sessions/list` | `ListSessionsRequest` `{}` | `ListSessionsResponse` `{sessions: [{id, device, created, active, current}]}`: the user's live sessions, this one first, then the most recently active |
+| POST | `/api/auth/sessions/end` | `EndSessionRequest` `{id}` | `ListSessionsResponse`, the sessions left. 400 for the caller's own session (that's `logout`); 404 for an id that isn't one of theirs |
 | POST | `/api/auth/signup` | `SignUpRequest` `{username, password}` | `204`; the request waits for an admin |
 | POST | `/api/users/requests/list` | `ListUserRequestsRequest` `{}` | `ListUserRequestsResponse` `{requests: [{id, username, created, taken}]}`, oldest first |
 | POST | `/api/users/requests/approve` | `ApproveUserRequestRequest` `{id, role}` | `204`; the request becomes a user |
@@ -44,8 +46,12 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | POST | `/api/state/set` | `SetStateRequest` `{last_book_id?}` | `204` |
 | POST | `/api/config/get` | `GetConfigRequest` `{}` | `Config` |
 | POST | `/api/config/set` | `SetConfigRequest` `{patch}` (`patch` is a partial `Config`) | `Config` (the user's whole merged config) |
-| POST | `/api/user-data/export` | `ExportUserDataRequest` `{}` | `UserData` `{version, progress: [{id, epub_progress}], last_book_id, config}` |
-| POST | `/api/user-data/import` | `ImportUserDataRequest` `{data: UserData}` | `ImportUserDataResponse` `{books, skipped}` |
+| POST | `/api/themes/list` | `ListThemesRequest` `{}` | `ListThemesResponse` `{themes: [{id, source, spec}], default_id}` |
+| POST | `/api/themes/set` | `SetThemeRequest` `{spec}` | `ListThemesResponse` |
+| POST | `/api/themes/delete` | `DeleteThemeRequest` `{name}` | `ListThemesResponse` |
+| POST | `/api/themes/rename` | `RenameThemeRequest` `{from, to}` | `ListThemesResponse` |
+| POST | `/api/user-data/export` | `ExportUserDataRequest` `{}` | `UserData` `{version, progress: [{id, epub_progress}], last_book_id, config, themes}` |
+| POST | `/api/user-data/import` | `ImportUserDataRequest` `{data: UserData}` | `ImportUserDataResponse` `{books, skipped, themes}` |
 | POST | `/api/library/rebuild` | `RebuildIndexRequest` `{}` | `RebuildIndexResponse` `{books, failed, removed}` |
 | POST | `/api/library/progress/clean` | `CleanUpProgressRequest` `{}` | `CleanUpProgressResponse` `{books}` (folders deleted) |
 | POST | `/api/books/upload?parent_directory=…&file_name=…` | the EPUB's raw bytes (`UploadEbookRequest` is the query) | `UploadEbookResponse` `{id, file_name}` (the name it got) |
@@ -57,6 +63,7 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 Notes:
 - **Auth** (`crates/server/src/auth.rs`; sessions are stored in `/data/data.json`, see [server.md](server.md#server-data)):
   - **Login:** the password is compared in constant time; an unknown username is compared against a dummy, so both take as long. Wrong username or password: 401 `wrong username or password`. A user with no password set can't log in. A banned user (`BANNED`, also the value when `role` is left out) with the right password gets a 403 `this account is banned; contact an admin of this server`, checked after the password so it never confirms a name to a guesser. A name that isn't a user but has a pending sign-up with that password gets a 403 `this account is waiting for an admin's approval`. The token is 32 random bytes from the OS, base64url; only its hex SHA-256 is stored, with `created` and `expires` (90 days).
+  - **Devices:** `LoginRequest.device` is a name the client gives itself: the browser's "Firefox on Linux" (worked out from the user agent in the browser, `lib/deviceName.ts`), Android's device name ("OnePlus 11 5G"), or `Shelf on <hostname>` from the Linux app. The server keeps it with the session, trimmed, without control characters and cut to 64 characters, and never logs it; no IP or user agent is kept. A `SessionInfo.id` is the first 16 hex characters of the SHA-256 of the session's key, so neither the token nor its stored hash leaves the server. `active` is `expires` minus the 90-day lifetime: when the session was last used, to within a day.
   - **Lockout:** 5 wrong passwords in a row (login, or the current password in `auth/password`) lock that username for 60 s: 429 `too many wrong passwords; try again in a minute`. A success resets the count. Counted per existing user, in memory; unknown names aren't tracked.
   - **Sessions slide:** a request with a session that has less than 89 days left pushes it back to 90, so it's written at most once a day per session. An expired or unknown token, or one whose user has since been banned, is a 401 `this session has ended; sign in again`; a missing one `sign in first`.
   - **The role is read from `data.json` on every request** (it's reloaded when it changes), so a role change or a removed user applies to the next request.
@@ -70,8 +77,12 @@ Notes:
 - **Roles** (`crates/server/src/auth/users.rs`): `users/list` sends every user's name and role, never passwords or sessions. `users/role/set` checks, in order: changing your own role is a 403 `you can't change your own role`; a role the caller may not give is a 403 `you can't give the X role`; an unknown user is a 404; a user whose current role the caller may not take away is a 403 `you can't change an X's role`. The rule (`may_manage`, shared with approving): `BANNED`, `READER`, `CONTRIBUTOR` and `LIBRARIAN` need `ADMIN` or higher, `ADMIN` needs `OWNER`, and `OWNER` is never given or taken. Banning also deletes all of the user's sessions, so they're signed out at once; unbanning doesn't bring them back. Nothing is written when a check fails.
 - **Scopes** (`users.rs`): `users/list` also sends each user's `library_root` and `books` in `scopes` (not on `User`, which `auth/me` sends the user themselves). `users/scope/set` normalizes the scope (the root goes through the folder-path rules, `/kid/` → `kid`; patterns are trimmed and blank ones dropped) and checks it like `data.json` does: a bad root or pattern is a 400 with the parser's message, and a root that isn't a folder in the library a 400 `there's no folder "x"`. Then, as for roles: your own is a 403, an unknown user a 404, and the caller must be allowed to manage the user's current role (`may_manage`), so admins set the scopes of users below admin, owners admins' too, and an owner's is only set by hand. It applies from the user's next request; their sessions stay. `users/scope/directories` lists folders of the whole library for picking a root. **An admin's own scope doesn't apply to either**: a scoped admin sees and sets full library paths (a choice; see [decisions.md](decisions.md)).
 - **User data** (`LibraryView::export_user_data` / `import_user_data`): moves one user's data between libraries, a device's and a server's in either direction. `UserData` has **no username**, so whoever imports it gets it, and its book ids are file hashes, so it fits any library with the same EPUBs, wherever they are.
-  - **Export:** `version` 1; the progress of every book in the index the user can see (books outside the index, such as removed ones whose progress is kept, aren't exported), sorted by id; the last book if it's visible; the whole config.
-  - **Import:** a `version` other than 1 is a 400 `this isn't a Shelf data export`. Each entry for a visible, indexed book with a non-empty CFI replaces the user's progress for it; the rest count as `skipped`, so the answer doesn't tell a hidden book from a missing one. Only ids from the index are written, so none from the file becomes a path. The last book is set if it's visible; the config is merged like `config/set`. The body falls under axum's 2 MB default (about 15,000 books).
+  - **Export:** `version` 1; the progress of every book in the index the user can see (books outside the index, such as removed ones whose progress is kept, aren't exported), sorted by id; the last book if it's visible; the whole config; the user's own theme files (not the built-ins they don't override).
+  - **Import:** a `version` other than 1 is a 400 `this isn't a Shelf data export`. Each entry for a visible, indexed book with a non-empty CFI replaces the user's progress for it; the rest count as `skipped`, so the answer doesn't tell a hidden book from a missing one. Only ids from the index are written, so none from the file becomes a path. The last book is set if it's visible; the config is merged like `config/set`; each theme is written like `themes/set`, and invalid ones (or ones past the limit) are skipped with a `warn`, so `themes` counts those written. The body falls under axum's 2 MB default (about 15,000 books).
+- **Reader themes** (`crates/core/src/themes/`, file rules in [library-format.md](library-format.md#usersuserthemesidjson-configpbreaderthemespec)): per user, like settings, and not scoped. `themes/list` gives the built-ins in their order (Dark, Light, AMOLED, Night, Sepia), each replaced by the user's theme with its id (`source: OVERRIDDEN`), then the user's other themes (`CUSTOM`) by id; `default_id` is `light`. The other three answer with the new list.
+  - **`themes/set`** creates the theme or replaces the user's one with its id. A bad name or layer is a 400 (e.g. `layer 2 needs colours as #rrggbb`); a 129th theme is a 400 `you can have at most 128 themes`.
+  - **`themes/delete`** removes the user's theme by name; a built-in is a 400 `built-in themes can't be deleted`, an unknown name a 404. Deleting an override brings the built-in back.
+  - **`themes/rename`** gives the user's theme a new name (and so id and file). A built-in is a 400 `built-in themes can't be renamed`, an unknown `from` a 404, and a `to` with the id of another of the user's themes a 409 `there's already a theme called "x"`; renaming to a built-in's name makes it that built-in's override. If the user's `reader.theme` was the old id, it becomes the new one.
 - **Scopes** (`crates/core/src/library/scope.rs`, `view.rs`): each user sees only their part of the library, set in `/data/data.json` by `library_root` and `books` ([server.md](server.md#server-data)). Every handler that touches books, folders, progress or the last book goes through `ServerLibrary::view(&user.scope)`, a `LibraryView`. A user without either field sees the whole library.
   - **Paths are relative to the user's root**, both ways: their root is `""`, and nothing they get back names it, so the UI shows it as the library root.
   - **A hidden book acts as missing:** a book is visible when one of its copies is under the root and allowed by the patterns. A hidden one is left out of listings, and its cover, file and progress are 404s; a last book that's hidden reads as unset. A copy outside the scope is never deleted.
@@ -86,7 +97,7 @@ Notes:
 - Upload, create and delete hold `BookLibrary`'s `files_lock`, so their checks and changes don't interleave.
 - `/cover` and `/file` add `Cache-Control: no-store`. A local file (`FileContent::Local`) goes through tower-http `ServeFile` (Range, `Last-Modified`, content type); bytes (`FileContent::Bytes`, from storage without local files, such as S3, which isn't wired up) are sent whole as `image/jpeg` / `application/epub+zip`, with no Range support. A book still in the index whose file is gone from disk gets `ServeFile`'s 404 with an empty body.
 - `set_progress` without `epub_progress` is a no-op `204`.
-- Progress, the last book and settings are per user. Their requests (`GetProgressRequest`, `SetProgressRequest`, `GetStateRequest`, `SetStateRequest`, `GetConfigRequest`, `SetConfigRequest`) also have a `user` field, which clients leave out: it's filled in where a request enters, never taken from the client: the server's handlers set it to the session's user, and the app's `LocalLibrary` sets it to the library entry's `user` from the app data. A remote library sends whatever the frontend sent, and the server replaces it. `BookLibrary` rejects an invalid name with a 500.
+- Progress, the last book and settings are per user. Their requests (`GetProgressRequest`, `SetProgressRequest`, `GetStateRequest`, `SetStateRequest`, `GetConfigRequest`, `SetConfigRequest`, and the four theme requests) also have a `user` field, which clients leave out: it's filled in where a request enters, never taken from the client: the server's handlers set it to the session's user, and the app's `LocalLibrary` sets it to the library entry's `user` from the app data. A remote library sends whatever the frontend sent, and the server replaces it. `BookLibrary` rejects an invalid name with a 500.
 - `get_state` returns a `last_book_id` that's no longer in the library as unset.
 - `/library/rebuild` answers only when the rebuild is done, which takes as long as reading every book file. A second rebuild waits for the first.
 - `/library/progress/clean` deletes the `.shelf/books/<id>/` folders of books no file has any more (no `metadata.json`, not in the index), every user's progress included ([library-format.md](library-format.md#cleaning-up-progress)). It waits for a running rebuild, upload or watcher job.
@@ -106,11 +117,12 @@ Roles are defined in [server.md](server.md#server-data); each can do everything 
 | `POST /api/progress/get`, `/set` | `get_progress`, `set_progress` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/state/get`, `/set` | `get_state`, `set_state` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/config/get`, `/set` | `get_config`, `set_config` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/themes/list`, `/set`, `/delete`, `/rename` | `list_themes`, `set_theme`, `delete_theme`, `rename_theme` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/user-data/export`, `/import` | `export_user_data`, `import_user_data` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/library/rebuild` | `rebuild_index` | built | | | | ✓ | ✓ |
 | `POST /api/library/progress/clean` | `clean_up_progress` | built | | | | ✓ | ✓ |
 | `POST /api/auth/login` | `login` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/password` | `logout`, `me`, `change_password` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/password`, `POST /api/auth/sessions/list`, `POST /api/auth/sessions/end` | `logout`, `me`, `change_password`, `list_sessions`, `end_session` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/books/upload` | `upload_book` | built | | ✓ | ✓ | ✓ | ✓ |
 | `POST /api/directories/create` | `create_directory` | built | | ✓ | ✓ | ✓ | ✓ |
 | `POST /api/library/delete` | `delete_items` | built | | | ✓ | ✓ | ✓ |
@@ -168,6 +180,10 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `set_state` | `{ req: SetStateRequest }` | `null` |
 | `get_config` | `{ req: GetConfigRequest }` | `Config` |
 | `set_config` | `{ req: SetConfigRequest }` | `Config` |
+| `list_themes` | `{ req: ListThemesRequest }` | `ListThemesResponse` |
+| `set_theme` | `{ req: SetThemeRequest }` | `ListThemesResponse` |
+| `delete_theme` | `{ req: DeleteThemeRequest }` | `ListThemesResponse` |
+| `rename_theme` | `{ req: RenameThemeRequest }` | `ListThemesResponse` |
 | `export_user_data` | `{ req: ExportUserDataRequest }` | `UserData` |
 | `import_user_data` | `{ req: ImportUserDataRequest }` | `ImportUserDataResponse` |
 | `save_json_file` (app only) | `{ name, contents }` | `bool`: the save picker, then `contents` written to the chosen file; `false` if cancelled |
@@ -183,8 +199,10 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `list_local_users` (app only) | none | `string[]`: the usernames with a folder in the open local library's `.shelf/users/`, sorted |
 | `me` | none | `User`, or `null` for a local library |
 | `change_password` | `{ req: ChangePasswordRequest }` | `null` |
+| `list_sessions` | none | `ListSessionsResponse` |
+| `end_session` | `{ req: EndSessionRequest }` | `ListSessionsResponse` |
 
-A remote library sends its stored token as `Authorization: Bearer` on every request, covers and files included. `login`, `logout` and `change_password` on a local library are a 400 (`a local library has no accounts`); a local library has no roles, so every other command is allowed.
+A remote library sends its stored token as `Authorization: Bearer` on every request, covers and files included. `login` fills in `LoginRequest.device` itself (`native::device_name`), whatever the frontend sent. `logout`, `change_password`, `list_sessions` and `end_session` on a local library are a 400 (`a local library has no accounts`); a local library has no roles, so every other command is allowed.
 
 `get_cover` / `get_book_file` read the whole file (or take the bytes, for storage without local files) and return `tauri::ipc::Response::new(bytes)`, which reaches JS as an `ArrayBuffer`. A custom URI scheme (`cover://`) was tried first and dropped: WebKitGTK doesn't dispatch custom-scheme subresource loads from a page served over `http://` (the Vite dev server), so covers never loaded in `cargo tauri dev` on Linux.
 

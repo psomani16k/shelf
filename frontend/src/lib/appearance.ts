@@ -2,7 +2,6 @@ import {
   type Config,
   ReaderFlow_Value,
   ReaderMargin_Value,
-  ReaderTheme_Value,
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
 
@@ -19,7 +18,8 @@ export type Margins = {
 
 export type Appearance = {
   ui: Scheme
-  reader: { flow: Flow; scheme: Scheme; margins: Margins }
+  /** The reader's theme is a list of themes, resolved by `useReaderLook`. */
+  reader: { flow: Flow; margins: Margins }
 }
 
 const MARGIN_SIZES: Record<ReaderMargin_Value, MarginSize> = {
@@ -31,19 +31,12 @@ const MARGIN_SIZES: Record<ReaderMargin_Value, MarginSize> = {
 const marginSize = (value: ReaderMargin_Value | undefined) =>
   MARGIN_SIZES[value ?? ReaderMargin_Value.MEDIUM]
 
-/** Unset fields mean the proto zero value: system theme, scrolled, reader matches the UI, medium margins. */
+/** Unset fields mean the proto zero value: system theme, scrolled, medium margins. */
 export function resolveAppearance(config: Config | undefined, system: Scheme): Appearance {
   const uiTheme = config?.ui?.theme
   const ui =
     uiTheme === UiTheme_Value.LIGHT ? "light" : uiTheme === UiTheme_Value.DARK ? "dark" : system
 
-  const readerTheme = config?.reader?.theme
-  const scheme =
-    readerTheme === ReaderTheme_Value.LIGHT
-      ? "light"
-      : readerTheme === ReaderTheme_Value.DARK
-        ? "dark"
-        : ui
   const flow = config?.reader?.flow === ReaderFlow_Value.PAGINATED ? "paginated" : "scrolled"
 
   const m = config?.reader?.margins
@@ -54,7 +47,7 @@ export function resolveAppearance(config: Config | undefined, system: Scheme): A
     betweenPages: marginSize(m?.betweenPages),
   }
 
-  return { ui, reader: { flow, scheme, margins } }
+  return { ui, reader: { flow, margins } }
 }
 
 /** Each preset is a share of the screen, kept within [min, max] px. */
@@ -132,35 +125,26 @@ export function readerLayout(
   }
 }
 
-// The same colours as --background and --foreground in index.css.
-const PALETTE = {
-  light: { background: "oklch(1 0 0)", text: "oklch(0.145 0 0)" },
-  dark: { background: "oklch(0.145 0 0)", text: "oklch(0.985 0 0)" },
-}
-
-export const readerBackground = (scheme: Scheme) => PALETTE[scheme].background
-
 /**
- * Styles for each book page. Dark mode overrides the book's own colours so no text is lost.
+ * Styles for each book page, drawn as published: the theme is a filter over the body, and its
+ * variables are set on each page's `<html>` by `applyLook`, so changing it needs no new styles.
+ * The page is transparent: the reader's wrapper behind the iframe has the theme's page colour,
+ * which foliate's own background (copied from the page only when its styles are set) can't keep.
  * `zoom` scales the body, not `<html>`, whose columns foliate sizes in px. Images undo it:
  * foliate caps their height to the page in px, which zoom would scale past the page.
  */
-export function readerCss(scheme: Scheme, { pageMarginRight = 0, zoom = 1 } = {}): string {
-  const { background, text } = PALETTE[scheme]
-  let base = `
-    html { color-scheme: ${scheme}; color: ${text}; background: ${background} !important; }
+export function readerCss({ pageMarginRight = 0, zoom = 1 } = {}): string {
+  let css = `
+    html { color-scheme: light; color: #000; background: transparent !important; }
     html { margin-right: ${pageMarginRight}px !important; }
-    body { background: transparent !important; color: inherit !important; }
+    body { background: transparent !important; filter: var(--shelf-filter, none) !important; }
+    img, video, canvas, svg:has(image) { filter: var(--shelf-image-filter, none) !important; }
   `
   if (zoom !== 1) {
-    base += `
+    css += `
     body { zoom: ${zoom} !important; }
     img, video, svg:not(svg svg) { zoom: ${+(1 / zoom).toFixed(4)} !important; }
   `
   }
-  if (scheme === "light") return base
-  return `${base}
-    body *:not(a, a *) { color: inherit !important; background-color: transparent !important; }
-    a:link, a:visited, a * { color: oklch(0.8 0.1 250) !important; }
-  `
+  return css
 }

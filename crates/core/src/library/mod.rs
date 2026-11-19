@@ -11,10 +11,11 @@ use shelf_proto::{
     api::{
         CleanUpProgressResponse, CreateDirectoryRequest, ExportUserDataRequest, ImportUserDataRequest,
         ImportUserDataResponse, UserData, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
-        GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
-        ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        UploadEbookRequest, UploadEbookResponse,
+        DeleteThemeRequest, GetConfigRequest, GetProgressRequest, GetProgressResponse,
+        GetStateRequest, GetStateResponse, ListBooksRequest, ListBooksResponse,
+        ListDirectoriesRequest, ListDirectoriesResponse, ListThemesRequest, ListThemesResponse,
+        RebuildIndexResponse, RenameThemeRequest, SetConfigRequest, SetProgressRequest,
+        SetStateRequest, SetThemeRequest, UploadEbookRequest, UploadEbookResponse,
     },
     config::Config,
 };
@@ -96,14 +97,40 @@ pub trait Library {
         req: SetConfigRequest,
     ) -> impl Future<Output = Result<Config, LibraryError>> + Send;
 
-    /// The user's progress, last book and settings, without their name (`view.rs`).
+    /// The built-in reader themes, each replaced by the user's theme with its id, then the
+    /// user's other themes (`themes/mod.rs`).
+    fn list_themes(
+        &self,
+        req: ListThemesRequest,
+    ) -> impl Future<Output = Result<ListThemesResponse, LibraryError>> + Send;
+
+    /// Creates the user's theme, or replaces their one with the same id; returns the new list.
+    fn set_theme(
+        &self,
+        req: SetThemeRequest,
+    ) -> impl Future<Output = Result<ListThemesResponse, LibraryError>> + Send;
+
+    /// Deletes the user's theme (a built-in is `Invalid`); returns the new list.
+    fn delete_theme(
+        &self,
+        req: DeleteThemeRequest,
+    ) -> impl Future<Output = Result<ListThemesResponse, LibraryError>> + Send;
+
+    /// Renames the user's theme, and their config's choice if it was that theme; returns the
+    /// new list.
+    fn rename_theme(
+        &self,
+        req: RenameThemeRequest,
+    ) -> impl Future<Output = Result<ListThemesResponse, LibraryError>> + Send;
+
+    /// The user's progress, last book, settings and themes, without their name (`view.rs`).
     fn export_user_data(
         &self,
         req: ExportUserDataRequest,
     ) -> impl Future<Output = Result<UserData, LibraryError>> + Send;
 
     /// Replaces the user's progress for the books in `req.data` this library has, their last
-    /// book and the settings it sets.
+    /// book, the settings it sets and the themes it has.
     fn import_user_data(
         &self,
         req: ImportUserDataRequest,

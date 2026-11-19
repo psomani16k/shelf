@@ -4,11 +4,13 @@ import { createRoot } from "react-dom/client"
 import "./index.css"
 import App from "./App.tsx"
 import { installErrorHandlers } from "./lib/log.ts"
+import { allowPinchZoom } from "./lib/pinchZoom.ts"
 import { IS_TAURI } from "./lib/platform.ts"
 import { loadUiScale } from "./lib/uiScale.ts"
 import { revokeCoversOnRemoval } from "./lib/useCover.ts"
 
 installErrorHandlers()
+allowPinchZoom(false)
 
 const queryClient = new QueryClient()
 revokeCoversOnRemoval(queryClient)

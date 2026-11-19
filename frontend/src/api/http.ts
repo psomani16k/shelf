@@ -9,6 +9,9 @@ import {
   ApproveUserRequestRequestSchema,
   ChangePasswordRequestSchema,
   DenyUserRequestRequestSchema,
+  EndSessionRequestSchema,
+  ListSessionsRequestSchema,
+  ListSessionsResponseSchema,
   ListUserRequestsRequestSchema,
   ListUserRequestsResponseSchema,
   ListUsersRequestSchema,
@@ -17,6 +20,7 @@ import {
   LoginRequestSchema,
   LoginResponseSchema,
   type Role_Value,
+  type SessionInfo,
   SetUserRoleRequestSchema,
   SetUserScopeRequestSchema,
   SignUpRequestSchema,
@@ -63,6 +67,14 @@ import {
 } from "@/gen/apipb/state_pb"
 import { GetConfigRequestSchema, SetConfigRequestSchema } from "@/gen/apipb/config_pb"
 import {
+  DeleteThemeRequestSchema,
+  ListThemesRequestSchema,
+  type ListThemesResponse,
+  ListThemesResponseSchema,
+  RenameThemeRequestSchema,
+  SetThemeRequestSchema,
+} from "@/gen/apipb/theme_pb"
+import {
   ExportUserDataRequestSchema,
   ImportUserDataRequestSchema,
   type ImportUserDataResponse,
@@ -71,6 +83,8 @@ import {
   UserDataSchema,
 } from "@/gen/apipb/user_data_pb"
 import { type Config, ConfigSchema } from "@/gen/configpb/config_pb"
+import type { ReaderThemeSpecSchema } from "@/gen/configpb/theme_pb"
+import { browserDeviceName } from "@/lib/deviceName"
 import { endSession, getToken, setSignedOut, setToken } from "@/lib/session"
 import { ApiError } from "./error"
 import { decode, encode } from "./proto"
@@ -90,6 +104,10 @@ export const httpBackend: Backend = {
   setState,
   getConfig,
   setConfig,
+  listThemes,
+  setTheme,
+  deleteTheme,
+  renameTheme,
   exportUserData,
   importUserData,
   rebuildIndex,
@@ -103,6 +121,8 @@ export const httpBackend: Backend = {
   logout,
   me,
   changePassword,
+  listSessions,
+  signOutSession,
   signUp,
   listUserRequests,
   approveUserRequest,
@@ -117,7 +137,7 @@ export async function login(username: string, password: string): Promise<User> {
   const res = await post(
     "/auth/login",
     LoginRequestSchema,
-    { username, password },
+    { username, password, device: browserDeviceName(navigator.userAgent) },
     LoginResponseSchema,
   )
   setToken(res.token)
@@ -140,6 +160,26 @@ export async function me(): Promise<User> {
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   await send("/auth/password", jsonBody(ChangePasswordRequestSchema, { currentPassword, newPassword }))
+}
+
+export async function listSessions(): Promise<SessionInfo[]> {
+  const res = await post(
+    "/auth/sessions/list",
+    ListSessionsRequestSchema,
+    {},
+    ListSessionsResponseSchema,
+  )
+  return res.sessions
+}
+
+export async function signOutSession(id: string): Promise<SessionInfo[]> {
+  const res = await post(
+    "/auth/sessions/end",
+    EndSessionRequestSchema,
+    { id },
+    ListSessionsResponseSchema,
+  )
+  return res.sessions
 }
 
 export async function signUp(username: string, password: string): Promise<void> {
@@ -229,6 +269,24 @@ export function getConfig(): Promise<Config> {
 
 export function setConfig(patch: MessageInitShape<typeof ConfigSchema>): Promise<Config> {
   return post("/config/set", SetConfigRequestSchema, { patch }, ConfigSchema)
+}
+
+export function listThemes(): Promise<ListThemesResponse> {
+  return post("/themes/list", ListThemesRequestSchema, {}, ListThemesResponseSchema)
+}
+
+export function setTheme(
+  spec: MessageInitShape<typeof ReaderThemeSpecSchema>,
+): Promise<ListThemesResponse> {
+  return post("/themes/set", SetThemeRequestSchema, { spec }, ListThemesResponseSchema)
+}
+
+export function deleteTheme(name: string): Promise<ListThemesResponse> {
+  return post("/themes/delete", DeleteThemeRequestSchema, { name }, ListThemesResponseSchema)
+}
+
+export function renameTheme(from: string, to: string): Promise<ListThemesResponse> {
+  return post("/themes/rename", RenameThemeRequestSchema, { from, to }, ListThemesResponseSchema)
 }
 
 export function exportUserData(): Promise<UserData> {

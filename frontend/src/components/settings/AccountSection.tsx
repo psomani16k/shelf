@@ -1,17 +1,20 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { LoaderCircle } from "lucide-react"
 import { useState } from "react"
-import { changePassword, logout } from "@/api"
+import { changePassword, listSessions, logout, signOutSession } from "@/api"
+import { NameWithBadge } from "@/components/settings/NameWithBadge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import type { SessionInfo } from "@/gen/apipb/auth_pb"
+import { DATE_TIME } from "@/lib/format"
 import { IS_TAURI } from "@/lib/platform"
-import { LIBRARIES_KEY } from "@/lib/queryKeys"
+import { LIBRARIES_KEY, SESSIONS_KEY } from "@/lib/queryKeys"
 import { useCurrentLibrary } from "@/lib/useAppLibrary"
 import { ROLE_NAMES, useMe } from "@/lib/useMe"
 
 /**
- * Who's signed in, changing the password and signing out. A local library has no accounts, only
- * the name chosen on this device.
+ * Who's signed in, changing the password, signing out, and the devices signed in. A local library
+ * has no accounts, only the name chosen on this device.
  */
 export function AccountSection() {
   const me = useMe()
@@ -26,6 +29,7 @@ export function AccountSection() {
         action="Log out"
       />
       <ChangePassword />
+      <Sessions />
     </div>
   )
 }
@@ -80,12 +84,15 @@ function useLogout() {
 }
 
 function ChangePassword() {
+  const queryClient = useQueryClient()
   const [current, setCurrent] = useState("")
   const [next, setNext] = useState("")
   const [confirm, setConfirm] = useState("")
   const change = useMutation({
     mutationFn: () => changePassword(current, next),
     onSuccess: () => {
+      // The other sessions have ended.
+      void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY })
       setCurrent("")
       setNext("")
       setConfirm("")
@@ -145,5 +152,72 @@ function ChangePassword() {
         </Button>
       </div>
     </form>
+  )
+}
+
+/** Every device signed in as this user, with *Sign out* for the others. */
+function Sessions() {
+  const queryClient = useQueryClient()
+  const sessions = useQuery({ queryKey: SESSIONS_KEY, queryFn: listSessions })
+  const signOut = useMutation({
+    mutationFn: signOutSession,
+    onSuccess: (left) => queryClient.setQueryData(SESSIONS_KEY, left),
+  })
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border p-4">
+      <div>
+        <p className="text-sm font-medium">Signed-in devices</p>
+        <p className="text-sm text-muted-foreground">
+          Devices and browsers signed in as you. One you sign out has to sign in again.
+        </p>
+      </div>
+      {sessions.isPending && <LoaderCircle className="size-5 animate-spin text-muted-foreground" />}
+      {sessions.isError && <p className="text-sm text-destructive">{String(sessions.error)}</p>}
+      {sessions.data && (
+        <ul className="flex flex-col divide-y">
+          {sessions.data.map((session) => (
+            <SessionRow
+              key={session.id}
+              session={session}
+              busy={signOut.isPending && signOut.variables === session.id}
+              onSignOut={() => signOut.mutate(session.id)}
+            />
+          ))}
+        </ul>
+      )}
+      {signOut.isError && <p className="text-sm text-destructive">{signOut.error.message}</p>}
+    </div>
+  )
+}
+
+function SessionRow({
+  session,
+  busy,
+  onSignOut,
+}: {
+  session: SessionInfo
+  busy: boolean
+  onSignOut: () => void
+}) {
+  const date = (rfc3339: string) => DATE_TIME.format(new Date(rfc3339))
+  return (
+    <li className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+      <div className="min-w-0">
+        <NameWithBadge
+          name={session.device || "Unknown device"}
+          badge={session.current && "This device"}
+        />
+        <p className="text-sm text-muted-foreground">
+          Signed in {date(session.created)} · last used {date(session.active)}
+        </p>
+      </div>
+      {!session.current && (
+        <Button variant="outline" className="shrink-0" onClick={onSignOut} disabled={busy}>
+          {busy && <LoaderCircle className="animate-spin" />}
+          Sign out
+        </Button>
+      )}
+    </li>
   )
 }

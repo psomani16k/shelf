@@ -15,6 +15,7 @@ use shelf_proto::{
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
         UploadEbookRequest, UploadEbookResponse,
+        DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
     config::Config,
 };
@@ -170,6 +171,26 @@ impl Library for LocalLibrary {
     async fn set_config(&self, mut req: SetConfigRequest) -> Result<Config, LibraryError> {
         req.user = self.user().await?;
         self.book_library.set_config(req).await
+    }
+
+    async fn list_themes(&self, mut req: ListThemesRequest) -> Result<ListThemesResponse, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.list_themes(req).await
+    }
+
+    async fn set_theme(&self, mut req: SetThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.set_theme(req).await
+    }
+
+    async fn delete_theme(&self, mut req: DeleteThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.delete_theme(req).await
+    }
+
+    async fn rename_theme(&self, mut req: RenameThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.rename_theme(req).await
     }
 
     async fn export_user_data(

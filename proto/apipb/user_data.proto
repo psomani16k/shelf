@@ -3,6 +3,7 @@ syntax = "proto3";
 package apipb;
 
 import "configpb/config.proto";
+import "configpb/theme.proto";
 
 // One user's data in a library, with no username, so it can be imported as anyone into any
 // library holding the same books (ids are file hashes). It's the file an export saves.
@@ -12,6 +13,8 @@ message UserData {
   repeated BookProgressEntry progress = 2;
   optional string last_book_id = 3;
   configpb.Config config = 4;
+  // The user's own themes (not the built-ins they don't override).
+  repeated configpb.ReaderThemeSpec themes = 5;
 }
 
 message BookProgressEntry {
@@ -36,4 +39,6 @@ message ImportUserDataResponse {
   uint32 books = 1;
   // Entries for books this library doesn't have, or the user can't see.
   uint32 skipped = 2;
+  // Themes written; invalid ones, and ones past the limit, are skipped.
+  uint32 themes = 3;
 }

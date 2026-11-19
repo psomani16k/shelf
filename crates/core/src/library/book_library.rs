@@ -7,13 +7,14 @@ use shelf_proto::{
     api::{
         CleanUpProgressResponse, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
-        GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
-        ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
-        RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        UploadEbookRequest, UploadEbookResponse,
+        DeleteThemeRequest, GetConfigRequest, GetProgressRequest, GetProgressResponse,
+        GetStateRequest, GetStateResponse, ListBooksRequest, ListBooksResponse,
+        ListDirectoriesRequest, ListDirectoriesResponse, ListThemesRequest, ListThemesResponse,
+        RebuildIndexResponse, RenameThemeRequest, SetConfigRequest, SetProgressRequest,
+        SetStateRequest, SetThemeRequest, UploadEbookRequest, UploadEbookResponse,
     },
     bookkeeping::BookMetadata,
-    config::Config,
+    config::{Config, ReaderConfig},
 };
 use shelf_utility::{routines::Debounced, timeutil::Duration};
 use tokio::sync::{Mutex, RwLock, mpsc::UnboundedReceiver};
@@ -23,6 +24,7 @@ use crate::{
     storage::{FileContent, LibraryStorage, LocalLibraryStorage},
     library::{Library, LibraryError, scope::EVERYTHING, user::validate_user},
     routines::{extractor::sync_library, index_sync::IndexSync},
+    themes,
     watcher::LibraryWatcher,
 };
 
@@ -31,6 +33,7 @@ pub struct BookLibrary {
     pub(super) storage: LocalLibraryStorage,
     pub(super) metadata: Arc<RwLock<Vec<BookMetadata>>>,
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
+    // Also held for the users' themes, whose renames change the config too.
     pub(super) config_lock: Mutex<()>,
     // Uploads, new folders and deletes check what's on disk, then change it.
     pub(super) files_lock: Mutex<()>,
@@ -166,6 +169,43 @@ impl Library for BookLibrary {
         let patch = req.patch.unwrap_or_default();
         let _guard = self.config_lock.lock().await;
         Ok(self.storage.update_config(&req.user, &patch).await?)
+    }
+
+    async fn list_themes(&self, req: ListThemesRequest) -> Result<ListThemesResponse, LibraryError> {
+        validate_user(&req.user)?;
+        themes::list_themes(&self.storage, &req.user).await
+    }
+
+    async fn set_theme(&self, req: SetThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        validate_user(&req.user)?;
+        let _guard = self.config_lock.lock().await;
+        themes::set_theme(&self.storage, &req.user, req.spec.unwrap_or_default()).await?;
+        themes::list_themes(&self.storage, &req.user).await
+    }
+
+    async fn delete_theme(&self, req: DeleteThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        validate_user(&req.user)?;
+        let _guard = self.config_lock.lock().await;
+        themes::delete_theme(&self.storage, &req.user, &req.name).await?;
+        themes::list_themes(&self.storage, &req.user).await
+    }
+
+    async fn rename_theme(&self, req: RenameThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        validate_user(&req.user)?;
+        let _guard = self.config_lock.lock().await;
+        let (from, to) = themes::rename_theme(&self.storage, &req.user, &req.from, &req.to).await?;
+        let chosen = self.storage.read_config(&req.user).await?.reader.and_then(|r| r.theme);
+        if from != to && chosen.as_deref() == Some(from.as_str()) {
+            let patch = Config {
+                reader: Some(ReaderConfig {
+                    theme: Some(to),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            self.storage.update_config(&req.user, &patch).await?;
+        }
+        themes::list_themes(&self.storage, &req.user).await
     }
 
     async fn export_user_data(&self, req: ExportUserDataRequest) -> Result<UserData, LibraryError> {

@@ -14,7 +14,7 @@ import { TocPanel } from "@/components/TocPanel"
 import { Button } from "@/components/ui/button"
 import { GetStateResponseSchema } from "@/gen/apipb/state_pb"
 import { STATE_KEY } from "@/lib/queryKeys"
-import { useAppearance } from "@/lib/useAppearance"
+import { useAppearance, useReaderLook } from "@/lib/useAppearance"
 import { Settings, SETTINGS_PATH } from "@/screens/Settings"
 
 /** Opens the last book read, or nudges towards the library when there isn't one. */
@@ -32,6 +32,7 @@ export function Home() {
   const navigate = useNavigate()
   const settingsOpen = useMatch(`${SETTINGS_PATH}/*`) !== null
   const appearance = useAppearance()
+  const readerLook = useReaderLook()
 
   const state = useQuery({
     queryKey: STATE_KEY,
@@ -136,6 +137,7 @@ export function Home() {
               id={bookId}
               paused={drawer !== null || settingsOpen}
               appearance={appearance.reader}
+              look={readerLook}
               onOpen={(book) => {
                 setTitle(book.title)
                 setToc(book.toc)
@@ -161,7 +163,7 @@ export function Home() {
         </SlideDrawer>
       </div>
       <Routes>
-        <Route path={`${SETTINGS_PATH}/:section?`} element={<Settings />} />
+        <Route path={`${SETTINGS_PATH}/:section?/:page?`} element={<Settings />} />
         {/* Every other path is the reader, which is always rendered above. */}
         <Route path="*" element={null} />
       </Routes>

@@ -36,6 +36,7 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 - **A cached book opens when the server can't be reached,** even if the user lost access to it in the meantime: the access check (a HEAD before using the cached copy) only refuses on the server's answer.
 - Passwords in `/data/data.json` are plain text (by choice): anyone who can read that folder or its backups sees them. Don't reuse a password that matters.
 - **Login tokens are stored in plain text on the devices:** in the browser's `localStorage` (readable by any script running in the page) and in the app's private data (`app_data.json`). Anyone with a copy can use the session until it expires or the password is changed. An OS keyring for the app is a possible follow-up.
+- **Session device names are self-reported:** a client can send any name at login, so the *Signed-in devices* list shows what each device says it is, not a verified identity. A session from before device names shows as *Unknown device*.
 - **The login lockout is per username:** someone guessing a user's password keeps that user locked out a minute at a time.
 - **Sign-up reveals which usernames exist:** asking for a taken name is an instant 409, to anyone.
 - **Strangers can fill the sign-up queue:** at most 20 requests wait at once, so anyone who can reach the server can block new sign-ups until an admin denies theirs. Approved users get the password the requester chose, stored in plain text like every other.
@@ -48,6 +49,8 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 - **User data export and import:** only books in the index are exported (a removed book's kept progress isn't). The export holds settings this build knows (unknown `config.json` keys aren't carried). Importing replaces progress without comparing which is newer, since progress files have no timestamp. An Android import uses the same `<input type="file">` as uploads, not yet tried on the phone.
 - The server binary's library path (`/books`), data path (`/data`) and bind address (`0.0.0.0:8080`) are fixed: it has no flags or environment variables for them. `shelf_server::Config` takes them, but only the `demo` crate's `server` function sets other values.
 - Reader zoom doesn't scale images: they get the inverse zoom so foliate's px height cap still fits them to the page. An image sized in px in the book's CSS stays that size at any zoom.
+- **Reader themes on books designed dark:** a theme recolours the page as published, so a book with light text on a dark background comes out light in Dark, AMOLED and Night.
+- **Theme files are read on every list:** `list_themes` reads every file in the user's `themes/` folder (128 at most), and each change reads them again. Fine locally; on S3 it's a GET per theme.
 - The interface scale doesn't move breakpoints: media queries (`md:`, Settings' `48rem`) use the browser's default font size, not the root's. At 150% a narrow desktop window keeps the wide layout with bigger controls. Bits sized in px (the 3px position lines, borders) don't scale.
 
 ## Platform limits

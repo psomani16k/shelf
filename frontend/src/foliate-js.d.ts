@@ -25,6 +25,8 @@ declare module "foliate-js/view.js" {
   export interface Renderer extends HTMLElement {
     /** CSS added to every section's document. */
     setStyles(css: string): void
+    /** The section documents loaded now (one, for reflowable books). */
+    getContents(): { doc: Document; index: number }[]
     /** Scroll offset, viewport size and content size along the reading axis, in px. */
     readonly start: number
     readonly size: number

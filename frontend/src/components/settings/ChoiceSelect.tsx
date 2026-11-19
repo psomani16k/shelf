@@ -6,8 +6,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-/** A `Select` of labelled numbers. `label` is its accessible name. */
-export function ChoiceSelect<T extends number>({
+/** A `Select` of labelled values. `label` is its accessible name. */
+export function ChoiceSelect<T extends string | number>({
   choices,
   value,
   disabled,

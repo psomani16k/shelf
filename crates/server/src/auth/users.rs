@@ -231,7 +231,7 @@ mod tests {
     async fn an_admin_can_promote_ban_and_unban_a_reader() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let token = auth.login("kid", "pancakes", now()).await.unwrap().token;
+        let token = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
 
         auth.set_role(&admin(), &set("kid", Role::Librarian), now()).await.unwrap();
         assert_eq!(role_of(&auth, "kid").await, Role::Librarian);
@@ -242,13 +242,13 @@ mod tests {
             auth.authenticate(&token, now()).await,
             StatusCode::UNAUTHORIZED
         ));
-        let banned = auth.login("kid", "pancakes", now()).await;
+        let banned = auth.login("kid", "pancakes", "", now()).await;
         assert!(is_status(banned, StatusCode::FORBIDDEN));
 
         auth.set_role(&admin(), &set("kid", Role::Reader), now()).await.unwrap();
         // The old session stays gone.
         assert!(auth.authenticate(&token, now()).await.is_err());
-        assert!(auth.login("kid", "pancakes", now()).await.is_ok());
+        assert!(auth.login("kid", "pancakes", "", now()).await.is_ok());
     }
 
     #[tokio::test]

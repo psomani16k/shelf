@@ -33,9 +33,9 @@ describe("snapZoom", () => {
 
 describe("readerCss zoom", () => {
   it("zooms the body and undoes it on images", () => {
-    const css = readerCss("light", { zoom: 1.25 })
+    const css = readerCss({ zoom: 1.25 })
     expect(css).toContain("body { zoom: 1.25 !important; }")
     expect(css).toContain("svg:not(svg svg) { zoom: 0.8 !important; }")
-    expect(readerCss("light")).not.toContain("zoom")
+    expect(readerCss()).not.toContain("zoom")
   })
 })

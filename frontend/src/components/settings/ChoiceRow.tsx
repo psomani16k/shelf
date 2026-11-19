@@ -2,7 +2,7 @@ import { ActionRow } from "@/components/settings/ActionRow"
 import { ChoiceSelect } from "@/components/settings/ChoiceSelect"
 
 /** A setting's label and description beside a `Select` of its choices. */
-export function ChoiceRow({
+export function ChoiceRow<T extends string | number>({
   label,
   description,
   choices,
@@ -12,10 +12,10 @@ export function ChoiceRow({
 }: {
   label: string
   description: string
-  choices: { value: number; label: string }[]
-  value: number
+  choices: { value: T; label: string }[]
+  value: T
   disabled?: boolean
-  onChange: (value: number) => void
+  onChange: (value: T) => void
 }) {
   return (
     <ActionRow title={label} description={description} className={disabled ? "opacity-60" : undefined}>

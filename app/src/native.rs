@@ -84,6 +84,31 @@ pub async fn pick_folder(app: AppHandle) -> Result<String, CommandError> {
     }
 }
 
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct Named {
+    name: String,
+}
+
+/// What this device calls itself, sent at login so the user can tell their sessions apart:
+/// Android's device name ("OnePlus 11 5G"), elsewhere `Shelf on <hostname>`. "" if unknown.
+pub async fn device_name(app: &AppHandle) -> String {
+    #[cfg(target_os = "android")]
+    let name = call::<Named>(app, "deviceName").await.map(|n| n.name);
+    #[cfg(not(target_os = "android"))]
+    let name = {
+        let _ = app;
+        tokio::fs::read_to_string("/proc/sys/kernel/hostname")
+            .await
+            .map(|host| format!("Shelf on {}", host.trim()))
+    };
+    // Only the error: the name itself is never logged.
+    name.unwrap_or_else(|e| {
+        tracing::warn!(error = ?e, "couldn't read the device name");
+        String::new()
+    })
+}
+
 #[tauri::command]
 pub async fn system_insets(app: AppHandle) -> Result<Insets, CommandError> {
     #[cfg(target_os = "android")]

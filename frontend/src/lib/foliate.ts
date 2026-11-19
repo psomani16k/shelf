@@ -2,16 +2,19 @@ import type { Renderer, View } from "foliate-js/view.js"
 import { type Appearance, type ReaderLayout, readerCss } from "@/lib/appearance"
 import type { Direction } from "@/lib/gestures"
 
-type Look = Pick<Appearance["reader"], "flow" | "scheme"> & { zoom: number }
+type Look = Pick<Appearance["reader"], "flow"> & { zoom: number }
 type Placement = Pick<
   ReaderLayout,
   "marginLeft" | "marginRight" | "gapPercent" | "pageMarginRight"
 >
 
-/** Lays the open book out for the flow, theme, zoom and margins. Safe to call again unchanged. */
+/**
+ * Lays the open book out for the flow, zoom and margins (the theme is `applyLook`). Safe to call
+ * again unchanged.
+ */
 export function applyAppearance(
   view: View,
-  { flow, scheme, zoom }: Look,
+  { flow, zoom }: Look,
   { marginLeft, marginRight, gapPercent, pageMarginRight }: Placement,
 ) {
   const renderer = view.renderer
@@ -27,7 +30,7 @@ export function applyAppearance(
   set("gap", `${gapPercent}%`)
   view.style.marginLeft = `${marginLeft}px`
   view.style.marginRight = `${marginRight}px`
-  const css = readerCss(scheme, { pageMarginRight, zoom })
+  const css = readerCss({ pageMarginRight, zoom })
   if (renderer.dataset.css !== css) {
     renderer.dataset.css = css
     renderer.setStyles(css)

@@ -4,7 +4,6 @@ import {
   ConfigSchema,
   ReaderFlow_Value,
   ReaderMargin_Value,
-  ReaderTheme_Value,
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
 import {
@@ -19,16 +18,13 @@ describe("resolveAppearance", () => {
   it("defaults to the system theme and scrolling", () => {
     expect(resolveAppearance(undefined, "dark")).toMatchObject({
       ui: "dark",
-      reader: { flow: "scrolled", scheme: "dark" },
+      reader: { flow: "scrolled" },
     })
   })
 
-  it("lets the reader follow the UI or pick its own theme", () => {
-    const config = (reader: ReaderTheme_Value) =>
-      create(ConfigSchema, { ui: { theme: UiTheme_Value.LIGHT }, reader: { theme: reader } })
-
-    expect(resolveAppearance(config(ReaderTheme_Value.MATCH_UI), "dark").reader.scheme).toBe("light")
-    expect(resolveAppearance(config(ReaderTheme_Value.DARK), "dark").reader.scheme).toBe("dark")
+  it("lets the user pick the interface theme", () => {
+    const config = create(ConfigSchema, { ui: { theme: UiTheme_Value.LIGHT } })
+    expect(resolveAppearance(config, "dark").ui).toBe("light")
   })
 
   it("reads the flow", () => {
@@ -117,6 +113,6 @@ describe("readerLayout", () => {
     // The view's edge, and its scrollbar, end up past the wrapper; the text still ends at 16px.
     expect(layout.marginRight).toBe(-SCROLLBAR_ALLOWANCE)
     expect(layout.pageMarginRight).toBe(16 + SCROLLBAR_ALLOWANCE)
-    expect(readerCss("light", { pageMarginRight: 40 })).toContain("margin-right: 40px")
+    expect(readerCss({ pageMarginRight: 40 })).toContain("margin-right: 40px")
   })
 })

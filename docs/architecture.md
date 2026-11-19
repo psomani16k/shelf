@@ -30,7 +30,8 @@ Everything the UI can do to a library is one method on `shelf_core::library::Lib
 | `get_progress` / `set_progress` | progress as an EPUB CFI string |
 | `get_state` / `set_state` | the user's last book opened |
 | `get_config` / `set_config` | the user's own settings (`GetConfigRequest` / `SetConfigRequest`, each with a `user` filled in at the boundary); `set_config` merges a partial `patch` and returns the user's whole config |
-| `export_user_data(ExportUserDataRequest)` | `UserData`: the user's progress, last book and settings, no username |
+| `list_themes` / `set_theme` / `delete_theme` / `rename_theme` | the user's reader themes: the built-ins with the user's own over them (`crates/core/src/themes/`); each change returns the new list, and a rename also moves the config's choice |
+| `export_user_data(ExportUserDataRequest)` | `UserData`: the user's progress, last book, settings and themes, no username |
 | `import_user_data(ImportUserDataRequest)` | `ImportUserDataResponse`: writes that data as the request's user, skipping books it doesn't have |
 | `rebuild_index()` | `RebuildIndexResponse`: re-hashes every book (ignoring the copies' stamps), reloads the index, returns counts |
 | `clean_up_progress()` | `CleanUpProgressResponse`: deletes the `.shelf/books/<id>/` folders of books no file has any more, progress included |

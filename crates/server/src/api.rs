@@ -21,7 +21,8 @@ use shelf_proto::{
         ImportUserDataRequest, ImportUserDataResponse, UserData, GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexRequest, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        UploadEbookRequest, UploadEbookResponse,
+        UploadEbookRequest, UploadEbookResponse, DeleteThemeRequest, ListThemesRequest,
+        ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
     config::Config,
 };
@@ -70,13 +71,19 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/state/set", post(set_state))
         .route("/config/get", post(get_config))
         .route("/config/set", post(set_config))
+        .route("/themes/list", post(list_themes))
+        .route("/themes/set", post(set_theme))
+        .route("/themes/delete", post(delete_theme))
+        .route("/themes/rename", post(rename_theme))
         .route("/user-data/export", post(export_user_data))
         .route("/user-data/import", post(import_user_data))
         .route("/books/{id}/cover", get(cover))
         .route("/books/{id}/file", get(file))
         .route("/auth/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
-        .route("/auth/password", post(auth::change_password));
+        .route("/auth/password", post(auth::change_password))
+        .route("/auth/sessions/list", post(auth::list_sessions))
+        .route("/auth/sessions/end", post(auth::end_session));
     let contributor = Router::new()
         .route("/directories/create", post(create_directory))
         .route(
@@ -154,6 +161,10 @@ for_user!(
     SetStateRequest,
     GetConfigRequest,
     SetConfigRequest,
+    ListThemesRequest,
+    SetThemeRequest,
+    DeleteThemeRequest,
+    RenameThemeRequest,
     ExportUserDataRequest,
     ImportUserDataRequest
 );
@@ -216,6 +227,34 @@ async fn set_config(
     Own(_, req): Own<SetConfigRequest>,
 ) -> Result<Json<Config>, ApiErrorResponse> {
     Ok(Json(library.set_config(req).await?))
+}
+
+async fn list_themes(
+    State(library): State<Lib>,
+    Own(_, req): Own<ListThemesRequest>,
+) -> Result<Json<ListThemesResponse>, ApiErrorResponse> {
+    Ok(Json(library.list_themes(req).await?))
+}
+
+async fn set_theme(
+    State(library): State<Lib>,
+    Own(_, req): Own<SetThemeRequest>,
+) -> Result<Json<ListThemesResponse>, ApiErrorResponse> {
+    Ok(Json(library.set_theme(req).await?))
+}
+
+async fn delete_theme(
+    State(library): State<Lib>,
+    Own(_, req): Own<DeleteThemeRequest>,
+) -> Result<Json<ListThemesResponse>, ApiErrorResponse> {
+    Ok(Json(library.delete_theme(req).await?))
+}
+
+async fn rename_theme(
+    State(library): State<Lib>,
+    Own(_, req): Own<RenameThemeRequest>,
+) -> Result<Json<ListThemesResponse>, ApiErrorResponse> {
+    Ok(Json(library.rename_theme(req).await?))
 }
 
 async fn export_user_data(
@@ -393,6 +432,8 @@ mod tests {
             ("GET", "/books/abc/file", None),
             ("POST", "/books/list", Some("made-up")),
             ("GET", "/auth/me", None),
+            ("POST", "/auth/sessions/list", None),
+            ("POST", "/auth/sessions/end", None),
         ];
         for (method, path, token) in cases {
             let (status, _) = server.call(method, path, token, "{}").await;

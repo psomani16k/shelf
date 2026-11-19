@@ -7,11 +7,13 @@ import { CenteredMessage } from "@/components/CenteredMessage"
 import { ProgressBar } from "@/components/ProgressBar"
 import { ReaderQuickSettings } from "@/components/ReaderQuickSettings"
 import { Button } from "@/components/ui/button"
-import { type Appearance, readerBackground, readerLayout, type Scheme } from "@/lib/appearance"
+import { type Appearance, readerLayout, type Scheme } from "@/lib/appearance"
 import { applyAppearance, sectionFraction, turn } from "@/lib/foliate"
 import { type Direction, swipeDirection, wheelTurner } from "@/lib/gestures"
 import { progressSaver } from "@/lib/progressSaver"
+import { usePinchZoom } from "@/lib/pinchZoom"
 import { openBookKey } from "@/lib/queryKeys"
+import { applyLook, type ThemeLook } from "@/lib/readerTheme"
 import { useReaderZoom } from "@/lib/readerZoom"
 import { useUiScale } from "@/lib/uiScale"
 import { useLatest } from "@/lib/useLatest"
@@ -25,6 +27,8 @@ type Props = {
   /** While true (e.g. a drawer is open), keys, swipes and the wheel are ignored. */
   paused: boolean
   appearance: Appearance["reader"]
+  /** The reader theme, applied to each page without laying the book out again. */
+  look: ThemeLook
   onOpen: (book: { title: string; toc: TocItem[] }) => void
   /** The `id` of the TOC entry the reader is in, as pages turn. */
   onLocation: (tocId: number | undefined) => void
@@ -71,6 +75,7 @@ export function Reader({
   id,
   paused,
   appearance,
+  look,
   onOpen,
   onLocation,
   onOpenLibrary,
@@ -88,20 +93,25 @@ export function Reader({
   const [bookFraction, setBookFraction] = useState(0)
   const [chapter, setChapter] = useState("")
   const [zoom, setZoom] = useReaderZoom()
+  const [quickSettings, setQuickSettings] = useState(false)
   const uiScale = useUiScale()
   const bookZoom = Math.round(uiScale * zoom * 100) / 100
   const coarse = useMediaQuery("(pointer: coarse)")
 
-  const { flow, scheme } = appearance
+  const { flow } = appearance
   const unit = flow === "scrolled" ? "section" : "page"
   const sectionBar = flow === "scrolled"
   const floating = !coarse
   const inset = floating ? Math.round(BUTTON_INSET * uiScale) : 0
   const layout = readerLayout(size, appearance, { clipScrollbar: sectionBar, inset })
 
+  usePinchZoom(!paused && !quickSettings)
+
   const latest = useLatest({
-    paused,
+    // Taps and keys behind the *Aa* drawer aren't reading.
+    paused: paused || quickSettings,
     appearance,
+    look,
     bookZoom,
     sectionBar,
     inset,
@@ -157,7 +167,7 @@ export function Reader({
     const onKey = (e: KeyboardEvent) => {
       if (!view || latest.current.paused) return
       const target = e.target as Element | null
-      // An open dropdown's list (the *Aa* popup's) takes the arrows itself.
+      // An open dropdown's list takes the arrows itself.
       if (target?.closest?.('[role="listbox"]')) return
       // Space or an arrow on a focused button isn't reading.
       const control = target?.closest?.("button, input, select, textarea")
@@ -240,7 +250,10 @@ export function Reader({
         setChapter(e.detail.tocItem?.label ?? "")
         syncSectionBar()
       })
-      view.addEventListener("load", (e) => listen(e.detail.doc))
+      view.addEventListener("load", (e) => {
+        listen(e.detail.doc)
+        applyLook(e.detail.doc, latest.current.look)
+      })
       container.append(view)
 
       await view.open(data.file)
@@ -253,7 +266,7 @@ export function Reader({
         clipScrollbar: sectionBar,
         inset,
       })
-      applyAppearance(view, { ...appearance, zoom: bookZoom }, layout)
+      applyAppearance(view, { flow: appearance.flow, zoom: bookZoom }, layout)
 
       const title = view.book?.metadata?.title
       latest.current.onOpen({
@@ -293,12 +306,18 @@ export function Reader({
     if (!view || size.width === 0) return
     applyAppearance(
       view,
-      { flow, scheme, zoom: bookZoom },
+      { flow, zoom: bookZoom },
       { marginLeft, marginRight, gapPercent, pageMarginRight },
     )
     syncSectionBar()
     // syncSectionBar only reads refs.
-  }, [flow, scheme, bookZoom, marginLeft, marginRight, gapPercent, pageMarginRight, size.width])
+  }, [flow, bookZoom, marginLeft, marginRight, gapPercent, pageMarginRight, size.width])
+
+  // Pages loaded later get the look from the `load` listener.
+  useEffect(() => {
+    const view = containerRef.current?.querySelector("foliate-view")
+    for (const { doc } of view?.renderer?.getContents() ?? []) applyLook(doc, look)
+  }, [look])
 
   const go = (side: Direction) => viewRef.current && void turn(viewRef.current, side, unit)
   // Turning from the bar keeps it up, for turning again; the floating buttons are reading.
@@ -319,13 +338,16 @@ export function Reader({
   }
 
   return (
-    <div className="relative h-full" style={{ background: readerBackground(scheme) }}>
+    <div className="relative h-full" style={{ background: look.page }}>
       <div
         ref={containerRef}
         className="size-full overflow-hidden"
         style={{
           paddingTop: layout.paddingTop + (sectionBar ? LINE : 0),
           paddingBottom: layout.paddingBottom + LINE,
+          // The book's pages are light and transparent; a different scheme around the iframe
+          // would make browsers paint it opaque.
+          colorScheme: "light",
         }}
       />
       {book.isPending && (
@@ -336,14 +358,14 @@ export function Reader({
           <PageButton
             side="left"
             unit={unit}
-            scheme={scheme}
+            scheme={look.scheme}
             onClick={() => goAndHide("left")}
             className="absolute top-1/2 left-4 -translate-y-1/2"
           />
           <PageButton
             side="right"
             unit={unit}
-            scheme={scheme}
+            scheme={look.scheme}
             onClick={() => goAndHide("right")}
             className="absolute top-1/2 right-4 -translate-y-1/2"
           />
@@ -371,9 +393,10 @@ export function Reader({
             {Math.round(bookFraction * 100)}%
           </p>
           <ReaderQuickSettings
+            open={quickSettings}
+            onOpenChange={setQuickSettings}
             zoom={zoom}
             onZoom={setZoom}
-            bars={bars}
             onOpenSettings={onOpenSettings}
           />
           <BarButton side="right" unit={unit} onClick={() => go("right")} />

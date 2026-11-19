@@ -330,6 +330,29 @@ impl LibraryStorage for LocalLibraryStorage {
         .await?
     }
 
+    async fn list_shelf_files(&self, dir: &str) -> Result<Vec<String>> {
+        let Some(mut entries) = found(tokio::fs::read_dir(self.shelf_file_path(dir)).await)? else {
+            return Ok(Vec::new());
+        };
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_file() {
+                continue;
+            }
+            if let Ok(name) = entry.file_name().into_string()
+                && !name.starts_with('.')
+            {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
+    async fn delete_shelf_file(&self, name: &str) -> Result<()> {
+        found(tokio::fs::remove_file(self.shelf_file_path(name)).await)?;
+        Ok(())
+    }
+
     async fn clean_up_temp_files(&self) -> Result<()> {
         let dir = self.root.join(".shelf");
         let Some(mut entries) = found(tokio::fs::read_dir(&dir).await)? else {
@@ -467,7 +490,7 @@ mod tests {
         let patch = |json| serde_json::from_value::<Config>(json).unwrap();
 
         storage
-            .update_config("a", &patch(json!({"reader": {"flow": "PAGINATED", "theme": "DARK"}})))
+            .update_config("a", &patch(json!({"reader": {"flow": "PAGINATED", "theme": "night"}})))
             .await
             .unwrap();
         // SCROLLED is the zero value: `optional` is what lets it through.
@@ -478,7 +501,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(&config).unwrap(),
-            json!({"reader": {"flow": "SCROLLED", "theme": "DARK"}})
+            json!({"reader": {"flow": "SCROLLED", "theme": "night"}})
         );
         assert!(storage.config_path("a").exists());
         assert_eq!(storage.read_config("b").await.unwrap(), Config::default());

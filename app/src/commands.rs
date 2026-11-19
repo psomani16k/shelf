@@ -15,7 +15,8 @@ use shelf_proto::{
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        LoginRequest, UploadEbookRequest, UploadEbookResponse, User, ExportUserDataRequest,
+        LoginRequest, UploadEbookRequest, UploadEbookResponse, EndSessionRequest, ListSessionsResponse,
+        DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest, User, ExportUserDataRequest,
         ImportUserDataRequest, ImportUserDataResponse, UserData, role::Value as Role,
     },
     config::Config,
@@ -28,6 +29,7 @@ use crate::{
     app_data::validate_name,
     error::CommandError,
     logging::save_with_picker,
+    native,
     libsrc::{
         AnyLibrary, LibrarySource, app_library::AppLibrary, local::LocalLibraryBuilder,
         remote::{RemoteLibrary, RemoteLibraryBuilder},
@@ -239,7 +241,7 @@ fn remote(library: &AnyLibrary) -> Result<&RemoteLibrary> {
 /// Signs in to the open remote library and keeps the key, so this device stays signed in. A local
 /// library takes the username alone, with no password, and reads as that user from now on.
 #[tauri::command]
-pub async fn login(app: AppHandle, state: State<'_, AppState>, req: LoginRequest) -> Result<User> {
+pub async fn login(app: AppHandle, state: State<'_, AppState>, mut req: LoginRequest) -> Result<User> {
     let library = state.library().await?;
     if let Some(local) = library.local() {
         local.set_user(Some(req.username.clone())).await?;
@@ -252,6 +254,7 @@ pub async fn login(app: AppHandle, state: State<'_, AppState>, req: LoginRequest
             role: Role::Owner as i32,
         });
     }
+    req.device = native::device_name(&app).await;
     let res = remote(&library)?.login(&req).await?;
     let mut data = state.data.lock().await;
     data.set_remote_token(&library.get_name(), Some(res.token))?;
@@ -298,6 +301,22 @@ pub async fn me(state: State<'_, AppState>) -> Result<Option<User>> {
         Some(remote) => Ok(Some(remote.me().await?)),
         None => Ok(None),
     }
+}
+
+/// This user's sessions on the open remote library, to see and sign out devices.
+#[tauri::command]
+pub async fn list_sessions(state: State<'_, AppState>) -> Result<ListSessionsResponse> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.list_sessions().await?)
+}
+
+#[tauri::command]
+pub async fn end_session(
+    state: State<'_, AppState>,
+    req: EndSessionRequest,
+) -> Result<ListSessionsResponse> {
+    let library = state.library().await?;
+    Ok(remote(&library)?.end_session(&req).await?)
 }
 
 #[tauri::command]
@@ -417,6 +436,26 @@ pub async fn get_config(state: State<'_, AppState>, req: GetConfigRequest) -> Re
 #[tauri::command]
 pub async fn set_config(state: State<'_, AppState>, req: SetConfigRequest) -> Result<Config> {
     Ok(state.library().await?.set_config(req).await?)
+}
+
+#[tauri::command]
+pub async fn list_themes(state: State<'_, AppState>, req: ListThemesRequest) -> Result<ListThemesResponse> {
+    Ok(state.library().await?.list_themes(req).await?)
+}
+
+#[tauri::command]
+pub async fn set_theme(state: State<'_, AppState>, req: SetThemeRequest) -> Result<ListThemesResponse> {
+    Ok(state.library().await?.set_theme(req).await?)
+}
+
+#[tauri::command]
+pub async fn delete_theme(state: State<'_, AppState>, req: DeleteThemeRequest) -> Result<ListThemesResponse> {
+    Ok(state.library().await?.delete_theme(req).await?)
+}
+
+#[tauri::command]
+pub async fn rename_theme(state: State<'_, AppState>, req: RenameThemeRequest) -> Result<ListThemesResponse> {
+    Ok(state.library().await?.rename_theme(req).await?)
 }
 
 /// The signed-in user's data (a local library's chosen reader), without their name.

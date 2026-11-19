@@ -13,8 +13,8 @@ import {
   type Config,
   type ConfigSchema,
   ReaderFlow_Value,
+  ReaderImages_Value,
   ReaderMargin_Value,
-  ReaderTheme_Value,
   UiTheme_Value,
 } from "@/gen/configpb/config_pb"
 import { IS_TAURI } from "@/lib/platform"
@@ -24,6 +24,9 @@ import { AdminSection } from "./AdminSection"
 import { InterfaceSection } from "./InterfaceSection"
 import { LibrarySection } from "./LibrarySection"
 import { LogsSection } from "./LogsSection"
+import { ThemeBuilder } from "./ThemeBuilder"
+import { ThemeRow } from "./ThemeSelect"
+import { ThemesPage, ThemesRow } from "./ThemesPage"
 
 export type Setting = {
   id: string
@@ -37,8 +40,13 @@ export type Setting = {
   disabled?: (config: Config) => boolean
 }
 
+export type ConfigPatch = (patch: MessageInitShape<typeof ConfigSchema>) => void
+
+/** A row whose choices aren't fixed, such as the reader theme's. */
+export type CustomSetting = ComponentType<{ save: ConfigPatch }>
+
 /** A nested message of `Config`, shown as its own card. */
-export type Group = { label?: string; settings: Setting[] }
+export type Group = { label?: string; settings: (Setting | CustomSetting)[] }
 
 /**
  * `groups` are `Config` fields, in the same nesting. `content` is a component for settings that
@@ -46,12 +54,21 @@ export type Group = { label?: string; settings: Setting[] }
  * after the groups. `appOnly` sections aren't shown on the web, `adminOnly` ones only to a
  * remote library's admins and owners.
  */
+/** A screen inside a section, at `/settings/<section>/<page>`, opened from the section. */
+export type Page = {
+  title: string
+  component: ComponentType
+  /** The page it's opened from; unset is the section itself. */
+  parent?: string
+}
+
 export type Section = {
   slug: "reader" | "ui" | "library" | "account" | "admin" | "developer"
   label: string
   icon: LucideIcon
   appOnly?: true
   adminOnly?: true
+  pages?: Record<string, Page>
 } & ({ groups: Group[]; content?: ComponentType } | { content: ComponentType; groups?: never })
 
 /** In size order; the enum's numbers put MEDIUM first only because it's the default. */
@@ -65,7 +82,7 @@ const MARGIN_CHOICES = [
 const scrolled = (c: Config) =>
   (c.reader?.flow ?? ReaderFlow_Value.SCROLLED) === ReaderFlow_Value.SCROLLED
 
-/** Also in the reader's *Aa* popup. */
+/** Also in the reader's *Aa* drawer. */
 export const READER_FLOW: Setting = {
   id: "reader.flow",
   label: "Layout",
@@ -78,18 +95,17 @@ export const READER_FLOW: Setting = {
   patch: (flow) => ({ reader: { flow } }),
 }
 
-/** Also in the reader's *Aa* popup. */
-export const READER_THEME: Setting = {
-  id: "reader.theme",
-  label: "Theme",
-  description: "Colours of the book's pages.",
+/** Also in the reader's *Aa* drawer. */
+export const READER_IMAGES: Setting = {
+  id: "reader.images",
+  label: "Images",
+  description: "Whether pictures keep their own colours in a theme, or change like the page.",
   choices: [
-    { value: ReaderTheme_Value.MATCH_UI, label: "Match interface" },
-    { value: ReaderTheme_Value.LIGHT, label: "Light" },
-    { value: ReaderTheme_Value.DARK, label: "Dark" },
+    { value: ReaderImages_Value.KEEP, label: "Keep colours" },
+    { value: ReaderImages_Value.LIKE_PAGE, label: "Like the page" },
   ],
-  read: (c) => c.reader?.theme,
-  patch: (theme) => ({ reader: { theme } }),
+  read: (c) => c.reader?.images,
+  patch: (images) => ({ reader: { images } }),
 }
 
 const SECTIONS: Section[] = [
@@ -97,8 +113,12 @@ const SECTIONS: Section[] = [
     slug: "reader",
     label: "Reader",
     icon: BookOpen,
+    pages: {
+      themes: { title: "Themes", component: ThemesPage },
+      "new-theme": { title: "New theme", component: ThemeBuilder, parent: "themes" },
+    },
     groups: [
-      { settings: [READER_FLOW, READER_THEME] },
+      { settings: [READER_FLOW, ThemeRow, ThemesRow, READER_IMAGES] },
       {
         label: "Margins",
         settings: [

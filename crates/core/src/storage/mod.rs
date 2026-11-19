@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use shelf_proto::{
     bookkeeping::{BookMetadata, BookProgress},
-    config::Config,
+    config::{Config, ReaderThemeSpec},
     state::State,
 };
 use shelf_utility::timeutil::Time;
@@ -30,6 +30,11 @@ fn config_file(user: &str) -> String {
 /// Each user's last book, under `.shelf/`; `user` must have passed `validate_user`.
 fn state_file(user: &str) -> String {
     format!("users/{user}/state.json")
+}
+
+/// Each user's own reader themes, under `.shelf/`; `user` must have passed `validate_user`.
+fn themes_dir(user: &str) -> String {
+    format!("users/{user}/themes")
 }
 
 pub fn is_epub(path: &Path) -> bool {
@@ -129,6 +134,13 @@ pub trait LibraryStorage: Sync {
     /// Replaces a file under `.shelf/` all at once: readers never see half of it.
     fn write_shelf_file(&self, name: &str, bytes: &[u8]) -> impl Future<Output = Result<()>> + Send;
 
+    /// The names of the files directly in `.shelf/<dir>`, skipping hidden ones; empty if `dir`
+    /// is missing.
+    fn list_shelf_files(&self, dir: &str) -> impl Future<Output = Result<Vec<String>>> + Send;
+
+    /// Deletes a file under `.shelf/`; a missing one is fine.
+    fn delete_shelf_file(&self, name: &str) -> impl Future<Output = Result<()>> + Send;
+
     /// Deletes temp files that a crash mid-write left behind.
     fn clean_up_temp_files(&self) -> impl Future<Output = Result<()>> + Send;
 
@@ -150,6 +162,55 @@ pub trait LibraryStorage: Sync {
     fn read_config(&self, user: &str) -> impl Future<Output = Result<Config>> + Send {
         let file = config_file(user);
         async move { read_or_default(self, &file, "config").await }
+    }
+
+    /// The user's theme files as (file name, spec), sorted by file name. Ones that can't be read
+    /// or parsed are skipped with a warning.
+    fn read_themes(
+        &self,
+        user: &str,
+    ) -> impl Future<Output = Result<Vec<(String, ReaderThemeSpec)>>> + Send {
+        let dir = themes_dir(user);
+        async move {
+            let mut names = self.list_shelf_files(&dir).await?;
+            names.retain(|name| name.ends_with(".json"));
+            names.sort();
+            let mut themes: Vec<(String, ReaderThemeSpec)> = Vec::new();
+            for name in names {
+                let file = format!("{dir}/{name}");
+                let json = match self.read_shelf_file(&file).await {
+                    Ok(Some(json)) => json,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        warn!(%file, error = %e, "skipped unreadable theme");
+                        continue;
+                    }
+                };
+                match serde_json::from_str(&json) {
+                    Ok(spec) => themes.push((name, spec)),
+                    Err(e) => warn!(%file, error = %e, "skipped unparseable theme"),
+                }
+            }
+            Ok(themes)
+        }
+    }
+
+    /// `file_name` is a theme id plus `.json`.
+    fn write_theme(
+        &self,
+        user: &str,
+        file_name: &str,
+        spec: &ReaderThemeSpec,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let file = format!("{}/{file_name}", themes_dir(user));
+        let json = serde_json::to_string_pretty(spec);
+        async move { self.write_shelf_file(&file, json?.as_bytes()).await }
+    }
+
+    /// `file_name` is one `read_themes` returned.
+    fn delete_theme(&self, user: &str, file_name: &str) -> impl Future<Output = Result<()>> + Send {
+        let file = format!("{}/{file_name}", themes_dir(user));
+        async move { self.delete_shelf_file(&file).await }
     }
 
     /// Merges the fields set in `patch` into the user's stored config and returns the full

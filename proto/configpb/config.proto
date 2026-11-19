@@ -12,8 +12,11 @@ message Config {
 
 message ReaderConfig {
   optional ReaderFlow.Value flow = 1;
-  optional ReaderTheme.Value theme = 2;
+  reserved 2;
   optional ReaderMargins margins = 3;
+  // A theme's id (apipb.ThemeEntry). Unset, or one the list doesn't have, is its default.
+  optional string theme = 4;
+  optional ReaderImages.Value images = 5;
 }
 
 message ReaderFlow {
@@ -23,11 +26,13 @@ message ReaderFlow {
   }
 }
 
-message ReaderTheme {
+// What the reader theme does to the book's images.
+message ReaderImages {
   enum Value {
-    MATCH_UI = 0;
-    LIGHT = 1;
-    DARK = 2;
+    // Images keep their own colours: the layers marked `skip_images` aren't applied to them.
+    KEEP = 0;
+    // Images get every layer, like the page.
+    LIKE_PAGE = 1;
   }
 }
 

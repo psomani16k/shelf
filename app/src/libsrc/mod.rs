@@ -13,6 +13,7 @@ use shelf_proto::{
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
         UploadEbookRequest, UploadEbookResponse,
+        DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
     config::Config,
 };
@@ -135,6 +136,22 @@ impl Library for AnyLibrary {
 
     async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
         dispatch!(self, lib => lib.set_config(req).await)
+    }
+
+    async fn list_themes(&self, req: ListThemesRequest) -> Result<ListThemesResponse, LibraryError> {
+        dispatch!(self, lib => lib.list_themes(req).await)
+    }
+
+    async fn set_theme(&self, req: SetThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        dispatch!(self, lib => lib.set_theme(req).await)
+    }
+
+    async fn delete_theme(&self, req: DeleteThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        dispatch!(self, lib => lib.delete_theme(req).await)
+    }
+
+    async fn rename_theme(&self, req: RenameThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        dispatch!(self, lib => lib.rename_theme(req).await)
     }
 
     async fn export_user_data(&self, req: ExportUserDataRequest) -> Result<UserData, LibraryError> {

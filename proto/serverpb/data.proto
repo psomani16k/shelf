@@ -31,6 +31,8 @@ message Session {
   // RFC 3339.
   string created = 1;
   string expires = 2;
+  // What the client called its device at login; "" for older sessions. Never logged.
+  string device = 3;
 }
 
 message PendingUser {

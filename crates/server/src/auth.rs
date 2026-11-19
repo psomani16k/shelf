@@ -12,7 +12,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use shelf_core::library::{LibraryError, scope::Scope};
 use shelf_proto::{
-    api::{ChangePasswordRequest, LoginRequest, LoginResponse, User, role::Value as Role},
+    api::{
+        ChangePasswordRequest, EndSessionRequest, ListSessionsResponse, LoginRequest,
+        LoginResponse, SessionInfo, User, role::Value as Role,
+    },
     server::Session,
 };
 use shelf_utility::timeutil::{Duration, Instant, Time};
@@ -31,6 +34,7 @@ const SESSION_LIFETIME: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 const MAX_FAILURES: u32 = 5;
 const LOCK_TIME: Duration = Duration::from_secs(60);
 const MAX_PASSWORD_CHARS: usize = 256;
+const MAX_DEVICE_CHARS: usize = 64;
 /// Compared against when the username is unknown, so the reply takes as long as for a real user.
 const DUMMY_PASSWORD: &str = "not a real password, only here for the timing";
 
@@ -86,10 +90,12 @@ impl Auth {
         inner
     }
 
+    /// `device` is what the client calls the device it's on; kept with the session, never logged.
     pub async fn login(
         &self,
         username: &str,
         password: &str,
+        device: &str,
         now: Time,
     ) -> Result<LoginResponse, LibraryError> {
         let mut inner = self.fresh(now).await;
@@ -116,6 +122,7 @@ impl Auth {
         let session = Session {
             created: now.to_string(),
             expires: (now + SESSION_LIFETIME).to_string(),
+            device: clean_device(device),
         };
         let added = inner
             .file
@@ -194,6 +201,49 @@ impl Auth {
         Ok(())
     }
 
+    pub async fn list_sessions(
+        &self,
+        user: &CurrentUser,
+        now: Time,
+    ) -> Result<ListSessionsResponse, LibraryError> {
+        let inner = self.fresh(now).await;
+        Ok(inner.sessions_of(user, now))
+    }
+
+    /// Signs out another of the caller's sessions, by its `SessionInfo.id`.
+    pub async fn end_session(
+        &self,
+        user: &CurrentUser,
+        id: &str,
+        now: Time,
+    ) -> Result<ListSessionsResponse, LibraryError> {
+        if id == session_id(&user.session) {
+            return Err(LibraryError::Invalid(
+                "this is the session you're using; use Log out to sign out this device".to_owned(),
+            ));
+        }
+        let mut inner = self.fresh(now).await;
+        inner
+            .file
+            .try_update(now, |data| -> Result<_, LibraryError> {
+                let sessions = &mut data
+                    .users
+                    .get_mut(&user.id)
+                    .ok_or(LibraryError::NotFound)?
+                    .sessions;
+                let key = sessions
+                    .keys()
+                    .find(|key| session_id(key) == id)
+                    .ok_or(LibraryError::NotFound)?
+                    .clone();
+                sessions.remove(&key);
+                Ok(())
+            })
+            .await??;
+        info!(user = %user.id, "signed out another session");
+        Ok(inner.sessions_of(user, now))
+    }
+
     /// Keeps the caller's session and ends every other one of theirs.
     pub async fn change_password(
         &self,
@@ -235,6 +285,32 @@ impl Auth {
 }
 
 impl Inner {
+    fn sessions_of(&self, user: &CurrentUser, now: Time) -> ListSessionsResponse {
+        let Some(stored) = self.file.data().users.get(&user.id) else {
+            return ListSessionsResponse::default();
+        };
+        let mut sessions: Vec<(Time, SessionInfo)> = stored
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                let expires = session.expires.parse::<Time>().ok().filter(|e| *e > now)?;
+                let active = expires - SESSION_LIFETIME;
+                let info = SessionInfo {
+                    id: session_id(key),
+                    device: session.device.clone(),
+                    created: session.created.clone(),
+                    active: active.to_string(),
+                    current: *key == user.session,
+                };
+                Some((active, info))
+            })
+            .collect();
+        sessions.sort_by(|(a, x), (b, y)| y.current.cmp(&x.current).then(b.cmp(a)));
+        ListSessionsResponse {
+            sessions: sessions.into_iter().map(|(_, info)| info).collect(),
+        }
+    }
+
     /// A login as a user that doesn't exist: refused, taking as long as a real check.
     fn refuse_unknown(&self, username: &str, password: &str) -> LibraryError {
         let _ = password_matches(DUMMY_PASSWORD, password);
@@ -308,6 +384,17 @@ fn random_string(len: usize) -> anyhow::Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// Trimmed, without control characters, at most `MAX_DEVICE_CHARS`.
+fn clean_device(device: &str) -> String {
+    let kept: String = device.chars().filter(|c| !c.is_control()).collect();
+    kept.trim().chars().take(MAX_DEVICE_CHARS).collect::<String>().trim_end().to_owned()
+}
+
+/// The id clients see for a session: derived from its key, so the key itself never leaves.
+fn session_id(key: &str) -> String {
+    hash(key)[..16].to_owned()
+}
+
 fn hash(token: &str) -> String {
     Sha256::digest(token.as_bytes())
         .iter()
@@ -366,7 +453,9 @@ pub async fn login(
     State(auth): State<Arc<Auth>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Response, ApiErrorResponse> {
-    let res = auth.login(&req.username, &req.password, Time::now()).await?;
+    let res = auth
+        .login(&req.username, &req.password, &req.device, Time::now())
+        .await?;
     let mut response = Json(res).into_response();
     response.extensions_mut().insert(LoggedUser(req.username));
     Ok(response)
@@ -385,6 +474,21 @@ pub async fn me(user: CurrentUser) -> Json<User> {
         username: user.id,
         role: user.role.into(),
     })
+}
+
+pub async fn list_sessions(
+    State(auth): State<Arc<Auth>>,
+    user: CurrentUser,
+) -> Result<Json<ListSessionsResponse>, ApiErrorResponse> {
+    Ok(Json(auth.list_sessions(&user, Time::now()).await?))
+}
+
+pub async fn end_session(
+    State(auth): State<Arc<Auth>>,
+    user: CurrentUser,
+    Json(req): Json<EndSessionRequest>,
+) -> Result<Json<ListSessionsResponse>, ApiErrorResponse> {
+    Ok(Json(auth.end_session(&user, &req.id, Time::now()).await?))
 }
 
 pub async fn change_password(
@@ -440,7 +544,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
 
-        let res = auth.login("parth", "hunter2", now()).await.unwrap();
+        let res = auth.login("parth", "hunter2", "", now()).await.unwrap();
         let user = auth.authenticate(&res.token, now()).await.unwrap();
 
         assert_eq!(user.id, "parth");
@@ -457,7 +561,7 @@ mod tests {
         let auth = auth(dir.path()).await;
 
         for (user, password) in [("parth", "nope"), ("nobody", "hunter2"), ("nopass", "")] {
-            let result = auth.login(user, password, now()).await;
+            let result = auth.login(user, password, "", now()).await;
             assert!(is_status(result, StatusCode::UNAUTHORIZED), "{user}");
         }
         assert!(is_status(
@@ -471,15 +575,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
         for _ in 0..MAX_FAILURES {
-            let _ = auth.login("parth", "nope", now()).await;
+            let _ = auth.login("parth", "nope", "", now()).await;
         }
 
-        let locked = auth.login("parth", "hunter2", now()).await;
+        let locked = auth.login("parth", "hunter2", "", now()).await;
         assert!(is_status(locked, StatusCode::TOO_MANY_REQUESTS));
-        assert!(auth.login("kid", "pancakes", now()).await.is_ok());
+        assert!(auth.login("kid", "pancakes", "", now()).await.is_ok());
 
         tokio::time::advance(LOCK_TIME).await;
-        assert!(auth.login("parth", "hunter2", now()).await.is_ok());
+        assert!(auth.login("parth", "hunter2", "", now()).await.is_ok());
     }
 
     #[tokio::test(start_paused = true)]
@@ -487,19 +591,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
         for _ in 0..MAX_FAILURES - 1 {
-            let _ = auth.login("parth", "nope", now()).await;
+            let _ = auth.login("parth", "nope", "", now()).await;
         }
-        auth.login("parth", "hunter2", now()).await.unwrap();
+        auth.login("parth", "hunter2", "", now()).await.unwrap();
 
-        let _ = auth.login("parth", "nope", now()).await;
-        assert!(auth.login("parth", "hunter2", now()).await.is_ok());
+        let _ = auth.login("parth", "nope", "", now()).await;
+        assert!(auth.login("parth", "hunter2", "", now()).await.is_ok());
     }
 
     #[tokio::test]
     async fn a_session_expires_unless_used_and_extends_at_most_once_a_day() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let token = auth.login("kid", "pancakes", now()).await.unwrap().token;
+        let token = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
         let first = stored(dir.path());
 
         auth.authenticate(&token, now() + Duration::from_secs(60 * 60)).await.unwrap();
@@ -520,8 +624,8 @@ mod tests {
     async fn logout_ends_only_that_session() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let phone = auth.login("kid", "pancakes", now()).await.unwrap().token;
-        let laptop = auth.login("kid", "pancakes", now()).await.unwrap().token;
+        let phone = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
+        let laptop = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
 
         let user = auth.authenticate(&phone, now()).await.unwrap();
         auth.logout(&user, now()).await.unwrap();
@@ -531,11 +635,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_device_name_is_cleaned_and_kept_with_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = auth(dir.path()).await;
+        let long = format!(" OnePlus\n11 5G {} ", "x".repeat(100));
+        let token = auth.login("kid", "pancakes", &long, now()).await.unwrap().token;
+
+        let user = auth.authenticate(&token, now()).await.unwrap();
+        let device = &auth.list_sessions(&user, now()).await.unwrap().sessions[0].device;
+        assert!(device.starts_with("OnePlus11 5G x"), "{device}");
+        assert_eq!(device.chars().count(), MAX_DEVICE_CHARS);
+        assert!(stored(dir.path()).contains(device.as_str()));
+    }
+
+    #[tokio::test]
+    async fn sessions_list_this_one_first_and_leave_out_ended_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = auth(dir.path()).await;
+        let old = auth.login("kid", "pancakes", "Old", now()).await.unwrap().token;
+        let later = now() + SESSION_LIFETIME - Duration::from_secs(60);
+        let laptop = auth.login("kid", "pancakes", "Laptop", later).await.unwrap().token;
+        let phone = auth.login("kid", "pancakes", "Phone", later).await.unwrap().token;
+        auth.login("parth", "hunter2", "Someone else", later).await.unwrap();
+
+        let user = auth.authenticate(&laptop, later).await.unwrap();
+        let listed = auth.list_sessions(&user, later).await.unwrap().sessions;
+        let devices: Vec<(&str, bool)> =
+            listed.iter().map(|s| (s.device.as_str(), s.current)).collect();
+        assert_eq!(devices, [("Laptop", true), ("Phone", false), ("Old", false)]);
+        assert_eq!(listed[0].active, later.to_string());
+        for info in &listed {
+            assert!(![&old, &laptop, &phone, &hash(&old)].contains(&&info.id));
+        }
+
+        let after_old_ends = now() + SESSION_LIFETIME + Duration::from_secs(1);
+        let listed = auth.list_sessions(&user, after_old_ends).await.unwrap().sessions;
+        assert_eq!(listed.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ending_a_session_signs_out_only_that_other_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = auth(dir.path()).await;
+        let laptop = auth.login("kid", "pancakes", "Laptop", now()).await.unwrap().token;
+        let phone = auth.login("kid", "pancakes", "Phone", now()).await.unwrap().token;
+        let theirs = auth.login("parth", "hunter2", "", now()).await.unwrap().token;
+        let user = auth.authenticate(&laptop, now()).await.unwrap();
+        let owner = auth.authenticate(&theirs, now()).await.unwrap();
+        let listed = auth.list_sessions(&user, now()).await.unwrap().sessions;
+        let (this, other) = (listed[0].id.clone(), listed[1].id.clone());
+        let owners = auth.list_sessions(&owner, now()).await.unwrap().sessions[0].id.clone();
+
+        let own = auth.end_session(&user, &this, now()).await;
+        assert!(is_status(own, StatusCode::BAD_REQUEST));
+        for id in ["nope", owners.as_str()] {
+            assert!(is_status(auth.end_session(&user, id, now()).await, StatusCode::NOT_FOUND));
+        }
+
+        let left = auth.end_session(&user, &other, now()).await.unwrap().sessions;
+        assert_eq!(left.len(), 1);
+        assert!(auth.authenticate(&phone, now()).await.is_err());
+        assert!(auth.authenticate(&laptop, now()).await.is_ok());
+        assert!(auth.authenticate(&theirs, now()).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn changing_the_password_keeps_this_session_and_ends_the_others() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let phone = auth.login("kid", "pancakes", now()).await.unwrap().token;
-        let laptop = auth.login("kid", "pancakes", now()).await.unwrap().token;
+        let phone = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
+        let laptop = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
         let user = auth.authenticate(&phone, now()).await.unwrap();
 
         let wrong = ChangePasswordRequest {
@@ -560,15 +729,15 @@ mod tests {
 
         assert!(auth.authenticate(&phone, now()).await.is_ok());
         assert!(auth.authenticate(&laptop, now()).await.is_err());
-        assert!(auth.login("kid", "pancakes", now()).await.is_err());
-        assert!(auth.login("kid", "syrup", now()).await.is_ok());
+        assert!(auth.login("kid", "pancakes", "", now()).await.is_err());
+        assert!(auth.login("kid", "syrup", "", now()).await.is_ok());
     }
 
     #[tokio::test]
     async fn a_role_edited_by_hand_applies_to_the_next_request() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let token = auth.login("parth", "hunter2", now()).await.unwrap().token;
+        let token = auth.login("parth", "hunter2", "", now()).await.unwrap().token;
 
         edit_by_hand(dir.path(), "OWNER", "LIBRARIAN");
 
@@ -581,9 +750,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
 
-        let wrong = auth.login("banned", "nope", now()).await;
+        let wrong = auth.login("banned", "nope", "", now()).await;
         assert!(is_status(wrong, StatusCode::UNAUTHORIZED));
-        let right = auth.login("banned", "waffles", now()).await;
+        let right = auth.login("banned", "waffles", "", now()).await;
         assert!(is_status(right, StatusCode::FORBIDDEN));
         assert!(!stored(dir.path()).contains("sessions"));
     }
@@ -592,7 +761,7 @@ mod tests {
     async fn banning_by_hand_ends_the_session() {
         let dir = tempfile::tempdir().unwrap();
         let auth = auth(dir.path()).await;
-        let token = auth.login("kid", "pancakes", now()).await.unwrap().token;
+        let token = auth.login("kid", "pancakes", "", now()).await.unwrap().token;
 
         edit_by_hand(dir.path(), r#""role": "READER""#, r#""role": "BANNED""#);
 

@@ -19,7 +19,7 @@ All three use the same on-disk format, so a library can move between a device an
 ## What it does
 
 - Browse the library by folder, with covers.
-- Read in paginated or scrolled mode, with light/dark themes and margin sizes. Settings are stored per reader in the library, so they follow you to every device.
+- Read in paginated or scrolled mode, with margin sizes and reader themes: 15 built-ins (Light, Paper, Sepia, Solarized, E-ink, Dark, Nord, AMOLED, Red Night and more) or your own, made in *Settings → Reader → Themes* from colour layers with a live preview. Zoom, theme and layout are also a tap away in the reader. Settings and themes are stored per reader in the library, so they follow you to every device.
 - Reopen a book on another device where you left off.
 - On the server: accounts with roles (reader, contributor, librarian, admin, owner), sign-up requests an admin approves, and per-user folders and book filters.
 - In the app: keep several named libraries, local or remote, and switch between them.

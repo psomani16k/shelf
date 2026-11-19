@@ -21,7 +21,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
-/** What the Rust side can't do on Android: storage access, a folder picker, and the system bar insets. */
+/** What the Rust side can't do on Android: storage access, a folder picker, the system bar insets and the device name. */
 @TauriPlugin(
   permissions = [Permission(strings = [Manifest.permission.READ_EXTERNAL_STORAGE], alias = "storage")]
 )
@@ -91,6 +91,19 @@ class ShelfPlugin(private val activity: Activity) : Plugin(activity) {
       if (volume == "primary") Environment.getExternalStorageDirectory().absolutePath
       else "/storage/$volume"
     return if (rel.isEmpty()) root else "$root/$rel"
+  }
+
+  /** What the phone's About page calls it ("OnePlus 11 5G"); else maker and model, which is often a code like "CPH2449". */
+  @Command
+  fun deviceName(invoke: Invoke) {
+    val set =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1)
+        Settings.Global.getString(activity.contentResolver, Settings.Global.DEVICE_NAME)
+      else null
+    val model = Build.MODEL.orEmpty()
+    val maker = Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }
+    val fallback = if (model.startsWith(maker, ignoreCase = true)) model else "$maker $model"
+    invoke.resolve(JSObject().put("name", set?.takeIf { it.isNotBlank() } ?: fallback.trim()))
   }
 
   /** Status bar, navigation bar and display cutout, in CSS pixels. */

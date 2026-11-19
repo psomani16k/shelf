@@ -48,7 +48,7 @@ Compared to Go: the handlers are like `http.HandlerFunc`s whose decoding and enc
       "password": "hunter2",
       "role": "OWNER",
       "sessions": {
-        "9f2c…": { "created": "2026-11-13T10:00:00Z", "expires": "2027-02-11T10:00:00Z" }
+        "9f2c…": { "created": "2026-11-13T10:00:00Z", "expires": "2027-02-11T10:00:00Z", "device": "OnePlus 11 5G" }
       }
     }
   },
@@ -58,7 +58,7 @@ Compared to Go: the handlers are like `http.HandlerFunc`s whose decoding and enc
 }
 ```
 
-A session's key is the hex SHA-256 of its token, so the file never holds a token that works. To sign someone out everywhere, delete their `sessions`.
+A session's key is the hex SHA-256 of its token, so the file never holds a token that works. `device` is the name the client gave itself at login (see [api.md](api.md)), kept so the user can tell their sessions apart in *Settings → Account* and sign one out; it's never logged, and sessions from before it have none. To sign someone out everywhere, delete their `sessions`.
 
 Roles (`apipb.Role.Value`, in `proto/apipb/auth.proto` because `/api/auth/me` returns it) are a ladder: each can do everything the ones before it can, so a check is `role >= needed`. Their numbers are that order: a new role is put in its place and the ones above it are renumbered. `data.json` stores the names, so that's safe, but a removed or renamed role must be fixed by hand in the file (an `EDITOR` from before the split is now `LIBRARIAN`).
 

@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package configpb;
+
+// A reader theme: layers applied to the book's page in order, first to last, composing into one
+// colour matrix. No layers leaves the book as published.
+// A user's own themes are `.shelf/users/<user>/themes/<id>.json`, one spec each.
+message ReaderThemeSpec {
+  // Shown in the UI: 1 to 32 of ASCII letters, digits, space, `-` and `_`. Its id is the name
+  // lowercased, with spaces as `-`; two names with the same id are the same theme.
+  string name = 1;
+  repeated ThemeLayer layers = 2;
+}
+
+// Every kind is a linear colour transform, so any stack composes into one matrix. A layer with no
+// kind set (one a newer build added) is skipped.
+message ThemeLayer {
+  // Images don't get this layer when the user keeps image colours (the counter-filter cancels it).
+  bool skip_images = 1;
+
+  oneof kind {
+    Invert invert = 2;
+    HueRotate hue_rotate = 3;
+    Saturate saturate = 4;
+    BrightnessContrast brightness_contrast = 5;
+    Levels levels = 6;
+    Multiply multiply = 7;
+    ColorMatrix matrix = 8;
+  }
+
+  message Invert {}
+
+  // CSS `hue-rotate()`.
+  message HueRotate {
+    double degrees = 1;
+  }
+
+  // CSS `saturate()`: 0 is grey, 1 unchanged, above 1 more vivid. Unset is 1.
+  message Saturate {
+    optional double amount = 1;
+  }
+
+  // CSS `brightness()` then `contrast()`, as factors: 1 is unchanged. Unset is 1.
+  message BrightnessContrast {
+    optional double brightness = 1;
+    optional double contrast = 2;
+  }
+
+  // Levels' output sliders, per channel: black becomes `black`, white becomes `white`.
+  // Colours are "#rrggbb"; unset is "#000000" and "#ffffff".
+  message Levels {
+    string black = 1;
+    string white = 2;
+  }
+
+  // A Multiply fill layer, "#rrggbb".
+  message Multiply {
+    string color = 1;
+  }
+
+  // Channel Mixer: 12 values, the rows for red, green and blue, each `r g b offset`, in 0–1.
+  message ColorMatrix {
+    repeated double values = 1;
+  }
+}

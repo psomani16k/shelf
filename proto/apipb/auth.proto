@@ -23,6 +23,9 @@ message User {
 message LoginRequest {
   string username = 1;
   string password = 2;
+  // What the client calls the device it's on ("OnePlus 11 5G", "Firefox on Linux"), shown in the
+  // user's session list. Kept with the session, never logged; at most 64 characters are kept.
+  string device = 3;
 }
 
 message LoginResponse {
@@ -37,6 +40,32 @@ message LogoutRequest {}
 message ChangePasswordRequest {
   string current_password = 1;
   string new_password = 2;
+}
+
+// One of the signed-in user's sessions.
+message SessionInfo {
+  // Not the token or its hash: derived from the hash, for `EndSessionRequest`.
+  string id = 1;
+  // "" for a session from before devices were recorded.
+  string device = 2;
+  // RFC 3339.
+  string created = 3;
+  // Roughly when it was last used, to within a day (sessions are extended at most once a day).
+  string active = 4;
+  // The session making this request.
+  bool current = 5;
+}
+
+message ListSessionsRequest {}
+
+// The current session first, then the most recently active.
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+// Signs out another of the user's sessions; answered with the sessions left.
+message EndSessionRequest {
+  string id = 1;
 }
 
 // Asks for an account; an admin approves it and picks the role.

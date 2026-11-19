@@ -30,6 +30,7 @@ use crate::{
     },
     routines::index_sync::IndexSync,
     storage::{FileContent, LibraryStorage, LocalLibraryStorage, is_epub},
+    themes,
 };
 
 /// `UserData.version` written by exports and accepted by imports.
@@ -203,8 +204,8 @@ impl LibraryView<'_> {
         self.set_last_book(&req.user, req.last_book_id).await
     }
 
-    /// The user's progress for every book they can see, their last book and their settings,
-    /// without their name, so it can be imported as anyone.
+    /// The user's progress for every book they can see, their last book, their settings and
+    /// their own themes, without their name, so it can be imported as anyone.
     pub async fn export_user_data(
         &self,
         req: ExportUserDataRequest,
@@ -231,11 +232,13 @@ impl LibraryView<'_> {
         };
         let last_book_id = self.get_state(state).await?.last_book_id;
         let config = self.lib.storage.read_config(&req.user).await?;
+        let themes = themes::export_themes(&self.lib.storage, &req.user).await?;
         Ok(UserData {
             version: USER_DATA_VERSION,
             progress,
             last_book_id,
             config: Some(config),
+            themes,
         })
     }
 
@@ -274,16 +277,20 @@ impl LibraryView<'_> {
         {
             self.set_last_book(&req.user, Some(id)).await?;
         }
-        if let Some(config) = data.config {
+        let themes = {
             let _guard = self.lib.config_lock.lock().await;
-            self.lib.storage.update_config(&req.user, &config).await?;
-        }
+            if let Some(config) = data.config {
+                self.lib.storage.update_config(&req.user, &config).await?;
+            }
+            themes::import_themes(&self.lib.storage, &req.user, data.themes).await?
+        };
 
         let skipped = total - books;
-        info!(books, skipped, "imported user data");
+        info!(books, skipped, themes, "imported user data");
         Ok(ImportUserDataResponse {
             books: books as u32,
             skipped: skipped as u32,
+            themes,
         })
     }
 
@@ -749,9 +756,16 @@ mod tests {
             patch: Some(patch),
         };
         from.set_config(config).await.unwrap();
+        let spec = serde_json::from_str(r#"{ "name": "Calm", "layers": [{ "invert": {} }] }"#);
+        let theme = shelf_proto::api::SetThemeRequest {
+            user: "parth".into(),
+            spec: Some(spec.unwrap()),
+        };
+        from.set_theme(theme).await.unwrap();
 
         let data = view.export_user_data(export("parth")).await.unwrap();
         assert_eq!(data.progress.len(), 2);
+        assert_eq!(data.themes.len(), 1);
         let json = serde_json::to_string(&data).unwrap();
         assert!(!json.contains("parth"), "{json}");
 
@@ -760,7 +774,7 @@ mod tests {
         let view = to.view(&EVERYTHING);
         save_progress(&view, "kid", "a", "old").await;
         let res = view.import_user_data(import("kid", data)).await.unwrap();
-        assert_eq!((res.books, res.skipped), (1, 1));
+        assert_eq!((res.books, res.skipped, res.themes), (1, 1, 1));
 
         assert_eq!(progress_of(&view, "kid", "a").await.as_deref(), Some("cfi-a"));
         let state = GetStateRequest { user: "kid".into() };
@@ -768,6 +782,25 @@ mod tests {
         let config = to.get_config(shelf_proto::api::GetConfigRequest { user: "kid".into() });
         let config = serde_json::to_value(config.await.unwrap()).unwrap();
         assert_eq!(config["ui"]["theme"], "DARK");
+        let themes = to.list_themes(shelf_proto::api::ListThemesRequest { user: "kid".into() });
+        assert!(themes.await.unwrap().themes.iter().any(|t| t.id == "calm"));
+    }
+
+    #[tokio::test]
+    async fn renaming_the_chosen_theme_moves_the_config() {
+        use shelf_proto::api::{GetConfigRequest, RenameThemeRequest, SetConfigRequest, SetThemeRequest};
+        let (_root, lib) = library(&[]).await;
+        let spec = serde_json::from_str(r#"{ "name": "Calm" }"#).unwrap();
+        let user = || "parth".to_owned();
+        lib.set_theme(SetThemeRequest { user: user(), spec: Some(spec) }).await.unwrap();
+        let patch = serde_json::from_str(r#"{ "reader": { "theme": "calm" } }"#).unwrap();
+        lib.set_config(SetConfigRequest { user: user(), patch: Some(patch) }).await.unwrap();
+
+        let rename = RenameThemeRequest { user: user(), from: "Calm".into(), to: "Very Calm".into() };
+        let list = lib.rename_theme(rename).await.unwrap();
+        assert!(list.themes.iter().any(|t| t.id == "very-calm"));
+        let config = lib.get_config(GetConfigRequest { user: user() }).await.unwrap();
+        assert_eq!(config.reader.unwrap().theme.as_deref(), Some("very-calm"));
     }
 
     #[tokio::test]

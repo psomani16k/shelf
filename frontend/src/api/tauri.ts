@@ -9,6 +9,8 @@ import {
   ApproveUserRequestRequestSchema,
   ChangePasswordRequestSchema,
   DenyUserRequestRequestSchema,
+  EndSessionRequestSchema,
+  ListSessionsResponseSchema,
   ListUserRequestsResponseSchema,
   ListUsersResponseSchema,
   LoginRequestSchema,
@@ -46,6 +48,13 @@ import {
 } from "@/gen/apipb/state_pb"
 import { GetConfigRequestSchema, SetConfigRequestSchema } from "@/gen/apipb/config_pb"
 import {
+  DeleteThemeRequestSchema,
+  ListThemesRequestSchema,
+  ListThemesResponseSchema,
+  RenameThemeRequestSchema,
+  SetThemeRequestSchema,
+} from "@/gen/apipb/theme_pb"
+import {
   ExportUserDataRequestSchema,
   ImportUserDataRequestSchema,
   ImportUserDataResponseSchema,
@@ -80,6 +89,13 @@ export const tauriBackend: Backend = {
   setState: (lastBookId) => exec("set_state", SetStateRequestSchema, { lastBookId }),
   getConfig: () => command("get_config", GetConfigRequestSchema, {}, ConfigSchema),
   setConfig: (patch) => command("set_config", SetConfigRequestSchema, { patch }, ConfigSchema),
+  listThemes: () => command("list_themes", ListThemesRequestSchema, {}, ListThemesResponseSchema),
+  setTheme: (spec) =>
+    command("set_theme", SetThemeRequestSchema, { spec }, ListThemesResponseSchema),
+  deleteTheme: (name) =>
+    command("delete_theme", DeleteThemeRequestSchema, { name }, ListThemesResponseSchema),
+  renameTheme: (from, to) =>
+    command("rename_theme", RenameThemeRequestSchema, { from, to }, ListThemesResponseSchema),
   exportUserData: () =>
     command("export_user_data", ExportUserDataRequestSchema, {}, UserDataSchema),
   importUserData: (data) =>
@@ -123,6 +139,10 @@ export const tauriBackend: Backend = {
   },
   changePassword: (currentPassword, newPassword) =>
     exec("change_password", ChangePasswordRequestSchema, { currentPassword, newPassword }),
+  listSessions: async () => (await query("list_sessions", ListSessionsResponseSchema)).sessions,
+  signOutSession: async (id) =>
+    (await command("end_session", EndSessionRequestSchema, { id }, ListSessionsResponseSchema))
+      .sessions,
   signUp: (username, password) => exec("sign_up", SignUpRequestSchema, { username, password }),
   listUserRequests: async () =>
     (await query("list_user_requests", ListUserRequestsResponseSchema)).requests,

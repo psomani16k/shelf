@@ -19,7 +19,9 @@ use shelf_proto::{
         DeleteItemsResponse, GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
         ListBooksRequest, ListBooksResponse, ListDirectoriesRequest, ListDirectoriesResponse,
         RebuildIndexRequest, CleanUpProgressRequest, CleanUpProgressResponse, RebuildIndexResponse, SetConfigRequest, SetProgressRequest, SetStateRequest,
-        LoginRequest, LoginResponse, LogoutRequest, UploadEbookRequest, UploadEbookResponse, User,
+        LoginRequest, LoginResponse, LogoutRequest, UploadEbookRequest, UploadEbookResponse,
+        EndSessionRequest, ListSessionsRequest, ListSessionsResponse,
+        DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest, User,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
     },
     config::Config,
@@ -284,6 +286,21 @@ impl RemoteLibrary {
             .map_err(to_library_error)
     }
 
+    pub async fn list_sessions(&self) -> Result<ListSessionsResponse, LibraryError> {
+        self.api_call(&ListSessionsRequest {}, "/auth/sessions/list")
+            .await
+            .map_err(to_library_error)
+    }
+
+    pub async fn end_session(
+        &self,
+        req: &EndSessionRequest,
+    ) -> Result<ListSessionsResponse, LibraryError> {
+        self.api_call(req, "/auth/sessions/end")
+            .await
+            .map_err(to_library_error)
+    }
+
     /// Needs no key: it asks an admin for an account.
     pub async fn sign_up(&self, req: &SignUpRequest) -> Result<(), LibraryError> {
         self.api_call(req, "/auth/signup")
@@ -430,6 +447,30 @@ impl Library for RemoteLibrary {
 
     async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
         self.api_call(&req, "/config/set")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn list_themes(&self, req: ListThemesRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.api_call(&req, "/themes/list")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn set_theme(&self, req: SetThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.api_call(&req, "/themes/set")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn delete_theme(&self, req: DeleteThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.api_call(&req, "/themes/delete")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn rename_theme(&self, req: RenameThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.api_call(&req, "/themes/rename")
             .await
             .map_err(to_library_error)
     }

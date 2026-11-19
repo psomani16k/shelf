@@ -243,9 +243,9 @@ mod tests {
         let auth = auth(dir.path()).await;
         auth.sign_up(&sign_up("newbie", "secret"), now()).await.unwrap();
 
-        let waiting = auth.login("newbie", "secret", now()).await;
+        let waiting = auth.login("newbie", "secret", "", now()).await;
         assert!(is_status(waiting, StatusCode::FORBIDDEN));
-        let wrong = auth.login("newbie", "nope", now()).await;
+        let wrong = auth.login("newbie", "nope", "", now()).await;
         assert!(is_status(wrong, StatusCode::UNAUTHORIZED));
 
         let request = pending(&auth).await.remove(0);
@@ -257,7 +257,7 @@ mod tests {
             .unwrap();
 
         assert!(pending(&auth).await.is_empty());
-        let res = auth.login("newbie", "secret", now()).await.unwrap();
+        let res = auth.login("newbie", "secret", "", now()).await.unwrap();
         assert_eq!(res.user.unwrap().role(), Role::Librarian);
     }
 
@@ -281,8 +281,8 @@ mod tests {
         let result = auth.approve_request(&approver, &second, now()).await;
         assert!(is_status(result, StatusCode::CONFLICT));
         assert_eq!(pending(&auth).await.len(), 1);
-        assert!(auth.login("twin", "first", now()).await.is_ok());
-        assert!(auth.login("twin", "second", now()).await.is_err());
+        assert!(auth.login("twin", "first", "", now()).await.is_ok());
+        assert!(auth.login("twin", "second", "", now()).await.is_err());
     }
 
     #[tokio::test]
@@ -304,7 +304,7 @@ mod tests {
         auth.approve_request(&approver(Role::Owner), &approval(&id, Role::Admin), now())
             .await
             .unwrap();
-        let res = auth.login("newbie", "secret", now()).await.unwrap();
+        let res = auth.login("newbie", "secret", "", now()).await.unwrap();
         assert_eq!(res.user.unwrap().role(), Role::Admin);
     }
 
@@ -327,7 +327,7 @@ mod tests {
         let result = auth.approve_request(&approver, &approve, now()).await;
         assert!(is_status(result, StatusCode::NOT_FOUND));
         assert!(is_status(
-            auth.login("newbie", "secret", now()).await,
+            auth.login("newbie", "secret", "", now()).await,
             StatusCode::UNAUTHORIZED
         ));
     }

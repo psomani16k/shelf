@@ -4,7 +4,11 @@ use shelf_core::library::{
     Library, LibraryError, book_library::BookLibrary, scope::Scope, view::LibraryView,
 };
 use shelf_proto::{
-    api::{CleanUpProgressResponse, GetConfigRequest, RebuildIndexResponse, SetConfigRequest},
+    api::{
+        CleanUpProgressResponse, DeleteThemeRequest, GetConfigRequest, ListThemesRequest,
+        ListThemesResponse, RebuildIndexResponse, RenameThemeRequest, SetConfigRequest,
+        SetThemeRequest,
+    },
     config::Config,
 };
 use tokio::sync::Mutex;
@@ -36,6 +40,22 @@ impl ServerLibrary {
 
     pub async fn set_config(&self, req: SetConfigRequest) -> Result<Config, LibraryError> {
         self.lib.set_config(req).await
+    }
+
+    pub async fn list_themes(&self, req: ListThemesRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.lib.list_themes(req).await
+    }
+
+    pub async fn set_theme(&self, req: SetThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.lib.set_theme(req).await
+    }
+
+    pub async fn delete_theme(&self, req: DeleteThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.lib.delete_theme(req).await
+    }
+
+    pub async fn rename_theme(&self, req: RenameThemeRequest) -> Result<ListThemesResponse, LibraryError> {
+        self.lib.rename_theme(req).await
     }
 
     /// The whole library, whoever asks.

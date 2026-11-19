@@ -3,8 +3,15 @@ import { useEffect, useRef, useState } from "react"
 import { Navigate, useLocation, useNavigate, useParams } from "react-router"
 import { ScreenHeader } from "@/components/ScreenHeader"
 import { ChoiceRow } from "@/components/settings/ChoiceRow"
-import { type Group, type Section, useVisibleSections } from "@/components/settings/sections"
+import {
+  type ConfigPatch,
+  type CustomSetting,
+  type Group,
+  type Section,
+  useVisibleSections,
+} from "@/components/settings/sections"
 import { SettingsGroup } from "@/components/settings/SettingsGroup"
+import { type NavState, SETTINGS_PATH, useSettingsPage } from "@/components/settings/settingsNav"
 import { Button } from "@/components/ui/button"
 import { useBackButton } from "@/lib/backButton"
 import { useLibraryConfig, useSetConfig } from "@/lib/useAppearance"
@@ -12,21 +19,14 @@ import { useLatest } from "@/lib/useLatest"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { cn } from "cn"
 
-/**
- * `depth` counts the history entries settings has pushed, so closing can step back past all of
- * them. It's missing after a reload or a deep link. `fromList` marks a section opened from the
- * phone list, so its back arrow can just go back.
- */
-type NavState = { depth?: number; fromList?: boolean } | null
-
-export const SETTINGS_PATH = "/settings"
+export { SETTINGS_PATH }
 
 /** Tailwind's `md`. */
 const WIDE = "(min-width: 48rem)"
 
 /** Phones get a list of sections, each opening its own screen; wider screens get a sidebar. */
 export function Settings() {
-  const { section: slug } = useParams()
+  const { section: slug, page: pageSlug } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
   const state = location.state as NavState
@@ -54,15 +54,24 @@ export function Settings() {
   }, [returnFocus, closeRef])
 
   const section = sections.find((s) => s.slug === slug)
+  const page = pageSlug ? section?.pages?.[pageSlug] : undefined
+  const parentTitle = (page?.parent && section?.pages?.[page.parent]?.title) || section?.label
+  const pages = useSettingsPage()
   const backToList = () =>
     state?.fromList ? navigate(-1) : navigate(SETTINGS_PATH, { replace: true, state: { depth } })
-  // Same as the header's back arrow: a section on a phone goes back to the list.
-  useBackButton(() => void (!wide && section ? backToList() : close()))
+  // Same as the header's back arrow: a page goes up a level, a section on a phone to the list.
+  useBackButton(() => {
+    if (page) pages.back(page.parent)
+    else void (!wide && section ? backToList() : close())
+  })
 
   if (slug && !section) {
     // A reload on an admin-only section: wait for the role before deciding it isn't there.
     if (pending) return null
     return <Navigate to={SETTINGS_PATH} replace state={state} />
+  }
+  if (section && pageSlug && !page) {
+    return <Navigate to={`${SETTINGS_PATH}/${section.slug}`} replace state={state} />
   }
   const shown = section ?? (wide ? sections[0] : undefined)
 
@@ -114,25 +123,42 @@ export function Settings() {
       {shown && (
         <main className="flex min-w-0 flex-1 flex-col">
           <ScreenHeader
-            title={shown.label}
+            title={page?.title ?? shown.label}
             className="md:border-b-0"
             start={
-              !wide && (
+              page ? (
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={backToList}
-                  aria-label="Back to settings"
+                  onClick={() => pages.back(page.parent)}
+                  aria-label={`Back to ${parentTitle}`}
                 >
                   <ArrowLeft />
                 </Button>
+              ) : (
+                !wide && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={backToList}
+                    aria-label="Back to settings"
+                  >
+                    <ArrowLeft />
+                  </Button>
+                )
               )
             }
           />
           <div className="flex-1 overflow-y-auto overscroll-contain p-4 md:px-8 md:pb-8 md:pt-2">
             <div className="mx-auto max-w-2xl">
-              {shown.groups && <ConfigSettings groups={shown.groups} />}
-              {shown.content && <shown.content />}
+              {page ? (
+                <page.component />
+              ) : (
+                <>
+                  {shown.groups && <ConfigSettings groups={shown.groups} />}
+                  {shown.content && <shown.content />}
+                </>
+              )}
             </div>
           </div>
         </main>
@@ -157,20 +183,29 @@ function ConfigSettings({ groups }: { groups: Group[] }) {
       <div className="flex flex-col gap-8">
         {groups.map((group, i) => (
           <SettingsGroup key={group.label ?? i} label={group.label}>
-            {group.settings.map((setting) => (
-              <ChoiceRow
-                key={setting.id}
-                label={setting.label}
-                description={setting.description}
-                choices={setting.choices}
-                value={setting.read(config.data) ?? 0}
-                disabled={setting.disabled?.(config.data) ?? false}
-                onChange={(value) => save.mutate(setting.patch(value))}
-              />
-            ))}
+            {group.settings.map((setting, j) =>
+              typeof setting === "function" ? (
+                <CustomRow key={j} Row={setting} save={save.mutate} />
+              ) : (
+                <ChoiceRow
+                  key={setting.id}
+                  label={setting.label}
+                  description={setting.description}
+                  choices={setting.choices}
+                  value={setting.read(config.data) ?? 0}
+                  disabled={setting.disabled?.(config.data) ?? false}
+                  onChange={(value) => save.mutate(setting.patch(value))}
+                />
+              ),
+            )}
           </SettingsGroup>
         ))}
       </div>
     </>
   )
+}
+
+/** Renders a group's `CustomSetting`; a component named in JSX must start with a capital. */
+function CustomRow({ Row, save }: { Row: CustomSetting; save: ConfigPatch }) {
+  return <Row save={save} />
 }

@@ -36,6 +36,8 @@ A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtr
       <user>/
         config.json      Config: that user's settings (reader and UI), partially updated by set_config
         state.json       State: the last book that user opened
+        themes/
+          <id>.json      ReaderThemeSpec: one of that user's own reader themes
 ```
 
 All files except the thumbnail are pretty-printed JSON using the **proto JSON shape**: snake_case keys, enums by name. The Rust types are the generated proto types (`shelf_proto::bookkeeping`, `::state`, `::config`) serialized with pbjson, which ignores unknown fields when reading. So only the `config.json` files (merged as raw JSON) keep fields this build doesn't know; rewriting the other files drops them.
@@ -94,12 +96,33 @@ Each user's own settings: every field in `Config` is a personal preference (read
 
 ```json
 {
-  "reader": { "flow": "PAGINATED", "theme": "DARK", "margins": { "side": "LARGE" } },
+  "reader": { "flow": "PAGINATED", "theme": "night", "images": "KEEP", "margins": { "side": "LARGE" } },
   "ui": { "theme": "SYSTEM" }
 }
 ```
 
-Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A stored file that doesn't parse as a JSON object is logged at `warn` and replaced by the patch. A mutex in `BookLibrary` serializes concurrent `set_config` calls (for all users at once). A missing or unparseable file reads as the default config (zero values: scrolled, reader matches UI, medium margins, system theme). `developer.logging` (`max_mobile_files`, `max_desktop_files`) is in the schema, but no code reads or writes it.
+Every scalar/enum field in `config.proto` is `optional`, so a patch can tell "not sent" from the zero value. `set_config` (`LibraryStorage::update_config`, a default method in `crates/core/src/storage/mod.rs`) merges the patch into the stored **raw JSON** (objects merge key by key; anything else, lists included, replaces), so keys this build doesn't know survive. A stored file that doesn't parse as a JSON object is logged at `warn` and replaced by the patch. A mutex in `BookLibrary` serializes concurrent `set_config` calls (for all users at once). A missing or unparseable file reads as the default config (zero values: scrolled, medium margins, images keep their colours, system theme). `reader.theme` is a theme's id (below); unset, or an id the user's theme list doesn't have, is the list's default (`light`). Renaming the theme it names moves it to the new id.
+
+### `users/<user>/themes/<id>.json` (`configpb.ReaderThemeSpec`)
+
+The user's own reader themes, one file each (`crates/core/src/themes/`). A theme is a `name` and a stack of colour `layers` (invert, hue rotation, saturation, brightness and contrast, levels, multiply, or a raw 3×4 matrix), which the reader composes into one colour matrix ([frontend.md](frontend.md)).
+
+```json
+{
+  "name": "Night",
+  "layers": [
+    { "skip_images": true, "invert": {} },
+    { "skip_images": true, "hue_rotate": { "degrees": 180 } },
+    { "levels": { "black": "#14110d", "white": "#c8b08e" } }
+  ]
+}
+```
+
+- **Names and ids:** a name is 1 to 32 of ASCII letters, digits, space, `-` and `_`. Its id is the name lowercased with spaces as `-` (`My Night` → `my-night`), which is also the file name. Names with the same id are the same theme.
+- **The file name isn't trusted:** every `.json` file in `themes/` is read and its id taken from the `name` inside. A file that can't be read or parsed, or whose name is invalid, is skipped with a `warn`; when two files have the same id, the first by file name is used. Saving a theme writes `<id>.json` and deletes any other file with its id.
+- **Built-ins:** Light, Paper, Sepia, Solarized Light, Green Tea, E-ink, Warm, Dark, Slate, Nord, Solarized Dark, AMOLED, Night, Red Night and Amber (light ones first, in that order) are Rust statics (`themes/builtin.rs`), never files. A user's theme with a built-in's id takes its place in the list (`OVERRIDDEN`); deleting it brings the built-in back. Built-ins can't be deleted or renamed.
+- **Limits** (checked on `set_theme`, `rename_theme` and import): 128 themes per user, 32 layers per theme; every layer needs a kind, finite numbers, factors of 0 or more, colours as `#rrggbb` and a matrix of 12 values. A layer kind a newer build added reads as a layer with no kind, which the reader skips.
+- **Locking:** theme changes take the same mutex as `set_config`, since a rename changes both.
 
 ### Writes
 
