@@ -73,6 +73,11 @@ export function Settings() {
   if (section && pageSlug && !page) {
     return <Navigate to={`${SETTINGS_PATH}/${section.slug}`} replace state={state} />
   }
+  // Wide screens always show a section, so its slug goes in the URL: its pages build their paths
+  // from it.
+  if (wide && !slug && sections[0]) {
+    return <Navigate to={`${SETTINGS_PATH}/${sections[0].slug}`} replace state={state} />
+  }
   const shown = section ?? (wide ? sections[0] : undefined)
 
   const openSection = (s: Section) => {
