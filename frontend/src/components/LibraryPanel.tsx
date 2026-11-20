@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  ChevronRight,
   Circle,
   CircleCheck,
   Folder,
@@ -138,10 +139,15 @@ export function LibraryPanel({
         {!!error && <p className="text-destructive">{String(error)}</p>}
         {!!pickError && <p className="mb-4 text-destructive">{String(pickError)}</p>}
         {empty && <p className="mt-8 text-center text-muted-foreground">No books here.</p>}
-        {dirs.data && books.data && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-4">
+        {dirs.data && books.data && subDirs.length > 0 && (
+          <div
+            className={cn(
+              "grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2",
+              bookItems.length > 0 && "mb-6",
+            )}
+          >
             {subDirs.map((name) => (
-              <FolderTile
+              <FolderRow
                 key={name}
                 name={name}
                 selected={selection && selection.dirs.has(name)}
@@ -149,6 +155,10 @@ export function LibraryPanel({
                 onLongPress={() => !selection && startSelecting({ dir: name })}
               />
             ))}
+          </div>
+        )}
+        {dirs.data && books.data && bookItems.length > 0 && (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-4">
             {bookItems.map((book) => (
               <BookTile
                 key={book.fileName}
@@ -366,7 +376,9 @@ type TileProps = {
   onLongPress: () => void
 }
 
-/** A tile's button, with the check mark it shows while selecting. */
+const PRESSABLE = "select-none [-webkit-touch-callout:none]"
+
+/** A book tile's button, with the check mark it shows while selecting. */
 function Tile({
   selected,
   onClick,
@@ -381,10 +393,7 @@ function Tile({
       onClick={onClick}
       {...longPress}
       aria-pressed={selected ?? undefined}
-      className={cn(
-        "relative flex flex-col gap-2 text-left select-none [-webkit-touch-callout:none]",
-        className,
-      )}
+      className={cn("relative flex flex-col gap-2 text-left", PRESSABLE, className)}
     >
       {children}
       {selected !== null && (
@@ -396,19 +405,31 @@ function Tile({
   )
 }
 
-function FolderTile({ name, ...tile }: TileProps & { name: string }) {
+/** A subfolder: a short row, so a few of them don't push the books off the screen. */
+function FolderRow({ name, selected, onClick, onLongPress }: TileProps & { name: string }) {
+  const longPress = useLongPress(onLongPress)
   return (
-    <Tile {...tile}>
-      <div
-        className={cn(
-          "flex aspect-[2/3] items-center justify-center rounded-md bg-muted/50 text-muted-foreground transition-colors hover:bg-muted",
-          tile.selected && "ring-2 ring-primary",
-        )}
-      >
-        <Folder className="size-1/3" />
-      </div>
-      <span className="line-clamp-2 text-sm font-medium">{name}</span>
-    </Tile>
+    <button
+      type="button"
+      onClick={onClick}
+      {...longPress}
+      aria-pressed={selected ?? undefined}
+      className={cn(
+        "flex min-w-0 items-center gap-3 rounded-lg bg-muted/50 px-3 py-2.5 text-left transition-colors hover:bg-muted",
+        PRESSABLE,
+        selected && "ring-2 ring-primary",
+      )}
+    >
+      <Folder className="size-5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+      {selected === null ? (
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      ) : selected ? (
+        <CircleCheck className="size-5 shrink-0 text-primary" />
+      ) : (
+        <Circle className="size-5 shrink-0 text-primary" />
+      )}
+    </button>
   )
 }
 

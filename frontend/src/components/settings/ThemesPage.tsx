@@ -46,17 +46,34 @@ export function ThemesPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          A theme recolours the book's pages. Yours are kept in the library, for you.
-        </p>
-        <Button className="shrink-0" onClick={() => open("new-theme")}>
-          <Plus />
-          New theme
-        </Button>
-      </div>
-      {remove.isError && <p className="text-sm text-destructive">{String(remove.error)}</p>}
-      <SettingsGroup label="Themes" heading="" list>
+      {remove.isError && <p className="px-1 text-sm text-destructive">{String(remove.error)}</p>}
+      <SettingsGroup
+        label="Themes"
+        heading=""
+        description="A theme recolours the book's pages. Yours are kept in the library, for you."
+        list
+      >
+        <li>
+          <button
+            type="button"
+            onClick={() => open("new-theme")}
+            className="flex w-full items-center gap-3 py-3 text-left"
+          >
+            <span
+              aria-hidden
+              className="flex size-10 shrink-0 items-center justify-center rounded-md border border-dashed text-muted-foreground"
+            >
+              <Plus className="size-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">New theme</span>
+              <span className="block text-sm text-muted-foreground">
+                From scratch, or starting from any theme
+              </span>
+            </span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        </li>
         {themes.data.themes.map((theme) => (
           <ThemeItem
             key={theme.id}

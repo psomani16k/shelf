@@ -1,7 +1,7 @@
 import { fromJsonString, toJsonString } from "@bufbuild/protobuf"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CircleMinus, LoaderCircle, Plus } from "lucide-react"
-import { type ComponentProps, useRef, useState } from "react"
+import { CircleMinus, Folder, LoaderCircle, Plus, Server } from "lucide-react"
+import { useRef, useState } from "react"
 import { cleanUpProgress, exportUserData, importUserData, rebuildIndex } from "@/api"
 import { saveJsonFile } from "@/api/app"
 import { AddLibraryForm } from "@/components/AddLibraryForm"
@@ -24,20 +24,23 @@ import { usePermissions } from "@/lib/useMe"
 export function LibrarySection() {
   const { canAdmin } = usePermissions()
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-8">
       {IS_TAURI && <Libraries />}
-      <ExportData />
-      <ImportData />
-      {canAdmin && (
-        <>
+      <SettingsGroup label="Your reading data">
+        <ExportData />
+        <ImportData />
+      </SettingsGroup>
+      {canAdmin ? (
+        <SettingsGroup label="Maintenance">
           <RebuildIndex />
           <CleanUpProgress />
-        </>
-      )}
-      {!canAdmin && !IS_TAURI && (
-        <p className="text-sm text-muted-foreground">
-          Rebuilding the index and cleaning up progress need an admin.
-        </p>
+        </SettingsGroup>
+      ) : (
+        !IS_TAURI && (
+          <p className="px-1 text-sm text-muted-foreground">
+            Rebuilding the index and cleaning up progress need an admin.
+          </p>
+        )
       )}
     </div>
   )
@@ -59,10 +62,17 @@ function Libraries() {
           </div>
         ) : (
           <div key={library.name} className="flex items-center gap-3 py-3">
+            {library.kind === "local" ? (
+              <Folder className="size-5 shrink-0 text-muted-foreground" />
+            ) : (
+              <Server className="size-5 shrink-0 text-muted-foreground" />
+            )}
             <div className="min-w-0 flex-1">
               <NameWithBadge name={library.name} badge={library.name === current?.name && "Open"} />
               <p className="truncate text-sm text-muted-foreground">
-                {library.kind === "local" ? "Folder on this device: " : "Shelf server: "}
+                <span className="sr-only">
+                  {library.kind === "local" ? "Folder on this device: " : "Shelf server: "}
+                </span>
                 {library.location}
               </p>
             </div>
@@ -111,8 +121,8 @@ function ExportData() {
   const result = save.data
 
   return (
-    <Row
-      title="Export your reading data"
+    <ActionRow
+      title="Export"
       description="Saves your reading progress, last book and settings as a file, to import into another library: a server, or a folder on a device."
       status={result?.saved && `Exported your progress for ${plural(result.books, "book")}.`}
       error={save.isError && String(save.error)}
@@ -126,7 +136,7 @@ function ExportData() {
         {save.isPending && <LoaderCircle className="animate-spin" />}
         Export
       </Button>
-    </Row>
+    </ActionRow>
   )
 }
 
@@ -168,8 +178,8 @@ function ImportData() {
   }
 
   return (
-    <Row
-      title="Import reading data"
+    <ActionRow
+      title="Import"
       description={
         picked
           ? `Import your progress for ${plural(picked.progress.length, "book")}? It replaces your progress for those books, your last book and your settings.`
@@ -210,7 +220,7 @@ function ImportData() {
           e.target.value = ""
         }}
       />
-    </Row>
+    </ActionRow>
   )
 }
 
@@ -228,7 +238,7 @@ function RebuildIndex() {
   const result = rebuild.data
 
   return (
-    <Row
+    <ActionRow
       title="Rebuild index"
       description="Re-reads every book file and refreshes the library's index. Use it when books are missing, duplicated or out of date. Takes a while on a large library."
       status={
@@ -246,7 +256,7 @@ function RebuildIndex() {
         {rebuild.isPending && <LoaderCircle className="animate-spin" />}
         {rebuild.isPending ? "Rebuilding…" : "Rebuild"}
       </Button>
-    </Row>
+    </ActionRow>
   )
 }
 
@@ -256,7 +266,7 @@ function CleanUpProgress() {
   const removed = clean.data?.books
 
   return (
-    <Row
+    <ActionRow
       title="Clean up progress"
       description={
         confirming
@@ -290,15 +300,6 @@ function CleanUpProgress() {
           Clean up
         </Button>
       )}
-    </Row>
-  )
-}
-
-/** An `ActionRow` in a card of its own. */
-function Row(props: ComponentProps<typeof ActionRow>) {
-  return (
-    <div className="rounded-lg border px-4">
-      <ActionRow {...props} />
-    </div>
+    </ActionRow>
   )
 }

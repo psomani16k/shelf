@@ -21,19 +21,17 @@ import { LOG_FILES_KEY, LOG_SETTINGS_KEY } from "@/lib/queryKeys"
 /** App only, under *Developer options*: how many log files this device keeps, and getting them off it. */
 export function LogsSection() {
   return (
-    <section aria-label="Logs" className="flex flex-col gap-4">
-      <h3 className="-mb-2 px-1 font-medium">Logs</h3>
-      <p className="px-1 text-sm text-muted-foreground">
-        The app keeps a log of what it does, to help track down problems. It stays on this device
-        until you copy or save it.
-      </p>
-      <div className="divide-y rounded-lg border px-4">
+    <div className="flex flex-col gap-8">
+      <SettingsGroup
+        label="Logs"
+        description="The app keeps a log of what it does, to help track down problems. It stays on this device until you copy or save it."
+      >
         <KeepFiles />
         <CopyLogs />
         <SaveLogs />
-      </div>
+      </SettingsGroup>
       <LogFiles />
-    </section>
+    </div>
   )
 }
 
@@ -161,7 +159,7 @@ function KeepFiles() {
         min={1}
         max={max}
         step={1}
-        className="w-full shrink-0 sm:w-44"
+        className="w-24 shrink-0"
         aria-label="Log files to keep"
         aria-invalid={draft !== undefined && !valid}
         value={value}

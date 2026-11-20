@@ -29,6 +29,7 @@ import {
 } from "@/lib/themeLayers"
 import { PREVIEW_HTML } from "@/lib/themePreview"
 import { useLibraryConfig, useReaderThemes, useSaveTheme } from "@/lib/useAppearance"
+import { cn } from "cn"
 
 /** A layer and a key that stays with it as layers move, for React. */
 type Item = { key: number; layer: ThemeLayer }
@@ -123,11 +124,7 @@ export function ThemeBuilder() {
       <SettingsGroup
         label="Layers"
         list
-        notice={
-          <p className="mb-2 px-1 text-sm text-muted-foreground">
-            Applied to the page from the top down. No layers leaves the book as published.
-          </p>
-        }
+        description="Applied to the page from the top down. No layers leaves the book as published."
         footer={
           <ChoiceSelect<string>
             choices={[
@@ -225,24 +222,35 @@ function Preview({
           style={{ colorScheme: "light" }}
         />
       </div>
-      <div role="group" aria-label="Images in the preview" className="mt-2 flex items-center gap-1">
-        <span className="mr-1 text-xs text-muted-foreground">Images</span>
-        {(
-          [
-            ["keep", "Keep colours"],
-            ["page", "Like the page"],
-          ] as const
-        ).map(([value, text]) => (
-          <Button
-            key={value}
-            size="xs"
-            variant={images === value ? "secondary" : "ghost"}
-            aria-pressed={images === value}
-            onClick={() => onImages(value)}
-          >
-            {text}
-          </Button>
-        ))}
+      <div className="mt-2 flex items-center gap-2 px-1">
+        <span className="text-sm text-muted-foreground">Images</span>
+        <div
+          role="group"
+          aria-label="Images in the preview"
+          className="inline-flex rounded-lg bg-muted p-0.5"
+        >
+          {(
+            [
+              ["keep", "Keep colours"],
+              ["page", "Like the page"],
+            ] as const
+          ).map(([value, text]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={images === value}
+              onClick={() => onImages(value)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                images === value
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

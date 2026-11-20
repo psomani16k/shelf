@@ -41,7 +41,7 @@ export function LibrarySwitcher({
                   <Select.Item
                     key={library.name}
                     value={library.name}
-                    className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+                    className="flex cursor-default items-center gap-2 rounded-md px-1 py-1.5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
                   >
                     <Select.ItemText className="flex min-w-0 flex-1">
                       <LibraryLabel library={library} />
@@ -67,7 +67,7 @@ export function LibrarySwitcher({
 function LibraryLabel({ library }: { library: LibraryInfo }) {
   return (
     <span className="flex min-w-0 flex-1 flex-col">
-      <span className="truncate font-medium">{library.name}</span>
+      <span className="truncate text-sm font-medium">{library.name}</span>
       <span className="truncate text-xs text-muted-foreground">{library.location}</span>
     </span>
   )

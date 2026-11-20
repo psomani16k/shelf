@@ -127,33 +127,37 @@ export function Settings() {
 
       {shown && (
         <main className="flex min-w-0 flex-1 flex-col">
-          <ScreenHeader
-            title={page?.title ?? shown.label}
-            className="md:border-b-0"
-            start={
-              page ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => pages.back(page.parent)}
-                  aria-label={`Back to ${parentTitle}`}
-                >
-                  <ArrowLeft />
-                </Button>
-              ) : (
-                !wide && (
+          {/* Wide: in the content's column, so the title sits over what it names. */}
+          <div className="md:px-8">
+            <ScreenHeader
+              title={page?.title ?? shown.label}
+              className="md:mx-auto md:max-w-2xl md:border-b-0 md:px-0 md:[&>h1]:pl-1"
+              start={
+                page ? (
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={backToList}
-                    aria-label="Back to settings"
+                    className="md:-ml-1"
+                    onClick={() => pages.back(page.parent)}
+                    aria-label={`Back to ${parentTitle}`}
                   >
                     <ArrowLeft />
                   </Button>
+                ) : (
+                  !wide && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={backToList}
+                      aria-label="Back to settings"
+                    >
+                      <ArrowLeft />
+                    </Button>
+                  )
                 )
-              )
-            }
-          />
+              }
+            />
+          </div>
           <div className="flex-1 overflow-y-auto overscroll-contain p-4 md:px-8 md:pb-8 md:pt-2">
             <div className="mx-auto max-w-2xl">
               {page ? (

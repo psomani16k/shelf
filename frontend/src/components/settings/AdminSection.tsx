@@ -18,6 +18,7 @@ import {
 import { Breadcrumb } from "@/components/Breadcrumb"
 import { ChoiceSelect } from "@/components/settings/ChoiceSelect"
 import { NameWithBadge } from "@/components/settings/NameWithBadge"
+import { GroupHeading } from "@/components/settings/SettingsGroup"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -56,7 +57,7 @@ export function AdminSection() {
   })
   const requests = useQuery({ queryKey: USER_REQUESTS_KEY, queryFn: listUserRequests })
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <Card
         title="Users"
         description="Open a user to see or change their role and the part of the library they see."
@@ -92,8 +93,7 @@ function Card<T>({
 }) {
   return (
     <section aria-label={title}>
-      <h3 className="px-1 font-medium">{title}</h3>
-      <p className="mb-2 px-1 text-sm text-muted-foreground">{description}</p>
+      <GroupHeading heading={title} description={description} />
       {query.isPending ? (
         <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
       ) : query.isError ? (

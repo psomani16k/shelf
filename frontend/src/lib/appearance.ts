@@ -138,6 +138,7 @@ export function readerCss({ pageMarginRight = 0, zoom = 1 } = {}): string {
     html { color-scheme: light; color: #000; background: transparent !important; }
     html { margin-right: ${pageMarginRight}px !important; }
     body { background: transparent !important; filter: var(--shelf-filter, none) !important; }
+    body { hyphens: auto; -webkit-hyphens: auto; }
     img, video, canvas, svg:has(image) { filter: var(--shelf-image-filter, none) !important; }
   `
   if (zoom !== 1) {
