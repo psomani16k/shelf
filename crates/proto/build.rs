@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "apipb/list.proto",
         "bookkeeperpb/metadata.proto",
         "bookkeeperpb/progress.proto",
+        "bookkeeperpb/annotation.proto",
         "configpb/config.proto",
         "configpb/theme.proto",
         "statepb/state.proto",
@@ -19,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "apipb/auth.proto",
         "apipb/user_data.proto",
         "apipb/theme.proto",
+        "apipb/annotation.proto",
         "serverpb/data.proto",
     ];
 

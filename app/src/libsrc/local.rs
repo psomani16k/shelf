@@ -9,6 +9,8 @@ use shelf_core::{
 };
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -17,6 +19,7 @@ use shelf_proto::{
         UploadEbookRequest, UploadEbookResponse,
         DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 use tokio::sync::{Mutex, RwLock};
@@ -151,6 +154,32 @@ impl Library for LocalLibrary {
     async fn set_progress(&self, mut req: SetProgressRequest) -> Result<(), LibraryError> {
         req.user = self.user().await?;
         self.book_library.set_progress(req).await
+    }
+
+    async fn list_annotations(
+        &self,
+        mut req: ListAnnotationsRequest,
+    ) -> Result<ListAnnotationsResponse, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.list_annotations(req).await
+    }
+
+    async fn add_annotation(&self, mut req: AddAnnotationRequest) -> Result<Annotation, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.add_annotation(req).await
+    }
+
+    async fn update_annotation(
+        &self,
+        mut req: UpdateAnnotationRequest,
+    ) -> Result<Annotation, LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.update_annotation(req).await
+    }
+
+    async fn delete_annotation(&self, mut req: DeleteAnnotationRequest) -> Result<(), LibraryError> {
+        req.user = self.user().await?;
+        self.book_library.delete_annotation(req).await
     }
 
     async fn get_state(&self, mut req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {

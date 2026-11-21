@@ -32,6 +32,8 @@ A book's ID is the **lowercase hex SHA-1 of the whole file's bytes** (`EbookExtr
         thumbnail.jpeg   only if a cover image was found
         progress/
           <user>.json    BookProgress, one per user, once they've read the book
+        annotations/
+          <user>.json    BookAnnotations: that user's highlights in the book
     users/
       <user>/
         config.json      Config: that user's settings (reader and UI), partially updated by set_config
@@ -82,6 +84,30 @@ Names alone are never used to guess a cover, since books also have files like `b
 
 One file per user, so users never write the same file. `<user>` is a username (`shelf_core::library::user::validate_user`: 1 to 32 of `a–z`, `0–9`, `-`, `_`, so it's a safe file name); the file also stores it in `user`, but only the file name decides which file is read. On the server it's the signed-in user; in an app's local library it's the name chosen on that device. An unreadable file is logged at `warn` and reads as no progress. A `progress.json` directly in the book folder, from before per-user progress, is ignored.
 
+### `annotations/<user>.json` (`bookkeeperpb.BookAnnotations`)
+
+```json
+{
+  "annotations": [
+    {
+      "id": "6f1c0e5b9a7d4c2e8b3a1f0d9e8c7b6a",
+      "cfi": "epubcfi(/6/14!/4/2/10,/1:0,/1:120)",
+      "text": "the spice must flow",
+      "chapter": "Book One: Dune",
+      "note": "",
+      "color": "YELLOW",
+      "created": "2026-11-20T09:30:00Z",
+      "updated": "2026-11-20T09:31:12Z"
+    }
+  ],
+  "user": "parth"
+}
+```
+
+One file per user and book, like progress, kept in the order the annotations were made (oldest first). Every annotation is a highlight of a range CFI; there are no bookmarks. `id` is 32 lowercase hex characters from `getrandom`, made by the backend. `text` and `chapter` are what the client saw when it made the annotation, so a list can show them without opening the book, and they still read well if the CFI stops resolving. `color` is a name (`YELLOW`, `GREEN`, `BLUE`, `PINK`); each reader theme picks its own shade. `created` and `updated` are the backend's clock (`Time`, RFC 3339 UTC, whole seconds); only a note or colour change moves `updated`.
+
+Every change reads the whole file, changes one annotation and writes it back, under `BookLibrary`'s `annotations_lock` (`crates/core/src/library/annotations.rs`, `LibraryView::change_annotations`). **Unlike progress, an unreadable file is an error**: listing or changing that book's annotations fails (a 500) and the file is never written over, so a file mangled by a sync tool or a hand edit loses nothing. Fixing or deleting it by hand makes the book usable again; an export leaves that book's annotations out with a `warn`. Limits (`Invalid` past them): a CFI of up to 2,000 characters starting with `epubcfi(`, text up to 2,000, chapter up to 500, note up to 10,000, and 10,000 annotations per book and user.
+
 ### `users/<user>/state.json` (`statepb.State`)
 
 ```json
@@ -96,7 +122,7 @@ Each user's own settings: every field in `Config` is a personal preference (read
 
 ```json
 {
-  "reader": { "flow": "PAGINATED", "theme": "night", "images": "KEEP", "margins": { "side": "LARGE" } },
+  "reader": { "flow": "PAGINATED", "theme": "night", "images": "KEEP", "margins": { "side": "LARGE" }, "search_engine": "GOOGLE" },
   "ui": { "theme": "SYSTEM" }
 }
 ```
@@ -126,7 +152,7 @@ The user's own reader themes, one file each (`crates/core/src/themes/`). A theme
 
 ### Writes
 
-Every file Shelf writes (each user's `state.json` and `config.json`, and each book's `metadata.json`, `progress/<user>.json` and `thumbnail.jpeg`) is written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>-<seq>` directly in `.shelf/`, `fsync`, then a rename over the target (`LocalLibraryStorage::write_atomic`, `crates/core/src/storage/local_storage.rs`). A rename is atomic within one filesystem, so the temp file can't go in the OS temp dir. Keeping every temp file directly in `.shelf/`, even for a book's files, lets the cleanup find them without listing each book's folder. `<seq>` is a per-process counter, so concurrent writes in the same nanosecond don't share a temp file. `write_shelf_file` creates missing folders first (`.shelf/` itself in a library with no books yet, and `users/<user>/`). Leftover temp files are deleted when a library opens, after the startup sync (`LocalLibraryStorage::clean_up_temp_files`).
+Every file Shelf writes (each user's `state.json` and `config.json`, and each book's `metadata.json`, `progress/<user>.json`, `annotations/<user>.json` and `thumbnail.jpeg`) is written atomically: a hidden temp file `.<name>.tmp-<pid>-<nanos>-<seq>` directly in `.shelf/`, `fsync`, then a rename over the target (`LocalLibraryStorage::write_atomic`, `crates/core/src/storage/local_storage.rs`). A rename is atomic within one filesystem, so the temp file can't go in the OS temp dir. Keeping every temp file directly in `.shelf/`, even for a book's files, lets the cleanup find them without listing each book's folder. `<seq>` is a per-process counter, so concurrent writes in the same nanosecond don't share a temp file. `write_shelf_file` creates missing folders first (`.shelf/` itself in a library with no books yet, and `users/<user>/`). Leftover temp files are deleted when a library opens, after the startup sync (`LocalLibraryStorage::clean_up_temp_files`).
 
 An uploaded book is written the same way, but its temp file sits next to the target, in the book's folder: `.<name>.part-<pid>-<seq>` (`LocalLibraryStorage::add_book`). It's a dot-file, so the scanner and the watcher skip it, and the rename is the only event they see. A crash mid-upload leaves it behind; nothing cleans it up yet ([known issues](known-issues.md)).
 
@@ -136,7 +162,7 @@ An uploaded book is written the same way, but its temp file sits next to the tar
 
 ## Moving a library
 
-The folder is self-contained, so it can move between a device and a server either way: copy it (`.shelf/` included, so nothing is extracted again), or just copy the books and let the new library extract them. Then each user exports their data from the old library and imports it into the new one (*Settings → Library*, [api.md](api.md)): progress, last book and settings, keyed by book id and carrying no username. If the names match (the local library's reader and the server account), nothing needs importing: the files are already that user's. Files of users without an account are left alone. What doesn't move: the server's accounts, passwords, roles and scopes (`/data/data.json`, outside the library), and per-device settings (reader zoom, the app's interface scale).
+The folder is self-contained, so it can move between a device and a server either way: copy it (`.shelf/` included, so nothing is extracted again), or just copy the books and let the new library extract them. Then each user exports their data from the old library and imports it into the new one (*Settings → Library*, [api.md](api.md)): progress, annotations, last book and settings, keyed by book id and carrying no username. If the names match (the local library's reader and the server account), nothing needs importing: the files are already that user's. Files of users without an account are left alone. What doesn't move: the server's accounts, passwords, roles and scopes (`/data/data.json`, outside the library), and per-device settings (reader zoom, the app's interface scale).
 
 ## Startup sync
 
@@ -150,7 +176,7 @@ The folder is self-contained, so it can move between a device and a server eithe
      - metadata exists and `force` is off: nothing is written; this copy's location is kept, or stamped now if the file's mtime has passed its stamp (so a touched but identical file is hashed once, not on every start);
      - otherwise: parse the EPUB with `rbook` from the bytes already read, then create the folder and write `metadata.json` (with this copy as its only location) and the thumbnail.
 4. Set each book's `locations` to exactly the copies found (a copy that failed extraction gets an empty stamp, so it's read again next time), writing `metadata.json` only where that changes it. Copies that are gone drop out here. A book with no `metadata.json` (new, and its extraction failed) is left alone. Two identical new files may both be fully extracted at once; the output is the same, and every write is atomic.
-5. For every `.shelf/books/<id>/` whose ID no file produced, delete its `metadata.json` and `thumbnail.jpeg` (`LibraryStorage::clean_up_books`), and nothing else: **no folder is deleted**, empty or not, and progress is kept, so a book added back later (same bytes, same ID) is extracted again and every user resumes where they were. Locally, a file that can't be deleted is logged at `warn` and skipped (on S3 it's skipped silently). `SyncReport.removed` counts the books that had something deleted, so a folder holding only kept progress isn't counted again on later starts. Deleting the folders is left to [cleaning up progress](#cleaning-up-progress). Every entry in `.shelf/books/` is treated as a book ID, so a sync tool's conflict copy of a book folder loses those two files too, and anything else in it stays.
+5. For every `.shelf/books/<id>/` whose ID no file produced, delete its `metadata.json` and `thumbnail.jpeg` (`LibraryStorage::clean_up_books`), and nothing else: **no folder is deleted**, empty or not, and progress and annotations are kept, so a book added back later (same bytes, same ID) is extracted again and every user resumes where they were, highlights included. Locally, a file that can't be deleted is logged at `warn` and skipped (on S3 it's skipped silently). `SyncReport.removed` counts the books that had something deleted, so a folder holding only kept progress isn't counted again on later starts. Deleting the folders is left to [cleaning up progress](#cleaning-up-progress). Every entry in `.shelf/books/` is treated as a book ID, so a sync tool's conflict copy of a book folder loses those two files too, and anything else in it stays.
 6. Log `library synced` with `books`, `hashed` (read and synced successfully), `skipped`, `failed` and `removed` counts, and `force`.
 
 A file that fails (for example half-copied) is logged at `warn` and retried on the next watcher event or startup. A file that was hashed but couldn't be extracted (an EPUB rbook can't parse) still counts as producing its ID, so its `.shelf/books/<id>/` folder and progress are kept; the folder is only created once the EPUB has parsed. Only a file that can't be read at all leaves its ID unproduced.
@@ -163,7 +189,7 @@ After the sync, every `metadata.json` is loaded into an in-memory `Vec<BookMetad
 
 ## Cleaning up progress
 
-`Library::clean_up_progress` (*Settings → Library → Clean up progress*; `BookLibrary::clean_up_progress`, `LibraryStorage::clean_up_progress`) deletes every `.shelf/books/<id>/` folder that has no `metadata.json`, every user's progress in it included. Those are the books the startup sync found no file for. Kept anyway:
+`Library::clean_up_progress` (*Settings → Library → Clean up progress*; `BookLibrary::clean_up_progress`, `LibraryStorage::clean_up_progress`) deletes every `.shelf/books/<id>/` folder that has no `metadata.json`, every user's progress and annotations in it included. Those are the books the startup sync found no file for. Kept anyway:
 
 - An ID in the in-memory index, even with its `metadata.json` gone (deleted from outside Shelf while the book is still here).
 - A folder whose `metadata.json` can't be checked (an I/O error counts as having one), and any entry in `.shelf/books/` that isn't a folder.

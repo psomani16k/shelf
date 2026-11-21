@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
+use shelf_proto::bookkeeping::{BookAnnotations, BookMetadata, BookProgress};
 use shelf_utility::timeutil::Time;
 use tracing::{debug, warn};
 
@@ -104,6 +104,12 @@ impl LocalLibraryStorage {
     fn progress_path(&self, hash: &str, user: &str) -> PathBuf {
         self.book_dir_by_id(hash)
             .join("progress")
+            .join(format!("{user}.json"))
+    }
+
+    fn annotations_path(&self, hash: &str, user: &str) -> PathBuf {
+        self.book_dir_by_id(hash)
+            .join("annotations")
             .join(format!("{user}.json"))
     }
 
@@ -262,6 +268,29 @@ impl LibraryStorage for LocalLibraryStorage {
             fs::create_dir_all(dir)?;
         }
         self.write_atomic(&progress_file, serde_json::to_string_pretty(&progress)?.as_bytes())
+    }
+
+    fn book_annotations(&self, hash: &str, user: &str) -> Result<Option<BookAnnotations>> {
+        let path = self.annotations_path(hash, user);
+        let Some(json) = found(fs::read_to_string(&path))? else {
+            return Ok(None);
+        };
+        let annotations = serde_json::from_str(&json)
+            .with_context(|| format!("couldn't parse {}", path.display()))?;
+        Ok(Some(annotations))
+    }
+
+    fn set_book_annotations(
+        &self,
+        hash: &str,
+        user: &str,
+        annotations: &BookAnnotations,
+    ) -> Result<()> {
+        let path = self.annotations_path(hash, user);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        self.write_atomic(&path, serde_json::to_string_pretty(annotations)?.as_bytes())
     }
 
     async fn book_thumbnail(&self, hash: &str) -> Result<Option<FileContent>> {
@@ -545,6 +574,7 @@ mod tests {
             storage.create_book_dir(id).unwrap();
         }
         storage.set_book_progress("progress-only", "default", BookProgress::default()).unwrap();
+        storage.set_book_annotations("empty", "default", &BookAnnotations::default()).unwrap();
         storage.set_book_progress("kept", "default", BookProgress::default()).unwrap();
         storage.set_book_metadata("has-metadata", &meta).unwrap();
         fs::write(storage.books_dir().join("stray-file"), "x").unwrap();

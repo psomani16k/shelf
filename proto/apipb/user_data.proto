@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package apipb;
 
+import "bookkeeperpb/annotation.proto";
 import "configpb/config.proto";
 import "configpb/theme.proto";
 
@@ -15,6 +16,12 @@ message UserData {
   configpb.Config config = 4;
   // The user's own themes (not the built-ins they don't override).
   repeated configpb.ReaderThemeSpec themes = 5;
+  repeated BookAnnotationsEntry annotations = 6;
+}
+
+message BookAnnotationsEntry {
+  string id = 1;
+  repeated bookkeeperpb.Annotation annotations = 2;
 }
 
 message BookProgressEntry {
@@ -41,4 +48,6 @@ message ImportUserDataResponse {
   uint32 skipped = 2;
   // Themes written; invalid ones, and ones past the limit, are skipped.
   uint32 themes = 3;
+  // Annotations added or replaced (by a newer copy with the same id).
+  uint32 annotations = 4;
 }

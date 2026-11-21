@@ -19,6 +19,7 @@ import {
 } from "@/gen/configpb/config_pb"
 import { IS_TAURI } from "@/lib/platform"
 import { permissions, useMe } from "@/lib/useMe"
+import { SEARCH_ENGINES } from "@/lib/webSearch"
 import { AccountSection } from "./AccountSection"
 import { AdminSection } from "./AdminSection"
 import { InterfaceSection } from "./InterfaceSection"
@@ -108,6 +109,15 @@ export const READER_IMAGES: Setting = {
   patch: (images) => ({ reader: { images } }),
 }
 
+const SEARCH_ENGINE: Setting = {
+  id: "reader.search_engine",
+  label: "Search web",
+  description: "Where the reader's Search web sends selected text, opened in your browser.",
+  choices: SEARCH_ENGINES.map(({ value, label }) => ({ value, label })),
+  read: (c) => c.reader?.searchEngine,
+  patch: (searchEngine) => ({ reader: { searchEngine } }),
+}
+
 const SECTIONS: Section[] = [
   {
     slug: "reader",
@@ -118,7 +128,7 @@ const SECTIONS: Section[] = [
       "new-theme": { title: "New theme", component: ThemeBuilder, parent: "themes" },
     },
     groups: [
-      { settings: [READER_FLOW, ThemeRow, ThemesRow, READER_IMAGES] },
+      { settings: [READER_FLOW, ThemeRow, ThemesRow, READER_IMAGES, SEARCH_ENGINE] },
       {
         label: "Margins",
         settings: [

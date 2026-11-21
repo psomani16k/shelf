@@ -7,6 +7,8 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, BookAnnotationsEntry, DeleteAnnotationRequest,
+        ListAnnotationsRequest, ListAnnotationsResponse, UpdateAnnotationRequest,
         BookProgressEntry, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest,
         DeleteItemsResponse, ExportUserDataRequest, GetProgressRequest, GetProgressResponse,
         GetStateRequest, GetStateResponse, ImportUserDataRequest, ImportUserDataResponse,
@@ -14,14 +16,15 @@ use shelf_proto::{
         ListDirectoriesResponse, SetProgressRequest, SetStateRequest, UploadEbookRequest,
         UploadEbookResponse, UserData,
     },
-    bookkeeping::{BookProgress, EpubProgress, book_file_type},
+    bookkeeping::{Annotation, BookAnnotations, BookProgress, EpubProgress, book_file_type},
 };
+use shelf_utility::timeutil::Time;
 use tracing::{info, warn};
 
 use crate::{
     ebook_ingest::sha1_hex,
     library::{
-        LibraryError,
+        LibraryError, annotations,
         book_library::BookLibrary,
         locations::{has_copy, location, remove_from_index, under},
         names::{entry_name, folder_path},
@@ -183,6 +186,75 @@ impl LibraryView<'_> {
         Ok(())
     }
 
+    pub async fn list_annotations(
+        &self,
+        req: ListAnnotationsRequest,
+    ) -> Result<ListAnnotationsResponse, LibraryError> {
+        validate_user(&req.user)?;
+        self.require_book(&req.id).await?;
+        let annotations = self
+            .lib
+            .with_storage(move |s| read_annotations(&s, &req.id, &req.user))
+            .await?;
+        Ok(ListAnnotationsResponse { annotations })
+    }
+
+    pub async fn add_annotation(&self, req: AddAnnotationRequest) -> Result<Annotation, LibraryError> {
+        validate_user(&req.user)?;
+        self.require_book(&req.id).await?;
+        let (id, user, now) = (req.id.clone(), req.user.clone(), Time::now());
+        self.change_annotations(id, user, move |list| Ok((annotations::add(list, req, now)?, true)))
+            .await
+    }
+
+    pub async fn update_annotation(
+        &self,
+        req: UpdateAnnotationRequest,
+    ) -> Result<Annotation, LibraryError> {
+        validate_user(&req.user)?;
+        self.require_book(&req.id).await?;
+        let (id, user, now) = (req.id.clone(), req.user.clone(), Time::now());
+        self.change_annotations(id, user, move |list| {
+            Ok((annotations::update(list, req, now)?, true))
+        })
+        .await
+    }
+
+    pub async fn delete_annotation(&self, req: DeleteAnnotationRequest) -> Result<(), LibraryError> {
+        validate_user(&req.user)?;
+        self.require_book(&req.id).await?;
+        let annotation_id = req.annotation_id;
+        self.change_annotations(req.id, req.user, move |list| {
+            Ok(((), annotations::remove(list, &annotation_id)))
+        })
+        .await
+    }
+
+    /// Runs `change` on the user's annotations of the book and writes them back if it says they
+    /// changed. A file that can't be read fails the change, so it's never written over.
+    async fn change_annotations<T: Send + 'static>(
+        &self,
+        id: String,
+        user: String,
+        change: impl FnOnce(&mut Vec<Annotation>) -> Result<(T, bool), LibraryError> + Send + 'static,
+    ) -> Result<T, LibraryError> {
+        let _guard = self.lib.annotations_lock.lock().await;
+        self.lib
+            .with_storage(move |s| {
+                let mut list = read_annotations(&s, &id, &user)?;
+                let (out, changed) = match change(&mut list) {
+                    Ok(done) => done,
+                    Err(e) => return Ok(Err(e)),
+                };
+                if changed {
+                    let file = BookAnnotations { annotations: list, user: user.clone() };
+                    s.set_book_annotations(&id, &user, &file)?;
+                }
+                Ok(Ok(out))
+            })
+            .await?
+    }
+
     /// A last book the user can't see comes back unset.
     pub async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {
         validate_user(&req.user)?;
@@ -204,8 +276,9 @@ impl LibraryView<'_> {
         self.set_last_book(&req.user, req.last_book_id).await
     }
 
-    /// The user's progress for every book they can see, their last book, their settings and
-    /// their own themes, without their name, so it can be imported as anyone.
+    /// The user's progress and annotations for every book they can see, their last book, their
+    /// settings and their own themes, without their name, so it can be imported as anyone. A
+    /// book whose annotations file can't be read is exported without them.
     pub async fn export_user_data(
         &self,
         req: ExportUserDataRequest,
@@ -214,17 +287,28 @@ impl LibraryView<'_> {
         let mut ids: Vec<String> = self.visible_ids().await.into_iter().collect();
         ids.sort();
         let user = req.user.clone();
-        let progress = self
+        let (progress, annotations) = self
             .lib
             .with_storage(move |s| {
-                let entries = ids
-                    .into_iter()
+                let progress = ids
+                    .iter()
                     .filter_map(|id| {
-                        let epub_progress = read_cfi(&s, &id, &user)?;
-                        Some(BookProgressEntry { id, epub_progress })
+                        let epub_progress = read_cfi(&s, id, &user)?;
+                        Some(BookProgressEntry { id: id.clone(), epub_progress })
                     })
                     .collect();
-                Ok(entries)
+                let annotations = ids
+                    .into_iter()
+                    .filter_map(|id| match read_annotations(&s, &id, &user) {
+                        Ok(annotations) if annotations.is_empty() => None,
+                        Ok(annotations) => Some(BookAnnotationsEntry { id, annotations }),
+                        Err(e) => {
+                            warn!(%id, error = %format!("{e:#}"), "left unreadable annotations out of an export");
+                            None
+                        }
+                    })
+                    .collect();
+                Ok((progress, annotations))
             })
             .await?;
         let state = GetStateRequest {
@@ -239,10 +323,12 @@ impl LibraryView<'_> {
             last_book_id,
             config: Some(config),
             themes,
+            annotations,
         })
     }
 
-    /// Imported progress replaces the user's own; books this view doesn't have are skipped.
+    /// Imported progress replaces the user's own and imported annotations are merged into theirs;
+    /// books this view doesn't have are skipped.
     /// Only ids in the index are written, so none from the file becomes a path.
     pub async fn import_user_data(
         &self,
@@ -272,6 +358,16 @@ impl LibraryView<'_> {
                 Ok(())
             })
             .await?;
+        let mut merged = 0;
+        for entry in data.annotations.into_iter().filter(|e| visible.contains(&e.id)) {
+            let user = req.user.clone();
+            merged += self
+                .change_annotations(entry.id, user, move |list| {
+                    let written = annotations::merge(list, entry.annotations);
+                    Ok((written as u32, written > 0))
+                })
+                .await?;
+        }
         if let Some(id) = data.last_book_id
             && visible.contains(&id)
         {
@@ -286,11 +382,12 @@ impl LibraryView<'_> {
         };
 
         let skipped = total - books;
-        info!(books, skipped, themes, "imported user data");
+        info!(books, skipped, themes, annotations = merged, "imported user data");
         Ok(ImportUserDataResponse {
             books: books as u32,
             skipped: skipped as u32,
             themes,
+            annotations: merged,
         })
     }
 
@@ -606,6 +703,15 @@ fn epub_progress(cfi: String, user: String) -> BookProgress {
         epub_progress: Some(EpubProgress { cfi }),
         user,
     }
+}
+
+/// The user's annotations in the book; an unreadable file is an error, unlike progress.
+fn read_annotations(
+    storage: &LocalLibraryStorage,
+    id: &str,
+    user: &str,
+) -> anyhow::Result<Vec<Annotation>> {
+    Ok(storage.book_annotations(id, user)?.map(|a| a.annotations).unwrap_or_default())
 }
 
 /// The book's saved position; an unreadable progress file counts as none.
@@ -969,5 +1075,126 @@ mod tests {
         assert_eq!(lib.clean_up_progress().await.unwrap().books, 1);
         assert!(!storage.book_dir_by_id(&gone).exists());
         assert!(storage.book_dir_by_id(&kept).join("progress/default.json").exists());
+    }
+
+    fn highlight_in(user: &str, contents: &str, cfi: &str) -> AddAnnotationRequest {
+        AddAnnotationRequest {
+            id: sha1_hex(contents.as_bytes()),
+            cfi: cfi.into(),
+            text: "text".into(),
+            user: user.into(),
+            ..Default::default()
+        }
+    }
+
+    async fn annotations_of(view: &LibraryView<'_>, user: &str, contents: &str) -> Vec<Annotation> {
+        let req = ListAnnotationsRequest {
+            id: sha1_hex(contents.as_bytes()),
+            user: user.into(),
+        };
+        view.list_annotations(req).await.unwrap().annotations
+    }
+
+    #[tokio::test]
+    async fn annotations_are_per_user_and_change_one_at_a_time() {
+        let (_root, lib) = library(&[("a.epub", "a")]).await;
+        let view = lib.view(&EVERYTHING);
+        let first = view.add_annotation(highlight_in("parth", "a", "epubcfi(/6/2)")).await.unwrap();
+        let second = view.add_annotation(highlight_in("parth", "a", "epubcfi(/6/4)")).await.unwrap();
+        view.add_annotation(highlight_in("kid", "a", "epubcfi(/6/6)")).await.unwrap();
+
+        let update = UpdateAnnotationRequest {
+            id: sha1_hex(b"a"),
+            annotation_id: first.id.clone(),
+            note: Some("why".into()),
+            color: None,
+            user: "parth".into(),
+        };
+        let noted = view.update_annotation(update.clone()).await.unwrap();
+        assert_eq!(noted.note, "why");
+        let not_theirs = UpdateAnnotationRequest { user: "kid".into(), ..update };
+        assert!(matches!(view.update_annotation(not_theirs).await, Err(LibraryError::NotFound)));
+
+        let delete = DeleteAnnotationRequest {
+            id: sha1_hex(b"a"),
+            annotation_id: second.id,
+            user: "parth".into(),
+        };
+        view.delete_annotation(delete.clone()).await.unwrap();
+        view.delete_annotation(delete).await.unwrap();
+
+        assert_eq!(annotations_of(&view, "parth", "a").await, [noted]);
+        assert_eq!(annotations_of(&view, "kid", "a").await.len(), 1);
+        assert!(annotations_of(&view, "nobody", "a").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn annotations_of_a_hidden_book_are_not_found() {
+        let (_root, lib) = library(&[("x.epub", "x"), ("hidden/y.epub", "y")]).await;
+        let everything = lib.view(&EVERYTHING);
+        let stored = everything.add_annotation(highlight_in("a", "y", "epubcfi(/6/2)")).await;
+        let stored = stored.unwrap();
+        let scoped = scope("", &["!hidden/**"]);
+        let view = lib.view(&scoped);
+        let id = sha1_hex(b"y");
+
+        let list = ListAnnotationsRequest { id: id.clone(), user: "a".into() };
+        assert!(matches!(view.list_annotations(list).await, Err(LibraryError::NotFound)));
+        let add = view.add_annotation(highlight_in("a", "y", "epubcfi(/6/4)")).await;
+        assert!(matches!(add, Err(LibraryError::NotFound)));
+        let update = UpdateAnnotationRequest {
+            id: id.clone(),
+            annotation_id: stored.id.clone(),
+            note: Some("x".into()),
+            color: None,
+            user: "a".into(),
+        };
+        assert!(matches!(view.update_annotation(update).await, Err(LibraryError::NotFound)));
+        let delete = DeleteAnnotationRequest {
+            id,
+            annotation_id: stored.id.clone(),
+            user: "a".into(),
+        };
+        assert!(matches!(view.delete_annotation(delete).await, Err(LibraryError::NotFound)));
+        assert_eq!(annotations_of(&everything, "a", "y").await, [stored]);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_annotations_file_is_never_written_over() {
+        let (_root, lib) = library(&[("a.epub", "a")]).await;
+        let view = lib.view(&EVERYTHING);
+        let file = lib.storage.book_dir_by_id(&sha1_hex(b"a")).join("annotations/parth.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{ not json").unwrap();
+
+        let list = ListAnnotationsRequest { id: sha1_hex(b"a"), user: "parth".into() };
+        assert!(matches!(view.list_annotations(list).await, Err(LibraryError::Internal(_))));
+        let add = view.add_annotation(highlight_in("parth", "a", "epubcfi(/6/2)")).await;
+        assert!(matches!(add, Err(LibraryError::Internal(_))));
+        let data = view.export_user_data(export("parth")).await.unwrap();
+        assert!(data.annotations.is_empty());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{ not json");
+    }
+
+    #[tokio::test]
+    async fn annotations_move_with_user_data_and_merge() {
+        let (_from_root, from) = library(&[("a.epub", "a")]).await;
+        let view = from.view(&EVERYTHING);
+        let theirs = view.add_annotation(highlight_in("parth", "a", "epubcfi(/6/2)")).await.unwrap();
+        let data = view.export_user_data(export("parth")).await.unwrap();
+        assert_eq!(data.annotations.len(), 1);
+        assert_eq!(data.annotations[0].annotations, [theirs.clone()]);
+
+        let (_to_root, to) = library(&[("other/a.epub", "a")]).await;
+        let view = to.view(&EVERYTHING);
+        let own = view.add_annotation(highlight_in("kid", "a", "epubcfi(/6/4)")).await.unwrap();
+        let res = view.import_user_data(import("kid", data.clone())).await.unwrap();
+        assert_eq!(res.annotations, 1);
+        let again = view.import_user_data(import("kid", data)).await.unwrap();
+        assert_eq!(again.annotations, 0);
+
+        let merged = annotations_of(&view, "kid", "a").await;
+        assert_eq!(merged.len(), 2);
+        assert!(merged.contains(&theirs) && merged.contains(&own));
     }
 }

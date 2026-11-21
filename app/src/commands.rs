@@ -10,6 +10,8 @@ use shelf_core::{
 };
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         ApproveUserRequestRequest, ChangePasswordRequest, DenyUserRequestRequest,
         ListUserRequestsResponse, ListUsersResponse, SetUserRoleRequest, SetUserScopeRequest, SignUpRequest, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -19,9 +21,11 @@ use shelf_proto::{
         DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest, User, ExportUserDataRequest,
         ImportUserDataRequest, ImportUserDataResponse, UserData, role::Value as Role,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 use tauri::{AppHandle, Manager, Runtime, State, ipc::Response};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::{fs, io::AsyncWriteExt};
 use tauri_plugin_http::reqwest::Url;
 
@@ -416,6 +420,32 @@ pub async fn set_progress(state: State<'_, AppState>, req: SetProgressRequest) -
 }
 
 #[tauri::command]
+pub async fn list_annotations(
+    state: State<'_, AppState>,
+    req: ListAnnotationsRequest,
+) -> Result<ListAnnotationsResponse> {
+    Ok(state.library().await?.list_annotations(req).await?)
+}
+
+#[tauri::command]
+pub async fn add_annotation(state: State<'_, AppState>, req: AddAnnotationRequest) -> Result<Annotation> {
+    Ok(state.library().await?.add_annotation(req).await?)
+}
+
+#[tauri::command]
+pub async fn update_annotation(
+    state: State<'_, AppState>,
+    req: UpdateAnnotationRequest,
+) -> Result<Annotation> {
+    Ok(state.library().await?.update_annotation(req).await?)
+}
+
+#[tauri::command]
+pub async fn delete_annotation(state: State<'_, AppState>, req: DeleteAnnotationRequest) -> Result<()> {
+    Ok(state.library().await?.delete_annotation(req).await?)
+}
+
+#[tauri::command]
 pub async fn get_state(
     state: State<'_, AppState>,
     req: GetStateRequest,
@@ -606,4 +636,13 @@ async fn raw_file(content: FileContent) -> Result<Response> {
         FileContent::Bytes(bytes) => Vec::from(bytes),
     };
     Ok(Response::new(bytes))
+}
+
+/// The reader's *Copy*: on Android the WebView's own menu is hidden while reading.
+#[tauri::command]
+pub async fn copy_text(app: AppHandle, text: String) -> Result<()> {
+    app.clipboard()
+        .write_text(text)
+        .context("couldn't copy to the clipboard")?;
+    Ok(())
 }

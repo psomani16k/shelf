@@ -19,6 +19,27 @@ declare module "foliate-js/view.js" {
 
   export interface LoadDetail {
     doc: Document
+    /** The section's index in the book's spine. */
+    index: number
+  }
+
+  /** foliate keys drawn annotations by `value`; Shelf uses the highlight's CFI. */
+  export interface AnnotationRef {
+    value: string
+  }
+
+  export interface DrawAnnotationDetail {
+    /** Draws with `draw(rects, options)`, which returns the SVG element to show. */
+    draw: <O>(draw: (rects: DOMRectList, options: O) => SVGElement, options: O) => void
+    annotation: AnnotationRef
+    doc: Document
+    range: Range
+  }
+
+  export interface ShowAnnotationDetail {
+    value: string
+    index: number
+    range: Range
   }
 
   /** The paginator for reflowable books. Its `flow` attribute is `scrolled` or `paginated`. */
@@ -50,7 +71,7 @@ declare module "foliate-js/view.js" {
 
   export class View extends HTMLElement {
     book?: {
-      metadata?: { title?: string | Record<string, string> }
+      metadata?: { title?: string | Record<string, string>; language?: string | string[] }
       toc?: TocItem[]
       /** `"rtl"` for books read right to left. */
       dir?: string
@@ -60,6 +81,12 @@ declare module "foliate-js/view.js" {
     open(file: File): Promise<void>
     init(options: { lastLocation?: string | null; showTextStart?: boolean }): Promise<void>
     goTo(href: string): Promise<unknown>
+    /** Draws it (through `draw-annotation`) if its section is loaded; resolves once done. */
+    addAnnotation(annotation: AnnotationRef): Promise<unknown>
+    deleteAnnotation(annotation: AnnotationRef): Promise<unknown>
+    getCFI(index: number, range: Range): string
+    resolveCFI(cfi: string): { index: number }
+    getProgressOf(index: number, range: Range): { tocItem?: TocItem | null }
     goLeft(): Promise<void>
     goRight(): Promise<void>
     close(): void
@@ -69,10 +96,36 @@ declare module "foliate-js/view.js" {
     ): void
     addEventListener(type: "load", listener: (e: CustomEvent<LoadDetail>) => void): void
     addEventListener(
+      type: "draw-annotation",
+      listener: (e: CustomEvent<DrawAnnotationDetail>) => void,
+    ): void
+    /** A section's overlay was made, empty: draw its annotations. */
+    addEventListener(
+      type: "create-overlay",
+      listener: (e: CustomEvent<{ index: number }>) => void,
+    ): void
+    /** A tap or click landed on a drawn annotation. */
+    addEventListener(
+      type: "show-annotation",
+      listener: (e: CustomEvent<ShowAnnotationDetail>) => void,
+    ): void
+    addEventListener(
       type: string,
       listener: EventListenerOrEventListenerObject | null,
       options?: boolean | AddEventListenerOptions,
     ): void
+  }
+}
+
+declare module "foliate-js/epubcfi.js" {
+  /** Negative when `a` comes first in the book. */
+  export function compare(a: string, b: string): number
+}
+
+declare module "foliate-js/overlayer.js" {
+  export class Overlayer {
+    /** Filled boxes, faded and blended by `--overlayer-highlight-opacity` and `-blend-mode`. */
+    static highlight(rects: DOMRectList, options?: { color?: string }): SVGElement
   }
 }
 

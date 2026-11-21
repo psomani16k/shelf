@@ -16,6 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         // Only for its `log` command: the frontend's records reach `tracing` through `LogTracer`.
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(native::init())
@@ -24,6 +25,8 @@ pub fn run() {
             native::request_storage,
             native::pick_folder,
             native::system_insets,
+            native::set_selection_menu,
+            native::set_keep_screen_on,
             commands::list_libraries,
             commands::add_local_library,
             commands::add_remote_library,
@@ -34,6 +37,10 @@ pub fn run() {
             commands::list_directories,
             commands::get_progress,
             commands::set_progress,
+            commands::list_annotations,
+            commands::add_annotation,
+            commands::update_annotation,
+            commands::delete_annotation,
             commands::get_state,
             commands::set_state,
             commands::get_config,
@@ -52,6 +59,7 @@ pub fn run() {
             commands::upload_book,
             commands::create_directory,
             commands::delete_items,
+            commands::copy_text,
             commands::login,
             commands::logout,
             commands::me,

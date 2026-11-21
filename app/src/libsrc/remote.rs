@@ -13,6 +13,8 @@ use shelf_core::{
 };
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         ApiError, ApproveUserRequestRequest, ChangePasswordRequest, DenyUserRequestRequest,
         ListUserRequestsRequest, ListUserRequestsResponse, ListUsersRequest, ListUsersResponse,
         SetUserRoleRequest, SetUserScopeRequest, SignUpRequest, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest,
@@ -24,6 +26,7 @@ use shelf_proto::{
         DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest, User,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 use tauri_plugin_http::reqwest::{Client, RequestBuilder, Response, StatusCode, Url, header};
@@ -423,6 +426,36 @@ impl Library for RemoteLibrary {
 
     async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
         self.api_call(&req, "/progress/set")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn list_annotations(
+        &self,
+        req: ListAnnotationsRequest,
+    ) -> Result<ListAnnotationsResponse, LibraryError> {
+        self.api_call(&req, "/annotations/list")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn add_annotation(&self, req: AddAnnotationRequest) -> Result<Annotation, LibraryError> {
+        self.api_call(&req, "/annotations/add")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn update_annotation(
+        &self,
+        req: UpdateAnnotationRequest,
+    ) -> Result<Annotation, LibraryError> {
+        self.api_call(&req, "/annotations/update")
+            .await
+            .map_err(to_library_error)
+    }
+
+    async fn delete_annotation(&self, req: DeleteAnnotationRequest) -> Result<(), LibraryError> {
+        self.api_call(&req, "/annotations/delete")
             .await
             .map_err(to_library_error)
     }

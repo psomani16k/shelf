@@ -115,7 +115,8 @@ function ExportData() {
       })
       const name = `shelf-data-${new Date().toISOString().slice(0, 10)}.json`
       const saved = IS_TAURI ? await saveJsonFile(name, contents) : download(name, contents)
-      return { saved, books: data.progress.length }
+      const highlights = data.annotations.reduce((n, book) => n + book.annotations.length, 0)
+      return { saved, books: data.progress.length, highlights }
     },
   })
   const result = save.data
@@ -123,8 +124,12 @@ function ExportData() {
   return (
     <ActionRow
       title="Export"
-      description="Saves your reading progress, last book and settings as a file, to import into another library: a server, or a folder on a device."
-      status={result?.saved && `Exported your progress for ${plural(result.books, "book")}.`}
+      description="Saves your reading progress, highlights, last book and settings as a file, to import into another library: a server, or a folder on a device."
+      status={
+        result?.saved &&
+        `Exported your progress for ${plural(result.books, "book")}` +
+          (result.highlights > 0 ? ` and ${plural(result.highlights, "highlight")}.` : ".")
+      }
       error={save.isError && String(save.error)}
     >
       <Button
@@ -182,13 +187,14 @@ function ImportData() {
       title="Import"
       description={
         picked
-          ? `Import your progress for ${plural(picked.progress.length, "book")}? It replaces your progress for those books, your last book and your settings.`
+          ? `Import your progress for ${plural(picked.progress.length, "book")}? It replaces your progress for those books, your last book and your settings, and adds its highlights to yours.`
           : "Loads a file exported from Shelf, from this library or another one, as your own data."
       }
       status={
         result &&
         `Imported your progress for ${plural(result.books, "book")}` +
-          (result.skipped > 0 ? `; ${result.skipped} aren't in this library.` : ".")
+          (result.annotations > 0 ? ` and ${plural(result.annotations, "highlight")}` : "") +
+          (result.skipped > 0 ? `; ${result.skipped} books aren't in this library.` : ".")
       }
       error={
         (badFile && "This isn't a Shelf data export.") || (run.isError && String(run.error))
@@ -271,10 +277,10 @@ function CleanUpProgress() {
       description={
         confirming
           ? "Delete it? This can't be undone."
-          : "Deletes the saved reading progress, for every user, of books that are no longer in the library. A book added back afterwards starts from the beginning."
+          : "Deletes the saved reading progress and highlights, for every user, of books that are no longer in the library. A book added back afterwards starts from the beginning, with no highlights."
       }
       status={
-        removed !== undefined && `Removed the progress of ${plural(removed, "book")}.`
+        removed !== undefined && `Removed the progress and highlights of ${plural(removed, "book")}.`
       }
       error={clean.isError && String(clean.error)}
     >

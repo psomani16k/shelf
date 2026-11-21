@@ -3,6 +3,7 @@
 
 // prost writes a reference to another package by its proto name, e.g. `super::configpb::Config`.
 use api as apipb;
+use bookkeeping as bookkeeperpb;
 use config as configpb;
 
 pub mod api {

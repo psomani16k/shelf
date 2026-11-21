@@ -1,7 +1,6 @@
 import type { TocItem } from "foliate-js/view.js"
 import { ChevronRight } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { PanelHeader } from "@/components/PanelHeader"
 import { tocPath } from "@/lib/toc"
 import { cn } from "cn"
 
@@ -11,10 +10,10 @@ type Props = {
   currentId: number | undefined
   open: boolean
   onPick: (href: string) => void
-  onClose: () => void
 }
 
-export function TocPanel({ toc, currentId, open, onPick, onClose }: Props) {
+/** The book's table of contents, under `BookPanel`'s header. */
+export function TocPanel({ toc, currentId, open, onPick }: Props) {
   const listRef = useRef<HTMLDivElement>(null)
   // Entries on the way to the current chapter start expanded; the rest start collapsed.
   const path = useMemo(() => new Set(tocPath(toc, currentId)), [toc, currentId])
@@ -33,23 +32,15 @@ export function TocPanel({ toc, currentId, open, onPick, onClose }: Props) {
   }, [open])
 
   return (
-    <>
-      <PanelHeader title="Contents" onClose={onClose} />
-
-      <div ref={listRef} className="relative flex-1 overflow-y-auto overscroll-contain p-2">
-        {toc.length === 0 ? (
-          <p className="mt-8 text-center text-muted-foreground">
-            This book has no table of contents.
-          </p>
-        ) : (
-          <TocList
-            items={toc}
-            depth={0}
-            tree={{ currentId, path, isExpanded, toggle, onPick }}
-          />
-        )}
-      </div>
-    </>
+    <div ref={listRef} className="relative flex-1 overflow-y-auto overscroll-contain p-2">
+      {toc.length === 0 ? (
+        <p className="mt-8 text-center text-muted-foreground">
+          This book has no table of contents.
+        </p>
+      ) : (
+        <TocList items={toc} depth={0} tree={{ currentId, path, isExpanded, toggle, onPick }} />
+      )}
+    </div>
   )
 }
 

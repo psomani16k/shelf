@@ -48,6 +48,13 @@ import {
 } from "@/gen/apipb/state_pb"
 import { GetConfigRequestSchema, SetConfigRequestSchema } from "@/gen/apipb/config_pb"
 import {
+  AddAnnotationRequestSchema,
+  DeleteAnnotationRequestSchema,
+  ListAnnotationsRequestSchema,
+  ListAnnotationsResponseSchema,
+  UpdateAnnotationRequestSchema,
+} from "@/gen/apipb/annotation_pb"
+import {
   DeleteThemeRequestSchema,
   ListThemesRequestSchema,
   ListThemesResponseSchema,
@@ -60,6 +67,7 @@ import {
   ImportUserDataResponseSchema,
   UserDataSchema,
 } from "@/gen/apipb/user_data_pb"
+import { AnnotationSchema } from "@/gen/bookkeeperpb/annotation_pb"
 import { ConfigSchema } from "@/gen/configpb/config_pb"
 import { endSession, setSignedOut } from "@/lib/session"
 import { ApiError } from "./error"
@@ -85,6 +93,24 @@ export const tauriBackend: Backend = {
   // No `keepalive`: IPC has no page to outlive.
   setProgress: (id, epubProgress) =>
     exec("set_progress", SetProgressRequestSchema, { id, epubProgress }),
+  listAnnotations: (id) =>
+    command(
+      "list_annotations",
+      ListAnnotationsRequestSchema,
+      { id },
+      ListAnnotationsResponseSchema,
+    ),
+  addAnnotation: (id, highlight) =>
+    command("add_annotation", AddAnnotationRequestSchema, { id, ...highlight }, AnnotationSchema),
+  updateAnnotation: (id, annotationId, patch) =>
+    command(
+      "update_annotation",
+      UpdateAnnotationRequestSchema,
+      { id, annotationId, ...patch },
+      AnnotationSchema,
+    ),
+  deleteAnnotation: (id, annotationId) =>
+    exec("delete_annotation", DeleteAnnotationRequestSchema, { id, annotationId }),
   getState: () => command("get_state", GetStateRequestSchema, {}, GetStateResponseSchema),
   setState: (lastBookId) => exec("set_state", SetStateRequestSchema, { lastBookId }),
   getConfig: () => command("get_config", GetConfigRequestSchema, {}, ConfigSchema),

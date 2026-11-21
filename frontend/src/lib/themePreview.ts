@@ -1,5 +1,6 @@
-import fruit from "@/assets/theme-preview/fruit.svg"
-import sunset from "@/assets/theme-preview/sunset.svg"
+// Real photos (CC0, see assets/theme-preview/CREDITS.md), bundled so the preview works offline.
+import sunset from "@/assets/theme-preview/sunset.jpg"
+import vegetables from "@/assets/theme-preview/vegetables.jpg"
 import { readerCss } from "@/lib/appearance"
 
 // GitHub's light syntax colours, as a book about code might ship them.
@@ -49,7 +50,7 @@ const BOOK_CSS = `
   td { padding: 4px 8px; border-radius: 4px; color: #fff; font: 600 0.75em system-ui, sans-serif; }
 `
 
-/** A sample book page for the theme builder's preview: text, colours, code and pictures. */
+/** A sample book page for the theme builder's preview: text, colours, code and photos. */
 export const PREVIEW_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -64,8 +65,8 @@ export const PREVIEW_HTML = `<!doctype html>
 lights</strong> were all that showed from the cliff, and the radio crackled with
 <a href="#">warnings from the coast guard</a>.</p>
 <figure>
-<img src="${sunset}" alt="A sunset over the bay, with a small sailing boat">
-<figcaption>Fig. 1: Sunset over the bay.</figcaption>
+<img src="${sunset}" alt="Two sailing boats against the setting sun">
+<figcaption>Fig. 1: Sailing home at sunset.</figcaption>
 </figure>
 <p><span style="color: #c62828; font-weight: bold">Danger:</span> the lower stairs flood at
 high tide. <span style="color: #2e7d32; font-weight: bold">Safe:</span> the lamp room stays dry.
@@ -75,8 +76,8 @@ high tide. <span style="color: #2e7d32; font-weight: bold">Safe:</span> the lamp
 <table><tr>${CHIPS.map(([bg, name]) => `<td style="background: ${bg}">${name}</td>`).join("")}</tr>
 </table>
 <figure>
-<img src="${fruit}" alt="A blue bowl of fruit on a table">
-<figcaption>Fig. 2: Still life with fruit.</figcaption>
+<img src="${vegetables}" alt="A market stall of carrots, radishes, cauliflower and greens">
+<figcaption>Fig. 2: Winter vegetables at the market.</figcaption>
 </figure>
 <p>She wrote the night's last entry by the light of the lamp, and went down to sleep.</p>
 </body>

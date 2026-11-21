@@ -4,7 +4,7 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 
 ## Data safety
 
-- **Progress of a removed book is kept until someone cleans it up.** The startup sync deletes only the `metadata.json` and thumbnail of a book no file produced, so a book that comes back (same bytes) resumes; its folder and progress stay until an admin runs *Settings → Library → Clean up progress*. Running it while a book is only temporarily missing, after a startup that didn't find it, deletes that book's progress for good. Empty `.shelf/books/<id>/` folders also stay until then. A book that's temporarily absent at startup (a copy halfway through, an unmounted folder) is extracted again when it's back. Editing a book's bytes changes its ID, so the edited book starts with no progress; the old ID's progress stays.
+- **Progress of a removed book is kept until someone cleans it up.** The startup sync deletes only the `metadata.json` and thumbnail of a book no file produced, so a book that comes back (same bytes) resumes; its folder, progress and highlights stay until an admin runs *Settings → Library → Clean up progress*. Running it while a book is only temporarily missing, after a startup that didn't find it, deletes that book's progress and highlights for good. Empty `.shelf/books/<id>/` folders also stay until then. A book that's temporarily absent at startup (a copy halfway through, an unmounted folder) is extracted again when it's back. Editing a book's bytes changes its ID, so the edited book starts with no progress; the old ID's progress stays.
 - **`last_update_time` limits** (each copy's stamp is the time this machine last hashed it, compared with the file's mtime):
   - A file replaced at the same path by a different one whose mtime is *older* than the stamp (`cp -p`, `rsync -t` and sync tools preserve mtimes) isn't re-hashed, so its metadata and ID stay stale until the file's mtime moves forward again or the index is rebuilt (*Settings → Library → Rebuild index*).
   - A file with an mtime in the future is hashed on every start until the clock passes it.
@@ -55,6 +55,8 @@ Problems and risks in what's built, checked against the code on 2026-11-13. Plan
 
 ## Platform limits
 
+- **The dictionary needs internet** and sends each looked-up word to Wikimedia. Wikimedia marks the REST definition endpoint as unstable, so its JSON could change shape; `toLanguages` skips what it doesn't recognise, and a broken answer shows as an error with *Try again*.
+- **Android selection bar:** hiding the WebView's Copy/Share bar relies on the WebView starting it through the window (`onWindowStartingActionMode`) and accepting an action mode that never shows. True of the Chromium WebView today; if a WebView update changes it, the bar comes back over the reader's toolbar (nothing breaks).
 - **Android folder picker** only maps folders on device storage (`com.android.externalstorage.documents`); other document providers are rejected.
 - `MANAGE_EXTERNAL_STORAGE` is restricted on the Play Store. Fine for sideloading, which is the plan. Play Protect may still flag the sideloaded APK; *Install anyway* or `adb install` gets past it, and Google's free hobbyist developer account (up to 20 devices) registers the app.
 - **Windows (not a target):** a location's `path` comes from `Path::to_string_lossy`, so on Windows it would hold `\` separators, breaking folder listings (which split on `/`) and libraries shared with other devices. Normalize to `/` before any Windows build.

@@ -17,6 +17,18 @@ message ReaderConfig {
   // A theme's id (apipb.ThemeEntry). Unset, or one the list doesn't have, is its default.
   optional string theme = 4;
   optional ReaderImages.Value images = 5;
+  optional SearchEngine.Value search_engine = 6;
+}
+
+// Where the reader's *Search web* sends selected text, opened in the default browser.
+message SearchEngine {
+  enum Value {
+    DUCKDUCKGO = 0;
+    GOOGLE = 1;
+    BING = 2;
+    STARTPAGE = 3;
+    ECOSIA = 4;
+  }
 }
 
 message ReaderFlow {

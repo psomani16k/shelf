@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package apipb;
+
+import "bookkeeperpb/annotation.proto";
+
+message ListAnnotationsRequest {
+  string id = 1;
+  string user = 2;
+}
+
+message ListAnnotationsResponse {
+  // Oldest first.
+  repeated bookkeeperpb.Annotation annotations = 1;
+}
+
+// Returns the `bookkeeperpb.Annotation` as stored, with its new id.
+message AddAnnotationRequest {
+  string id = 1;
+  string cfi = 3;
+  string text = 4;
+  string chapter = 5;
+  string note = 6;
+  bookkeeperpb.HighlightColor.Value color = 7;
+  string user = 8;
+}
+
+// Changes the fields that are set; returns the annotation as stored.
+message UpdateAnnotationRequest {
+  string id = 1;
+  string annotation_id = 2;
+  optional string note = 3;
+  optional bookkeeperpb.HighlightColor.Value color = 4;
+  string user = 5;
+}
+
+// An annotation that's already gone is fine.
+message DeleteAnnotationRequest {
+  string id = 1;
+  string annotation_id = 2;
+  string user = 3;
+}

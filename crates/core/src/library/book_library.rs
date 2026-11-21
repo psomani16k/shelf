@@ -5,6 +5,8 @@ use bytes::Bytes;
 
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         CleanUpProgressResponse, CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
         DeleteThemeRequest, GetConfigRequest, GetProgressRequest, GetProgressResponse,
@@ -13,7 +15,7 @@ use shelf_proto::{
         RebuildIndexResponse, RenameThemeRequest, SetConfigRequest, SetProgressRequest,
         SetStateRequest, SetThemeRequest, UploadEbookRequest, UploadEbookResponse,
     },
-    bookkeeping::BookMetadata,
+    bookkeeping::{Annotation, BookMetadata},
     config::{Config, ReaderConfig},
 };
 use shelf_utility::{routines::Debounced, timeutil::Duration};
@@ -35,6 +37,8 @@ pub struct BookLibrary {
     // Two concurrent sets would each read the old file, and one would lose the other's fields.
     // Also held for the users' themes, whose renames change the config too.
     pub(super) config_lock: Mutex<()>,
+    // Each annotation change reads a user's whole file for a book, changes it and writes it back.
+    pub(super) annotations_lock: Mutex<()>,
     // Uploads, new folders and deletes check what's on disk, then change it.
     pub(super) files_lock: Mutex<()>,
     // Watcher jobs hold it to read and a rebuild to write, so a rebuild never interleaves with
@@ -74,6 +78,7 @@ impl BookLibrary {
             storage,
             metadata: Arc::new(RwLock::new(metadata)),
             config_lock: Mutex::new(()),
+            annotations_lock: Mutex::new(()),
             files_lock: Mutex::new(()),
             sync_gate: Arc::new(RwLock::new(())),
             _watcher: watcher,
@@ -149,6 +154,28 @@ impl Library for BookLibrary {
 
     async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
         self.view(&EVERYTHING).set_progress(req).await
+    }
+
+    async fn list_annotations(
+        &self,
+        req: ListAnnotationsRequest,
+    ) -> Result<ListAnnotationsResponse, LibraryError> {
+        self.view(&EVERYTHING).list_annotations(req).await
+    }
+
+    async fn add_annotation(&self, req: AddAnnotationRequest) -> Result<Annotation, LibraryError> {
+        self.view(&EVERYTHING).add_annotation(req).await
+    }
+
+    async fn update_annotation(
+        &self,
+        req: UpdateAnnotationRequest,
+    ) -> Result<Annotation, LibraryError> {
+        self.view(&EVERYTHING).update_annotation(req).await
+    }
+
+    async fn delete_annotation(&self, req: DeleteAnnotationRequest) -> Result<(), LibraryError> {
+        self.view(&EVERYTHING).delete_annotation(req).await
     }
 
     async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use shelf_proto::{
-    bookkeeping::{BookMetadata, BookProgress},
+    bookkeeping::{BookAnnotations, BookMetadata, BookProgress},
     config::{Config, ReaderThemeSpec},
     state::State,
 };
@@ -113,18 +113,26 @@ pub trait LibraryStorage: Sync {
 
     fn set_book_progress(&self, hash: &str, user: &str, progress: BookProgress) -> Result<()>;
 
+    /// `books/<hash>/annotations/<user>.json`; `user` must have passed `validate_user`. A file
+    /// that can't be parsed is an error, never `None`, so it's never written over.
+    fn book_annotations(&self, hash: &str, user: &str) -> Result<Option<BookAnnotations>>;
+
+    fn set_book_annotations(&self, hash: &str, user: &str, annotations: &BookAnnotations)
+    -> Result<()>;
+
     /// `None` if the book has no thumbnail.
     fn book_thumbnail(&self, hash: &str)
     -> impl Future<Output = Result<Option<FileContent>>> + Send;
 
     fn set_book_thumbnail(&self, hash: &str, thumbnail: &[u8]) -> Result<()>;
 
-    /// Deletes these books' `metadata.json` and thumbnail, keeping their progress for when the
-    /// book comes back; never deletes a folder. Returns how many books had anything deleted.
+    /// Deletes these books' `metadata.json` and thumbnail, keeping their progress and annotations
+    /// for when the book comes back; never deletes a folder. Returns how many books had anything
+    /// deleted.
     fn clean_up_books(&self, hashes: HashSet<String>) -> Result<usize>;
 
     /// Deletes every `books/<id>/` folder with no `metadata.json` whose id isn't in `keep`,
-    /// progress included. Returns how many were deleted.
+    /// progress and annotations included. Returns how many were deleted.
     fn clean_up_progress(&self, keep: &HashSet<String>) -> Result<usize>;
 
     /// A file under `.shelf/`, by its path there (e.g. `users/a/config.json`); `None` if it's

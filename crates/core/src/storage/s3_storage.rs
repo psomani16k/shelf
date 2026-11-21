@@ -13,7 +13,7 @@ use object_store::{
     GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt, PutOptions, PutPayload,
     aws::AmazonS3Builder, path::Path as Key,
 };
-use shelf_proto::bookkeeping::{BookMetadata, BookProgress};
+use shelf_proto::bookkeeping::{BookAnnotations, BookMetadata, BookProgress};
 use shelf_utility::timeutil::Time;
 use tokio::runtime::Handle;
 
@@ -229,6 +229,26 @@ impl LibraryStorage for S3LibraryStorage {
         self.block_on(self.put(&key, serde_json::to_string_pretty(&progress)?))
     }
 
+    fn book_annotations(&self, hash: &str, user: &str) -> Result<Option<BookAnnotations>> {
+        let key = self.book_data_key(hash, &format!("annotations/{user}.json"))?;
+        match self.block_on(self.get(&key))? {
+            Some(json) => Ok(Some(
+                serde_json::from_slice(&json).with_context(|| format!("couldn't parse {key}"))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    fn set_book_annotations(
+        &self,
+        hash: &str,
+        user: &str,
+        annotations: &BookAnnotations,
+    ) -> Result<()> {
+        let key = self.book_data_key(hash, &format!("annotations/{user}.json"))?;
+        self.block_on(self.put(&key, serde_json::to_string_pretty(annotations)?))
+    }
+
     async fn book_thumbnail(&self, hash: &str) -> Result<Option<FileContent>> {
         let thumbnail = self.get(&self.book_data_key(hash, "thumbnail.jpeg")?).await?;
         Ok(thumbnail.map(FileContent::Bytes))
@@ -433,6 +453,11 @@ mod tests {
                 s.set_book_metadata(OTHER_ID, &meta).unwrap();
                 s.set_book_thumbnail(OTHER_ID, b"jpeg").unwrap();
                 s.set_book_progress(OTHER_ID, "metadata", progress.clone()).unwrap();
+                let annotations = BookAnnotations { user: "default".into(), ..Default::default() };
+                s.set_book_annotations(ID, "default", &annotations).unwrap();
+                s.set_book_annotations(OTHER_ID, "default", &annotations).unwrap();
+                assert_eq!(s.book_annotations(ID, "default").unwrap(), Some(annotations));
+                assert_eq!(s.book_annotations(ID, "other").unwrap(), None);
                 let hashes = s.all_book_hashes_in_books_dir().unwrap();
                 let stored = (s.book_metadata(ID).unwrap(), s.book_progress(ID, "default").unwrap());
                 let other_user = s.book_progress(ID, "other").unwrap();

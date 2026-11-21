@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod book_library;
 pub mod locations;
 pub mod names;
@@ -9,6 +10,8 @@ use std::future::Future;
 use bytes::Bytes;
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         CleanUpProgressResponse, CreateDirectoryRequest, ExportUserDataRequest, ImportUserDataRequest,
         ImportUserDataResponse, UserData, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         DeleteThemeRequest, GetConfigRequest, GetProgressRequest, GetProgressResponse,
@@ -17,6 +20,7 @@ use shelf_proto::{
         RebuildIndexResponse, RenameThemeRequest, SetConfigRequest, SetProgressRequest,
         SetStateRequest, SetThemeRequest, UploadEbookRequest, UploadEbookResponse,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 
@@ -74,6 +78,30 @@ pub trait Library {
         req: SetProgressRequest,
     ) -> impl Future<Output = Result<(), LibraryError>> + Send;
 
+    /// The user's annotations in the book, oldest first.
+    fn list_annotations(
+        &self,
+        req: ListAnnotationsRequest,
+    ) -> impl Future<Output = Result<ListAnnotationsResponse, LibraryError>> + Send;
+
+    /// Stores a new annotation and returns it with its id and times.
+    fn add_annotation(
+        &self,
+        req: AddAnnotationRequest,
+    ) -> impl Future<Output = Result<Annotation, LibraryError>> + Send;
+
+    /// Changes an annotation's note or colour; an unknown one is `NotFound`.
+    fn update_annotation(
+        &self,
+        req: UpdateAnnotationRequest,
+    ) -> impl Future<Output = Result<Annotation, LibraryError>> + Send;
+
+    /// Deletes an annotation; one that's already gone is fine.
+    fn delete_annotation(
+        &self,
+        req: DeleteAnnotationRequest,
+    ) -> impl Future<Output = Result<(), LibraryError>> + Send;
+
     /// A `last_book_id` that's no longer in the library comes back unset.
     fn get_state(
         &self,
@@ -123,14 +151,16 @@ pub trait Library {
         req: RenameThemeRequest,
     ) -> impl Future<Output = Result<ListThemesResponse, LibraryError>> + Send;
 
-    /// The user's progress, last book, settings and themes, without their name (`view.rs`).
+    /// The user's progress, annotations, last book, settings and themes, without their name
+    /// (`view.rs`).
     fn export_user_data(
         &self,
         req: ExportUserDataRequest,
     ) -> impl Future<Output = Result<UserData, LibraryError>> + Send;
 
-    /// Replaces the user's progress for the books in `req.data` this library has, their last
-    /// book, the settings it sets and the themes it has.
+    /// Replaces the user's progress for the books in `req.data` this library has, merges in
+    /// their annotations (the newer copy of each wins), and sets their last book, the settings
+    /// it sets and the themes it has.
     fn import_user_data(
         &self,
         req: ImportUserDataRequest,
@@ -141,7 +171,7 @@ pub trait Library {
     fn rebuild_index(&self) -> impl Future<Output = Result<RebuildIndexResponse, LibraryError>> + Send;
 
     /// Deletes the `.shelf/books/<id>/` folders of books no file has any more (no
-    /// `metadata.json`, not in the index), every user's progress included.
+    /// `metadata.json`, not in the index), every user's progress and annotations included.
     fn clean_up_progress(
         &self,
     ) -> impl Future<Output = Result<CleanUpProgressResponse, LibraryError>> + Send;

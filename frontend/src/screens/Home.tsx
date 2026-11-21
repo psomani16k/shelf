@@ -5,7 +5,9 @@ import { LibraryBig, LoaderCircle, PanelLeft, TableOfContents } from "lucide-rea
 import { useRef, useState } from "react"
 import { Route, Routes, useMatch, useNavigate } from "react-router"
 import { getState, setState } from "@/api"
+import { type BookTab, BookPanel } from "@/components/BookPanel"
 import { CenteredMessage } from "@/components/CenteredMessage"
+import { HighlightsPanel } from "@/components/HighlightsPanel"
 import { LibraryPanel } from "@/components/LibraryPanel"
 import { Reader, type ReaderHandle } from "@/components/Reader"
 import { ScreenHeader } from "@/components/ScreenHeader"
@@ -26,6 +28,9 @@ export function Home() {
   const [title, setTitle] = useState("")
   const [toc, setToc] = useState<TocItem[]>([])
   const [tocId, setTocId] = useState<number>()
+  const [bookTab, setBookTab] = useState<BookTab>("contents")
+  // The highlight whose note is being edited in the right drawer.
+  const [noteFor, setNoteFor] = useState<string | null>(null)
   // The header and the reader's bottom bar; reading hides them, a tap brings them back.
   const [bars, setBars] = useState(true)
   const readerRef = useRef<ReaderHandle>(null)
@@ -48,6 +53,8 @@ export function Home() {
         setTitle("")
         setToc([])
         setTocId(undefined)
+        setBookTab("contents")
+        setNoteFor(null)
         setBars(true)
       }
       queryClient.setQueryData(STATE_KEY, create(GetStateResponseSchema, { lastBookId: id }))
@@ -55,7 +62,11 @@ export function Home() {
     },
   })
   const openLibrary = () => setDrawer("left")
-  const close = () => setDrawer(null)
+  const changeDrawer = (side: DrawerSide | null) => {
+    setDrawer(side)
+    if (side === null) setNoteFor(null)
+  }
+  const close = () => changeDrawer(null)
 
   const header = (
     <ScreenHeader
@@ -71,7 +82,7 @@ export function Home() {
             variant="ghost"
             size="icon"
             onClick={() => setDrawer("right")}
-            aria-label="Open contents"
+            aria-label="Open contents and highlights"
           >
             <TableOfContents />
           </Button>
@@ -86,7 +97,7 @@ export function Home() {
       <div inert={settingsOpen}>
         <SlideDrawer
           open={drawer}
-          onOpenChange={setDrawer}
+          onOpenChange={changeDrawer}
           header={header}
           headerHidden={bookId !== undefined && !bars}
           left={{
@@ -105,19 +116,33 @@ export function Home() {
           right={
             bookId
               ? {
-                  label: "Contents",
+                  label: "Contents and highlights",
                   content: (
-                    <TocPanel
-                      key={bookId}
-                      toc={toc}
-                      currentId={tocId}
-                      open={drawer === "right"}
-                      onPick={(href) => {
-                        readerRef.current?.goTo(href)
-                        close()
-                      }}
-                      onClose={close}
-                    />
+                    <BookPanel tab={bookTab} onTabChange={setBookTab} onClose={close}>
+                      {bookTab === "contents" ? (
+                        <TocPanel
+                          key={bookId}
+                          toc={toc}
+                          currentId={tocId}
+                          open={drawer === "right"}
+                          onPick={(href) => {
+                            readerRef.current?.goTo(href)
+                            close()
+                          }}
+                        />
+                      ) : (
+                        <HighlightsPanel
+                          key={bookId}
+                          bookId={bookId}
+                          noteFor={noteFor}
+                          onNoteForChange={setNoteFor}
+                          onPick={(cfi) => {
+                            readerRef.current?.goTo(cfi)
+                            close()
+                          }}
+                        />
+                      )}
+                    </BookPanel>
                   ),
                 }
               : undefined
@@ -147,6 +172,11 @@ export function Home() {
               onOpenSettings={() =>
                 void navigate(`${SETTINGS_PATH}/reader`, { state: { depth: 1 } })
               }
+              onEditNote={(annotationId) => {
+                setBookTab("highlights")
+                setNoteFor(annotationId)
+                setDrawer("right")
+              }}
               bars={bars}
               onBarsChange={setBars}
             />

@@ -60,6 +60,14 @@ import {
   SetProgressRequestSchema,
 } from "@/gen/apipb/progress_pb"
 import {
+  AddAnnotationRequestSchema,
+  DeleteAnnotationRequestSchema,
+  ListAnnotationsRequestSchema,
+  type ListAnnotationsResponse,
+  ListAnnotationsResponseSchema,
+  UpdateAnnotationRequestSchema,
+} from "@/gen/apipb/annotation_pb"
+import {
   GetStateRequestSchema,
   type GetStateResponse,
   GetStateResponseSchema,
@@ -82,13 +90,18 @@ import {
   type UserData,
   UserDataSchema,
 } from "@/gen/apipb/user_data_pb"
+import {
+  type Annotation,
+  AnnotationSchema,
+  type HighlightColor_Value,
+} from "@/gen/bookkeeperpb/annotation_pb"
 import { type Config, ConfigSchema } from "@/gen/configpb/config_pb"
 import type { ReaderThemeSpecSchema } from "@/gen/configpb/theme_pb"
 import { browserDeviceName } from "@/lib/deviceName"
 import { endSession, getToken, setSignedOut, setToken } from "@/lib/session"
 import { ApiError } from "./error"
 import { decode, encode } from "./proto"
-import type { Backend, DeleteItems } from "./types"
+import type { Backend, DeleteItems, NewAnnotation } from "./types"
 
 export { ApiError }
 
@@ -100,6 +113,10 @@ export const httpBackend: Backend = {
   listDirectories,
   getProgress,
   setProgress,
+  listAnnotations,
+  addAnnotation,
+  updateAnnotation,
+  deleteAnnotation,
   getState,
   setState,
   getConfig,
@@ -253,6 +270,36 @@ export async function setProgress(
 ): Promise<void> {
   const init = jsonBody(SetProgressRequestSchema, { id, epubProgress })
   await send("/progress/set", { ...init, keepalive })
+}
+
+export function listAnnotations(id: string): Promise<ListAnnotationsResponse> {
+  return post(
+    "/annotations/list",
+    ListAnnotationsRequestSchema,
+    { id },
+    ListAnnotationsResponseSchema,
+  )
+}
+
+export function addAnnotation(id: string, highlight: NewAnnotation): Promise<Annotation> {
+  return post("/annotations/add", AddAnnotationRequestSchema, { id, ...highlight }, AnnotationSchema)
+}
+
+export function updateAnnotation(
+  id: string,
+  annotationId: string,
+  patch: { note?: string; color?: HighlightColor_Value },
+): Promise<Annotation> {
+  return post(
+    "/annotations/update",
+    UpdateAnnotationRequestSchema,
+    { id, annotationId, ...patch },
+    AnnotationSchema,
+  )
+}
+
+export async function deleteAnnotation(id: string, annotationId: string): Promise<void> {
+  await send("/annotations/delete", jsonBody(DeleteAnnotationRequestSchema, { id, annotationId }))
 }
 
 export function getState(): Promise<GetStateResponse> {

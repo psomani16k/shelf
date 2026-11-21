@@ -7,6 +7,8 @@ use shelf_core::{
 };
 use shelf_proto::{
     api::{
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         CreateDirectoryRequest, CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse,
         ExportUserDataRequest, ImportUserDataRequest, ImportUserDataResponse, UserData,
         GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -15,6 +17,7 @@ use shelf_proto::{
         UploadEbookRequest, UploadEbookResponse,
         DeleteThemeRequest, ListThemesRequest, ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 
@@ -120,6 +123,28 @@ impl Library for AnyLibrary {
 
     async fn set_progress(&self, req: SetProgressRequest) -> Result<(), LibraryError> {
         dispatch!(self, lib => lib.set_progress(req).await)
+    }
+
+    async fn list_annotations(
+        &self,
+        req: ListAnnotationsRequest,
+    ) -> Result<ListAnnotationsResponse, LibraryError> {
+        dispatch!(self, lib => lib.list_annotations(req).await)
+    }
+
+    async fn add_annotation(&self, req: AddAnnotationRequest) -> Result<Annotation, LibraryError> {
+        dispatch!(self, lib => lib.add_annotation(req).await)
+    }
+
+    async fn update_annotation(
+        &self,
+        req: UpdateAnnotationRequest,
+    ) -> Result<Annotation, LibraryError> {
+        dispatch!(self, lib => lib.update_annotation(req).await)
+    }
+
+    async fn delete_annotation(&self, req: DeleteAnnotationRequest) -> Result<(), LibraryError> {
+        dispatch!(self, lib => lib.delete_annotation(req).await)
     }
 
     async fn get_state(&self, req: GetStateRequest) -> Result<GetStateResponse, LibraryError> {

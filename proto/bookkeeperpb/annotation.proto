@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package bookkeeperpb;
+
+// One user's annotations in one book: `books/<id>/annotations/<user>.json`.
+message BookAnnotations {
+  repeated Annotation annotations = 1;
+  string user = 2;
+}
+
+message Annotation {
+  // 32 lowercase hex characters, made by the backend.
+  string id = 1;
+  // A range CFI.
+  string cfi = 3;
+  // The highlighted text, as the client saw it.
+  string text = 4;
+  // The TOC label where it is, as the client saw it.
+  string chapter = 5;
+  // Empty for none.
+  string note = 6;
+  HighlightColor.Value color = 7;
+  // RFC 3339 UTC, whole seconds (core's `Time`), set by the backend.
+  string created = 8;
+  string updated = 9;
+}
+
+// A name, not a colour: each reader theme picks its own shade.
+message HighlightColor {
+  enum Value {
+    YELLOW = 0;
+    GREEN = 1;
+    BLUE = 2;
+    PINK = 3;
+  }
+}

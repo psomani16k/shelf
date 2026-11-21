@@ -122,16 +122,94 @@ pub async fn system_insets(app: AppHandle) -> Result<Insets, CommandError> {
     }
 }
 
-/// `run_mobile_plugin` blocks until Kotlin resolves, which for a picker is until the user is done.
+/// Whether Android's floating Copy/Share bar shows for a text selection. The reader hides it while
+/// the book has the screen, so only its own toolbar shows; elsewhere there's no such bar.
+#[tauri::command]
+pub async fn set_selection_menu(app: AppHandle, shown: bool) -> Result<(), CommandError> {
+    #[cfg(target_os = "android")]
+    {
+        call_with::<serde::de::IgnoredAny>(&app, "setSelectionMenu", serde_json::json!({ "shown": shown }))
+            .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = (app, shown);
+    Ok(())
+}
+
+/// While reading: Android's `FLAG_KEEP_SCREEN_ON`; on Linux, GTK's idle inhibit (the session
+/// manager's, so the screen neither blanks nor locks).
+#[tauri::command]
+pub async fn set_keep_screen_on(app: AppHandle, on: bool) -> Result<(), CommandError> {
+    #[cfg(target_os = "android")]
+    {
+        call_with::<serde::de::IgnoredAny>(&app, "setKeepScreenOn", serde_json::json!({ "on": on }))
+            .await?;
+    }
+    #[cfg(target_os = "linux")]
+    inhibit_idle(&app, on)?;
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    let _ = (app, on);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn inhibit_idle(app: &AppHandle, on: bool) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use tauri::Manager;
+    let window = app.webview_windows().into_values().next().context("no window")?;
+    // GTK is main-thread only, and `with_webview` runs there.
+    window.with_webview(move |webview| {
+        use gtk::prelude::*;
+        use std::cell::Cell;
+        thread_local! { static COOKIE: Cell<Option<u32>> = const { Cell::new(None) }; }
+        let toplevel = webview.inner().toplevel();
+        let Some(gtk_window) = toplevel.and_then(|w| w.downcast::<gtk::Window>().ok()) else {
+            tracing::warn!("no GTK window to keep the screen on for");
+            return;
+        };
+        let Some(gtk_app) = gtk_window.application() else {
+            tracing::warn!("the window has no GTK application to inhibit idle with");
+            return;
+        };
+        COOKIE.with(|cookie| match (on, cookie.get()) {
+            (true, None) => {
+                let flags = gtk::ApplicationInhibitFlags::IDLE;
+                let id = gtk_app.inhibit(Some(&gtk_window), flags, Some("Reading"));
+                if id == 0 {
+                    tracing::warn!("the session refused to keep the screen on");
+                } else {
+                    cookie.set(Some(id));
+                }
+            }
+            (false, Some(id)) => {
+                gtk_app.uninhibit(id);
+                cookie.set(None);
+            }
+            _ => {}
+        });
+    })?;
+    Ok(())
+}
+
 #[cfg(target_os = "android")]
 async fn call<T: serde::de::DeserializeOwned + Send + 'static>(
     app: &AppHandle,
     command: &'static str,
 ) -> Result<T, CommandError> {
+    call_with(app, command, serde_json::json!({})).await
+}
+
+/// `run_mobile_plugin` blocks until Kotlin resolves, which for a picker is until the user is done.
+#[cfg(target_os = "android")]
+async fn call_with<T: serde::de::DeserializeOwned + Send + 'static>(
+    app: &AppHandle,
+    command: &'static str,
+    args: serde_json::Value,
+) -> Result<T, CommandError> {
     use tauri::Manager;
     let handle = app.state::<Native>().0.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        handle.run_mobile_plugin::<T>(command, serde_json::json!({}))
+        handle.run_mobile_plugin::<T>(command, args)
     })
     .await
     .map_err(|e| anyhow::anyhow!("{command}: {e}"))?;

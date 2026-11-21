@@ -54,6 +54,12 @@ type Insets = { top: number; right: number; bottom: number; left: number }
 /** Space taken by the status bar, navigation bar and cutout, in CSS px. Zero on desktops. */
 export const systemInsets = () => invokeCommand<Insets>("system_insets")
 
+/** Whether Android's floating Copy/Share bar shows for selected text. Does nothing elsewhere. */
+export const setSelectionMenu = (shown: boolean) =>
+  invokeCommand<void>("set_selection_menu", { shown })
+
+export const copyText = (text: string) => invokeCommand<void>("copy_text", { text })
+
 /** The interface's size on this device, in percent. */
 export const uiScale = () => invokeCommand<number>("ui_scale")
 
@@ -111,3 +117,6 @@ export function onLibraryChanged(callback: () => void): () => void {
   const unlisten = listen("library-changed", callback)
   return () => void unlisten.then((stop) => stop())
 }
+
+/** Android and Linux: keeps the screen from dimming, sleeping or locking while `on`. */
+export const setKeepScreenOn = (on: boolean) => invokeCommand<void>("set_keep_screen_on", { on })

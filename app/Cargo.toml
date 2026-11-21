@@ -38,6 +38,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
+# Same major/minor as the npm package, or the Tauri CLI refuses to run.
+tauri-plugin-opener = "~2.7"
+
+# Must match the version Tauri uses (Cargo.lock), so the window's types are the same.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 [target.'cfg(target_os = "android")'.dependencies]
 paranoid-android = "0.2"

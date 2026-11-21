@@ -8,12 +8,14 @@ import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.result.ActivityResult
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.Permission
 import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
@@ -21,7 +23,17 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
-/** What the Rust side can't do on Android: storage access, a folder picker, the system bar insets and the device name. */
+@InvokeArg
+class SelectionMenuArgs {
+  var shown: Boolean = true
+}
+
+@InvokeArg
+class ScreenOnArgs {
+  var on: Boolean = false
+}
+
+/** What the Rust side can't do on Android: storage access, a folder picker, the system bar insets, the device name, the selection bar and keeping the screen on. */
 @TauriPlugin(
   permissions = [Permission(strings = [Manifest.permission.READ_EXTERNAL_STORAGE], alias = "storage")]
 )
@@ -104,6 +116,24 @@ class ShelfPlugin(private val activity: Activity) : Plugin(activity) {
     val maker = Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }
     val fallback = if (model.startsWith(maker, ignoreCase = true)) model else "$maker $model"
     invoke.resolve(JSObject().put("name", set?.takeIf { it.isNotBlank() } ?: fallback.trim()))
+  }
+
+  /** The reader hides the WebView's Copy/Share bar while the book has the screen (`MainActivity`). */
+  @Command
+  fun setSelectionMenu(invoke: Invoke) {
+    SelectionMenu.hidden = !invoke.parseArgs(SelectionMenuArgs::class.java).shown
+    invoke.resolve()
+  }
+
+  /** Only while the window shows: Android drops the flag's effect when the app is in the background. */
+  @Command
+  fun setKeepScreenOn(invoke: Invoke) {
+    val on = invoke.parseArgs(ScreenOnArgs::class.java).on
+    activity.runOnUiThread {
+      val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+      if (on) activity.window.addFlags(flag) else activity.window.clearFlags(flag)
+      invoke.resolve()
+    }
   }
 
   /** Status bar, navigation bar and display cutout, in CSS pixels. */

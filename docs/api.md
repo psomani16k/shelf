@@ -4,7 +4,7 @@ The same operations exist as HTTP routes (`shelf-server`) and as Tauri commands 
 
 ## Wire conventions
 
-- **Schema:** `proto/`. Packages: `apipb` (requests/responses, `ApiError`, and `Role`, which `serverpb` imports), `bookkeeperpb` (on-disk metadata and progress), `configpb` (each user's settings), `statepb` (on-disk state), `serverpb` (the server's `data.json`; server-only, not generated for the frontend). Package names have no version suffix.
+- **Schema:** `proto/`. Packages: `apipb` (requests/responses, `ApiError`, and `Role`, which `serverpb` imports), `bookkeeperpb` (on-disk metadata, progress and annotations), `configpb` (each user's settings), `statepb` (on-disk state), `serverpb` (the server's `data.json`; server-only, not generated for the frontend). Package names have no version suffix.
 - **Encoding:** proto3 JSON, never binary protobuf.
   - Keys are the **snake_case proto field names** (`directory_path`, not `directoryPath`). The frontend encodes with `toJson(..., { useProtoFieldName: true })`; Rust's pbjson is built with `preserve_proto_field_names()`.
   - Enums travel as their names (`"PAGINATED"`).
@@ -42,6 +42,10 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | POST | `/api/directories/list` | `ListDirectoriesRequest` `{directory_path}` | `ListDirectoriesResponse` `{current_directory, sub_directories: [name]}` |
 | POST | `/api/progress/get` | `GetProgressRequest` `{id}` | `GetProgressResponse` `{id, epub_progress?}` |
 | POST | `/api/progress/set` | `SetProgressRequest` `{id, epub_progress?}` | `204` |
+| POST | `/api/annotations/list` | `ListAnnotationsRequest` `{id}` | `ListAnnotationsResponse` `{annotations}` (oldest first) |
+| POST | `/api/annotations/add` | `AddAnnotationRequest` `{id, cfi, text, chapter, note, color}` | `Annotation` (as stored, with its `id`, `created`, `updated`) |
+| POST | `/api/annotations/update` | `UpdateAnnotationRequest` `{id, annotation_id, note?, color?}` | `Annotation` |
+| POST | `/api/annotations/delete` | `DeleteAnnotationRequest` `{id, annotation_id}` | `204` |
 | POST | `/api/state/get` | `GetStateRequest` `{}` | `GetStateResponse` `{last_book_id?}` |
 | POST | `/api/state/set` | `SetStateRequest` `{last_book_id?}` | `204` |
 | POST | `/api/config/get` | `GetConfigRequest` `{}` | `Config` |
@@ -50,8 +54,8 @@ All under `/api`. JSON routes are `POST` with a JSON body, even reads, so every 
 | POST | `/api/themes/set` | `SetThemeRequest` `{spec}` | `ListThemesResponse` |
 | POST | `/api/themes/delete` | `DeleteThemeRequest` `{name}` | `ListThemesResponse` |
 | POST | `/api/themes/rename` | `RenameThemeRequest` `{from, to}` | `ListThemesResponse` |
-| POST | `/api/user-data/export` | `ExportUserDataRequest` `{}` | `UserData` `{version, progress: [{id, epub_progress}], last_book_id, config, themes}` |
-| POST | `/api/user-data/import` | `ImportUserDataRequest` `{data: UserData}` | `ImportUserDataResponse` `{books, skipped, themes}` |
+| POST | `/api/user-data/export` | `ExportUserDataRequest` `{}` | `UserData` `{version, progress: [{id, epub_progress}], last_book_id, config, themes, annotations: [{id, annotations}]}` |
+| POST | `/api/user-data/import` | `ImportUserDataRequest` `{data: UserData}` | `ImportUserDataResponse` `{books, skipped, themes, annotations}` |
 | POST | `/api/library/rebuild` | `RebuildIndexRequest` `{}` | `RebuildIndexResponse` `{books, failed, removed}` |
 | POST | `/api/library/progress/clean` | `CleanUpProgressRequest` `{}` | `CleanUpProgressResponse` `{books}` (folders deleted) |
 | POST | `/api/books/upload?parent_directory=…&file_name=…` | the EPUB's raw bytes (`UploadEbookRequest` is the query) | `UploadEbookResponse` `{id, file_name}` (the name it got) |
@@ -77,8 +81,8 @@ Notes:
 - **Roles** (`crates/server/src/auth/users.rs`): `users/list` sends every user's name and role, never passwords or sessions. `users/role/set` checks, in order: changing your own role is a 403 `you can't change your own role`; a role the caller may not give is a 403 `you can't give the X role`; an unknown user is a 404; a user whose current role the caller may not take away is a 403 `you can't change an X's role`. The rule (`may_manage`, shared with approving): `BANNED`, `READER`, `CONTRIBUTOR` and `LIBRARIAN` need `ADMIN` or higher, `ADMIN` needs `OWNER`, and `OWNER` is never given or taken. Banning also deletes all of the user's sessions, so they're signed out at once; unbanning doesn't bring them back. Nothing is written when a check fails.
 - **Scopes** (`users.rs`): `users/list` also sends each user's `library_root` and `books` in `scopes` (not on `User`, which `auth/me` sends the user themselves). `users/scope/set` normalizes the scope (the root goes through the folder-path rules, `/kid/` → `kid`; patterns are trimmed and blank ones dropped) and checks it like `data.json` does: a bad root or pattern is a 400 with the parser's message, and a root that isn't a folder in the library a 400 `there's no folder "x"`. Then, as for roles: your own is a 403, an unknown user a 404, and the caller must be allowed to manage the user's current role (`may_manage`), so admins set the scopes of users below admin, owners admins' too, and an owner's is only set by hand. It applies from the user's next request; their sessions stay. `users/scope/directories` lists folders of the whole library for picking a root. **An admin's own scope doesn't apply to either**: a scoped admin sees and sets full library paths (a choice; see [decisions.md](decisions.md)).
 - **User data** (`LibraryView::export_user_data` / `import_user_data`): moves one user's data between libraries, a device's and a server's in either direction. `UserData` has **no username**, so whoever imports it gets it, and its book ids are file hashes, so it fits any library with the same EPUBs, wherever they are.
-  - **Export:** `version` 1; the progress of every book in the index the user can see (books outside the index, such as removed ones whose progress is kept, aren't exported), sorted by id; the last book if it's visible; the whole config; the user's own theme files (not the built-ins they don't override).
-  - **Import:** a `version` other than 1 is a 400 `this isn't a Shelf data export`. Each entry for a visible, indexed book with a non-empty CFI replaces the user's progress for it; the rest count as `skipped`, so the answer doesn't tell a hidden book from a missing one. Only ids from the index are written, so none from the file becomes a path. The last book is set if it's visible; the config is merged like `config/set`; each theme is written like `themes/set`, and invalid ones (or ones past the limit) are skipped with a `warn`, so `themes` counts those written. The body falls under axum's 2 MB default (about 15,000 books).
+  - **Export:** `version` 1; the progress of every book in the index the user can see (books outside the index, such as removed ones whose progress is kept, aren't exported), sorted by id; the annotations of those books, sorted by id, leaving out books with none and books whose file can't be read (with a `warn`); the last book if it's visible; the whole config; the user's own theme files (not the built-ins they don't override).
+  - **Import:** a `version` other than 1 is a 400 `this isn't a Shelf data export`. Each entry for a visible, indexed book with a non-empty CFI replaces the user's progress for it; the rest count as `skipped`, so the answer doesn't tell a hidden book from a missing one. Only ids from the index are written, so none from the file becomes a path. Annotations of visible, indexed books are **merged** into the user's own, one book at a time: an annotation whose id they don't have is added, one they have replaces theirs only if its `updated` is later, so importing the same file twice changes nothing; invalid ones (bad id, value or timestamp, or past the per-book limit) are skipped with a `warn`. Imported times are rewritten in `Time`'s format and kept. `annotations` counts those added or replaced. A book whose stored file can't be parsed fails the import with a 500, after the progress before it was written. The last book is set if it's visible; the config is merged like `config/set`; each theme is written like `themes/set`, and invalid ones (or ones past the limit) are skipped with a `warn`, so `themes` counts those written. The body falls under axum's 2 MB default (about 15,000 books' progress; annotations with long notes fill it much sooner).
 - **Reader themes** (`crates/core/src/themes/`, file rules in [library-format.md](library-format.md#usersuserthemesidjson-configpbreaderthemespec)): per user, like settings, and not scoped. `themes/list` gives the built-ins in their order (Dark, Light, AMOLED, Night, Sepia), each replaced by the user's theme with its id (`source: OVERRIDDEN`), then the user's other themes (`CUSTOM`) by id; `default_id` is `light`. The other three answer with the new list.
   - **`themes/set`** creates the theme or replaces the user's one with its id. A bad name or layer is a 400 (e.g. `layer 2 needs colours as #rrggbb`); a 129th theme is a 400 `you can have at most 128 themes`.
   - **`themes/delete`** removes the user's theme by name; a built-in is a 400 `built-in themes can't be deleted`, an unknown name a 404. Deleting an override brings the built-in back.
@@ -97,10 +101,11 @@ Notes:
 - Upload, create and delete hold `BookLibrary`'s `files_lock`, so their checks and changes don't interleave.
 - `/cover` and `/file` add `Cache-Control: no-store`. A local file (`FileContent::Local`) goes through tower-http `ServeFile` (Range, `Last-Modified`, content type); bytes (`FileContent::Bytes`, from storage without local files, such as S3, which isn't wired up) are sent whole as `image/jpeg` / `application/epub+zip`, with no Range support. A book still in the index whose file is gone from disk gets `ServeFile`'s 404 with an empty body.
 - `set_progress` without `epub_progress` is a no-op `204`.
-- Progress, the last book and settings are per user. Their requests (`GetProgressRequest`, `SetProgressRequest`, `GetStateRequest`, `SetStateRequest`, `GetConfigRequest`, `SetConfigRequest`, and the four theme requests) also have a `user` field, which clients leave out: it's filled in where a request enters, never taken from the client: the server's handlers set it to the session's user, and the app's `LocalLibrary` sets it to the library entry's `user` from the app data. A remote library sends whatever the frontend sent, and the server replaces it. `BookLibrary` rejects an invalid name with a 500.
+- **Annotations** (`crates/core/src/library/annotations.rs`, file rules in [library-format.md](library-format.md#annotationsuserjson-bookkeeperpbbookannotations)): each request changes one annotation, so a stale client can't drop the others. `add` makes the id and both times; `update` changes only the fields it sets (`note: ""` clears the note) and moves `updated`; an unknown `annotation_id` is a 404 for `update` and a `204` for `delete` (already gone). A hidden or missing book is a 404 for all four, a value past the limits a 400 with the reason, and a stored file that can't be parsed a 500, without writing it.
+- Progress, annotations, the last book and settings are per user. Their requests (`GetProgressRequest`, `SetProgressRequest`, the four annotation requests, `GetStateRequest`, `SetStateRequest`, `GetConfigRequest`, `SetConfigRequest`, and the four theme requests) also have a `user` field, which clients leave out: it's filled in where a request enters, never taken from the client: the server's handlers set it to the session's user, and the app's `LocalLibrary` sets it to the library entry's `user` from the app data. A remote library sends whatever the frontend sent, and the server replaces it. `BookLibrary` rejects an invalid name with a 500.
 - `get_state` returns a `last_book_id` that's no longer in the library as unset.
 - `/library/rebuild` answers only when the rebuild is done, which takes as long as reading every book file. A second rebuild waits for the first.
-- `/library/progress/clean` deletes the `.shelf/books/<id>/` folders of books no file has any more (no `metadata.json`, not in the index), every user's progress included ([library-format.md](library-format.md#cleaning-up-progress)). It waits for a running rebuild, upload or watcher job.
+- `/library/progress/clean` deletes the `.shelf/books/<id>/` folders of books no file has any more (no `metadata.json`, not in the index), every user's progress and annotations included ([library-format.md](library-format.md#cleaning-up-progress)). It waits for a running rebuild, upload or watcher job.
 - Every non-API path is the SPA (`crates/server/src/frontend.rs`). Unknown `/api/*` paths return a JSON 404. A known path with the wrong method gets axum's `405` with an empty body.
 
 ### Access by role
@@ -115,6 +120,7 @@ Roles are defined in [server.md](server.md#server-data); each can do everything 
 | `GET /api/books/{id}/cover` | `get_cover` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `GET /api/books/{id}/file` | `get_book_file` | built | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `POST /api/progress/get`, `/set` | `get_progress`, `set_progress` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
+| `POST /api/annotations/list`, `/add`, `/update`, `/delete` | `list_annotations`, `add_annotation`, `update_annotation`, `delete_annotation` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/state/get`, `/set` | `get_state`, `set_state` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/config/get`, `/set` | `get_config`, `set_config` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
 | `POST /api/themes/list`, `/set`, `/delete`, `/rename` | `list_themes`, `set_theme`, `delete_theme`, `rename_theme` | built | ✓ own | ✓ own | ✓ own | ✓ own | ✓ own |
@@ -176,6 +182,10 @@ Arguments are passed as an object. Tauri maps JS camelCase argument names to Rus
 | `list_directories` | `{ req: ListDirectoriesRequest }` | `ListDirectoriesResponse` |
 | `get_progress` | `{ req: GetProgressRequest }` | `GetProgressResponse` |
 | `set_progress` | `{ req: SetProgressRequest }` | `null` |
+| `list_annotations` | `{ req: ListAnnotationsRequest }` | `ListAnnotationsResponse` |
+| `add_annotation` | `{ req: AddAnnotationRequest }` | `Annotation` |
+| `update_annotation` | `{ req: UpdateAnnotationRequest }` | `Annotation` |
+| `delete_annotation` | `{ req: DeleteAnnotationRequest }` | `null` |
 | `get_state` | `{ req: GetStateRequest }` | `GetStateResponse` |
 | `set_state` | `{ req: SetStateRequest }` | `null` |
 | `get_config` | `{ req: GetConfigRequest }` | `Config` |
@@ -253,6 +263,12 @@ The frontend's own log lines go through `tauri-plugin-log`'s `plugin:log|log` co
 | `request_storage` | opens the settings page / permission prompt, resolves with the outcome on return | `true` |
 | `pick_folder` | system folder picker, mapped to a filesystem path; rejects when cancelled or not on device storage | rejects |
 | `system_insets` | `{top, right, bottom, left}` of status bar, nav bar and cutout, in CSS px | all `0` |
+| `set_selection_menu` `{ shown }` | while `false`, a floating action mode (the WebView's Copy/Share bar for a selection) gets `SilentActionMode`, which shows nothing (`MainActivity.kt`, `SelectionMenu.kt`) | does nothing |
+| `set_keep_screen_on` `{ on }` | adds or clears the window's `FLAG_KEEP_SCREEN_ON` | Linux: `GtkApplication::inhibit` with `IDLE` (the session manager's inhibitor, so the screen neither blanks nor locks), released with `uninhibit`; elsewhere does nothing |
+
+`copy_text` `{ text }` (`commands.rs`) puts text on the clipboard for the reader's *Copy*, everywhere.
+
+The frontend also calls `tauri-plugin-opener`'s `open_url` (`opener:default`) to open web pages in the default browser. The reader's dictionary has no command or route at all: the frontend fetches Wiktionary itself ([frontend.md](frontend.md#home-and-reading)).
 
 ### Errors
 

@@ -16,6 +16,8 @@ use shelf_core::{
 use shelf_proto::{
     api::{
         role::Value as Role,
+        AddAnnotationRequest, DeleteAnnotationRequest, ListAnnotationsRequest,
+        ListAnnotationsResponse, UpdateAnnotationRequest,
         CleanUpProgressRequest, CleanUpProgressResponse, CreateDirectoryRequest,
         CreateDirectoryResponse, DeleteItemsRequest, DeleteItemsResponse, ExportUserDataRequest,
         ImportUserDataRequest, ImportUserDataResponse, UserData, GetConfigRequest, GetProgressRequest, GetProgressResponse, GetStateRequest, GetStateResponse,
@@ -24,6 +26,7 @@ use shelf_proto::{
         UploadEbookRequest, UploadEbookResponse, DeleteThemeRequest, ListThemesRequest,
         ListThemesResponse, RenameThemeRequest, SetThemeRequest,
     },
+    bookkeeping::Annotation,
     config::Config,
 };
 
@@ -67,6 +70,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/directories/list", post(list_directories))
         .route("/progress/get", post(get_progress))
         .route("/progress/set", post(set_progress))
+        .route("/annotations/list", post(list_annotations))
+        .route("/annotations/add", post(add_annotation))
+        .route("/annotations/update", post(update_annotation))
+        .route("/annotations/delete", post(delete_annotation))
         .route("/state/get", post(get_state))
         .route("/state/set", post(set_state))
         .route("/config/get", post(get_config))
@@ -157,6 +164,10 @@ macro_rules! for_user {
 for_user!(
     GetProgressRequest,
     SetProgressRequest,
+    ListAnnotationsRequest,
+    AddAnnotationRequest,
+    UpdateAnnotationRequest,
+    DeleteAnnotationRequest,
     GetStateRequest,
     SetStateRequest,
     GetConfigRequest,
@@ -197,6 +208,35 @@ async fn set_progress(
     Own(user, req): Own<SetProgressRequest>,
 ) -> Result<StatusCode, ApiErrorResponse> {
     library.view(&user.scope).set_progress(req).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_annotations(
+    State(library): State<Lib>,
+    Own(user, req): Own<ListAnnotationsRequest>,
+) -> Result<Json<ListAnnotationsResponse>, ApiErrorResponse> {
+    Ok(Json(library.view(&user.scope).list_annotations(req).await?))
+}
+
+async fn add_annotation(
+    State(library): State<Lib>,
+    Own(user, req): Own<AddAnnotationRequest>,
+) -> Result<Json<Annotation>, ApiErrorResponse> {
+    Ok(Json(library.view(&user.scope).add_annotation(req).await?))
+}
+
+async fn update_annotation(
+    State(library): State<Lib>,
+    Own(user, req): Own<UpdateAnnotationRequest>,
+) -> Result<Json<Annotation>, ApiErrorResponse> {
+    Ok(Json(library.view(&user.scope).update_annotation(req).await?))
+}
+
+async fn delete_annotation(
+    State(library): State<Lib>,
+    Own(user, req): Own<DeleteAnnotationRequest>,
+) -> Result<StatusCode, ApiErrorResponse> {
+    library.view(&user.scope).delete_annotation(req).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -434,6 +474,7 @@ mod tests {
             ("GET", "/auth/me", None),
             ("POST", "/auth/sessions/list", None),
             ("POST", "/auth/sessions/end", None),
+            ("POST", "/annotations/list", None),
         ];
         for (method, path, token) in cases {
             let (status, _) = server.call(method, path, token, "{}").await;
@@ -615,6 +656,17 @@ mod tests {
         let old = r#"{ "data": { "version": 0 } }"#;
         let refused = server.call("POST", "/user-data/import", Some(&owner), old).await;
         assert_eq!(refused.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn annotations_of_an_unknown_book_are_not_found() {
+        let server = TestServer::new().await;
+        let reader = server.login("reader", "r").await;
+        let add = r#"{ "id": "nope", "cfi": "epubcfi(/6/2)", "user": "owner" }"#;
+        let (status, body) = server.call("POST", "/annotations/add", Some(&reader), add).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        let list = server.call("POST", "/annotations/list", Some(&reader), r#"{ "id": "nope" }"#).await;
+        assert_eq!(list.0, StatusCode::NOT_FOUND);
     }
 
     /// The app's remote library asks with a HEAD before opening a cached book.

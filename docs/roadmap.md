@@ -77,6 +77,7 @@ Built: login with bearer tokens, sessions in `/data/data.json` (90 days, sliding
 - [ ] **Book details**: language, description, publisher, published date (extracted to `metadata.json`, a details view).
 - [ ] **Library info**: optional `.shelf/library.json` (`{ "name": … }`) and an "About / library info" section in Settings (name, book count).
 - [x] **Reader bars**: chapter name and percentage in a bottom bar; the header and bottom bar auto-hide while reading ([frontend.md](frontend.md#home-and-reading)).
+- [ ] **Offline dictionaries**: StarDict files (`.ifo`, `.idx`, `.dict.dz`, `.syn`) read by a new `shelf-dict` crate: in the app's private data folder on a device (imported from `.zip`/`.tar.*`), and in the server's data folder (`/data/dictionaries/`, uploaded in *Settings → Admin* or dropped in) for the web UI. Entries sanitized to HTML in Rust (`ammonia`). Today's *Define* uses Wiktionary online ([frontend.md](frontend.md#home-and-reading)).
 - [ ] **Reader input**: tap zones to turn pages; PageUp/PageDown/Space turning pages when paginated (today they only hide the bars).
 
 ## Theming and reading customization
@@ -94,7 +95,6 @@ Built today: interface theme (system/light/dark), reader themes (15 built-ins, f
 - [ ] **Quick settings in the reader**: an "Aa" panel over the book for theme, font and size, with a live preview, so changing them doesn't mean leaving the book for Settings. Started: the bottom bar's *Aa* drawer (`components/ReaderQuickSettings.tsx`) has zoom (per device, `lib/readerZoom.ts`), theme, layout and images; font and size come with *Typography*.
 - [ ] **Dark-theme images**: an option to dim images in dark themes, so a white illustration doesn't flash.
 - [ ] **Interface accent colour**, and an interface theme that follows the reader theme (so sepia reading gets a matching drawer and settings).
-- [ ] App only: **keep the screen on** while reading.
 - [ ] Later: custom CSS per library for anything the presets don't cover.
 
 ## Packaging and project
@@ -111,7 +111,6 @@ Built today: interface theme (system/light/dark), reader themes (15 built-ins, f
 
 From the plan's "not v1" list, in rough priority order:
 
-- **Annotations** (M8): bookmarks and highlights in `.shelf/books/<id>/annotations.json`.
 - **More formats** (M10): MOBI/AZW3, FB2 and CBZ via foliate-js, with metadata support in `core`.
 - Full-text search across the library.
 - Collections and tags.

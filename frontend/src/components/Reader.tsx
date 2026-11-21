@@ -1,15 +1,41 @@
 import { useQuery } from "@tanstack/react-query"
 import type { Renderer, TocItem, View } from "foliate-js/view.js"
 import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
-import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react"
+import {
+  type Ref,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { getBookFile, getProgress } from "@/api"
+import { setSelectionMenu } from "@/api/app"
 import { CenteredMessage } from "@/components/CenteredMessage"
+import { DefinitionSheet } from "@/components/DefinitionSheet"
+import { HighlightToolbar } from "@/components/HighlightToolbar"
 import { ProgressBar } from "@/components/ProgressBar"
 import { ReaderQuickSettings } from "@/components/ReaderQuickSettings"
 import { Button } from "@/components/ui/button"
+import { type Annotation, HighlightColor_Value } from "@/gen/bookkeeperpb/annotation_pb"
 import { type Appearance, readerLayout, type Scheme } from "@/lib/appearance"
+import { copyText } from "@/lib/clipboard"
+import { isDefinable, normalizeTerm } from "@/lib/dictionary"
+import { useKeepScreenOn } from "@/lib/keepScreenOn"
 import { applyAppearance, sectionFraction, turn } from "@/lib/foliate"
 import { type Direction, swipeDirection, wheelTurner } from "@/lib/gestures"
+import {
+  clampChars,
+  drawHighlight,
+  excerpt,
+  highlightColor,
+  highlightStyle,
+  MAX_CHAPTER_CHARS,
+  placeToolbar,
+} from "@/lib/highlights"
+import { log } from "@/lib/log"
+import { IS_ANDROID } from "@/lib/platform"
 import { progressSaver } from "@/lib/progressSaver"
 import { usePinchZoom } from "@/lib/pinchZoom"
 import { openBookKey } from "@/lib/queryKeys"
@@ -17,7 +43,14 @@ import { applyLook, type ThemeLook } from "@/lib/readerTheme"
 import { useReaderZoom } from "@/lib/readerZoom"
 import { useUiScale } from "@/lib/uiScale"
 import { useLatest } from "@/lib/useLatest"
+import {
+  useAddHighlight,
+  useDeleteHighlight,
+  useHighlights,
+  useUpdateHighlight,
+} from "@/lib/useHighlights"
 import { useMediaQuery } from "@/lib/useMediaQuery"
+import { useSearchWeb } from "@/lib/webSearch"
 import { cn } from "cn"
 
 export type ReaderHandle = { goTo: (href: string) => void }
@@ -35,6 +68,8 @@ type Props = {
   onOpenLibrary: () => void
   /** Settings → Reader, from the *Aa* popup. */
   onOpenSettings: () => void
+  /** Opens the note editor for a highlight. */
+  onEditNote: (annotationId: string) => void
   /** Whether the header and the bottom bar show. Hidden, only their 3px position lines do. */
   bars: boolean
   onBarsChange: (shown: boolean) => void
@@ -67,6 +102,45 @@ const READING_KEYS = new Set([
   " ",
 ])
 
+/** The header's height (h-12) at 100% interface scale, kept clear by the toolbar while it shows. */
+const HEADER = 48
+
+/** ms a selection must stay still before the toolbar shows: Android's handles fire constantly. */
+const SELECTION_SETTLE = 300
+
+/** Text selected in the book, not highlighted yet. */
+type Selected = { range: Range; cfi: string; text: string; chapter: string }
+
+/** What the toolbar is for: a fresh selection, or a highlight tapped (or selected exactly). */
+type ToolbarTarget = ({ kind: "new" } & Selected) | { kind: "edit"; id: string; range: Range }
+
+/** Where `range` is in the wrapper, or `null` when none of it is on screen. */
+function rangeBox(range: Range, wrapper: HTMLElement) {
+  const frame = range.startContainer.ownerDocument?.defaultView?.frameElement
+  const rect = range.getBoundingClientRect()
+  if (!frame || (rect.width === 0 && rect.height === 0)) return null
+  const f = frame.getBoundingClientRect()
+  const w = wrapper.getBoundingClientRect()
+  const box = {
+    left: rect.left + f.left - w.left,
+    right: rect.right + f.left - w.left,
+    top: rect.top + f.top - w.top,
+    bottom: rect.bottom + f.top - w.top,
+  }
+  const visible = box.right > 0 && box.left < w.width && box.bottom > 0 && box.top < w.height
+  return visible ? box : null
+}
+
+/** Draws (or redraws) the highlight at `cfi`, if its section is loaded. */
+function draw(view: View, cfi: string) {
+  view.addAnnotation({ value: cfi }).catch((e: unknown) => {
+    log.warn("couldn't draw a highlight", { cfi, error: String(e) })
+  })
+}
+
+const deselect = (range: Range) =>
+  range.startContainer.ownerDocument?.getSelection()?.removeAllRanges()
+
 /** A swipe to the left reveals what's on the right, like the right arrow. */
 const opposite = (d: Direction): Direction => (d === "left" ? "right" : "left")
 
@@ -80,10 +154,12 @@ export function Reader({
   onLocation,
   onOpenLibrary,
   onOpenSettings,
+  onEditNote,
   bars,
   onBarsChange,
   ref,
 }: Props) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionBarRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<View | null>(null)
@@ -94,9 +170,64 @@ export function Reader({
   const [chapter, setChapter] = useState("")
   const [zoom, setZoom] = useReaderZoom()
   const [quickSettings, setQuickSettings] = useState(false)
+  // A new session starts the sheet's history over; the term stays while it slides away.
+  const [define, setDefine] = useState({ term: "", session: 0 })
+  const [defining, setDefining] = useState(false)
+  const [bookLanguage, setBookLanguage] = useState<string>()
+  const searchWeb = useSearchWeb()
   const uiScale = useUiScale()
   const bookZoom = Math.round(uiScale * zoom * 100) / 100
   const coarse = useMediaQuery("(pointer: coarse)")
+
+  const highlights = useHighlights(id)
+  const list = highlights.data
+  const byCfi = useMemo(() => new Map(list?.map((a) => [a.cfi, a])), [list])
+  const add = useAddHighlight(id)
+  const update = useUpdateHighlight(id)
+  const remove = useDeleteHighlight(id)
+  const [target, setTarget] = useState<ToolbarTarget | null>(null)
+  const [actionError, setActionError] = useState<unknown>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const lastColor = useRef(HighlightColor_Value.YELLOW)
+  // What each CFI was last drawn as, to redraw only what changed.
+  const drawn = useRef(new Map<string, Annotation>())
+  const drawnScheme = useRef(look.scheme)
+  const [opened, setOpened] = useState(false)
+
+  const editing = target?.kind === "edit" ? list?.find((a) => a.id === target.id) : undefined
+  // A highlight deleted from the list closes its toolbar.
+  const shown = target?.kind === "new" || editing ? target : null
+
+  // Drawers and settings cover the book.
+  const [wasPaused, setWasPaused] = useState(paused)
+  if (paused !== wasPaused) {
+    setWasPaused(paused)
+    if (paused) setTarget(null)
+  }
+
+  /** Moves the toolbar next to its range; `false` when the range is off the page. */
+  const place = () => {
+    const wrapper = wrapperRef.current
+    const toolbar = toolbarRef.current
+    const box = shown && wrapper ? rangeBox(shown.range, wrapper) : null
+    if (!wrapper || !toolbar) return false
+    toolbar.style.visibility = box ? "" : "hidden"
+    if (!box) return false
+    const page = { width: wrapper.offsetWidth, height: wrapper.offsetHeight }
+    const own = { width: toolbar.offsetWidth, height: toolbar.offsetHeight }
+    const { left, top } = placeToolbar(box, page, own, bars ? HEADER * uiScale : 0)
+    toolbar.style.left = `${left}px`
+    toolbar.style.top = `${top}px`
+    return true
+  }
+
+  const openToolbar = (next: ToolbarTarget) => {
+    add.reset()
+    update.reset()
+    remove.reset()
+    setActionError(null)
+    setTarget(next)
+  }
 
   const { flow } = appearance
   const unit = flow === "scrolled" ? "section" : "page"
@@ -105,11 +236,12 @@ export function Reader({
   const inset = floating ? Math.round(BUTTON_INSET * uiScale) : 0
   const layout = readerLayout(size, appearance, { clipScrollbar: sectionBar, inset })
 
-  usePinchZoom(!paused && !quickSettings)
+  usePinchZoom(!paused && !quickSettings && !defining)
+  const stayAwake = useKeepScreenOn(!paused)
 
   const latest = useLatest({
-    // Taps and keys behind the *Aa* drawer aren't reading.
-    paused: paused || quickSettings,
+    // Taps and keys behind the *Aa* drawer or the dictionary aren't reading.
+    paused: paused || quickSettings || defining,
     appearance,
     look,
     bookZoom,
@@ -119,6 +251,33 @@ export function Reader({
     onLocation,
     bars,
     onBarsChange,
+    byCfi,
+    list,
+    toolbarOpen: shown !== null,
+    stayAwake,
+    onMoved: () => {
+      // A tapped highlight turned off the page takes its toolbar with it; a selection waits.
+      if (!place() && shown?.kind === "edit") setTarget(null)
+    },
+    closeToolbar: () => setTarget(null),
+    onSelected: (selected: Selected | null) => {
+      if (!selected) {
+        setTarget((t) => (t?.kind === "new" ? null : t))
+        return
+      }
+      // Every change would fail too.
+      if (highlights.isError) return
+      const existing = byCfi.get(selected.cfi)
+      openToolbar(
+        existing
+          ? { kind: "edit", id: existing.id, range: selected.range }
+          : { kind: "new", ...selected },
+      )
+    },
+    onShowHighlight: (cfi: string, range: Range) => {
+      const highlight = byCfi.get(cfi)
+      if (highlight) openToolbar({ kind: "edit", id: highlight.id, range })
+    },
   })
 
   useImperativeHandle(ref, () => ({ goTo: (href) => void viewRef.current?.goTo(href) }), [])
@@ -166,6 +325,11 @@ export function Reader({
 
     const onKey = (e: KeyboardEvent) => {
       if (!view || latest.current.paused) return
+      latest.current.stayAwake()
+      if (e.key === "Escape" && latest.current.toolbarOpen) {
+        latest.current.closeToolbar()
+        return
+      }
       const target = e.target as Element | null
       // An open dropdown's list takes the arrows itself.
       if (target?.closest?.('[role="listbox"]')) return
@@ -178,11 +342,71 @@ export function Reader({
 
     const onClick = (e: MouseEvent) => {
       if (latest.current.paused || e.defaultPrevented) return
+      latest.current.stayAwake()
       // Iframe elements aren't `instanceof Element` here, hence the optional call.
       if ((e.target as Element | null)?.closest?.("a[href]")) return
       // The end of a text selection isn't a tap.
       if (e.view?.getSelection()?.isCollapsed === false) return
-      latest.current.onBarsChange(!latest.current.bars)
+      // foliate's hit test for highlights runs after this listener (it's added after `load`), and
+      // cancels this if the tap was on one. Not a microtask: those run between listeners.
+      clearTimeout(tap)
+      tap = setTimeout(() => {
+        if (latest.current.toolbarOpen) latest.current.closeToolbar()
+        else latest.current.onBarsChange(!latest.current.bars)
+      }, 0)
+    }
+    let tap: ReturnType<typeof setTimeout> | undefined
+
+    /** Finds what's selected in a section once the selection stops changing. */
+    const watchSelection = (doc: Document, index: number) => {
+      let settle: ReturnType<typeof setTimeout> | undefined
+      let mouseDown = false
+      const check = () => {
+        if (!view || latest.current.paused) return
+        const selection = doc.getSelection()
+        const range = selection && !selection.isCollapsed ? selection.getRangeAt(0) : null
+        const text = range ? excerpt(range.toString()) : ""
+        if (!range || !text) return latest.current.onSelected(null)
+        const label = view.getProgressOf(index, range).tocItem?.label ?? ""
+        latest.current.onSelected({
+          range,
+          cfi: view.getCFI(index, range),
+          text,
+          chapter: clampChars(label.trim(), MAX_CHAPTER_CHARS),
+        })
+      }
+      doc.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "mouse") mouseDown = true
+      })
+      doc.addEventListener("pointerup", (e) => {
+        if (e.pointerType !== "mouse") return
+        mouseDown = false
+        check()
+      })
+      doc.addEventListener("selectionchange", () => {
+        clearTimeout(settle)
+        // A mouse drag is checked when the button comes up.
+        if (!mouseDown) settle = setTimeout(check, SELECTION_SETTLE)
+      })
+    }
+
+    // Each CFI's section, for drawing a section's highlights when it loads.
+    const sections = new Map<string, number>()
+    const sectionOf = (cfi: string) => {
+      let index = sections.get(cfi)
+      if (index === undefined) {
+        try {
+          index = view?.resolveCFI(cfi).index ?? -1
+        } catch {
+          index = -1
+        }
+        sections.set(cfi, index)
+      }
+      return index
+    }
+
+    const moved = () => {
+      if (latest.current.toolbarOpen) latest.current.onMoved()
     }
 
     let touch: { x: number; y: number; t: number } | null = null
@@ -243,7 +467,12 @@ export function Reader({
       view = document.createElement("foliate-view")
       // No width: the side margins set it.
       view.className = "block h-full"
+      for (const [name, value] of Object.entries(highlightStyle(latest.current.look.scheme))) {
+        view.style.setProperty(name, value)
+      }
       view.addEventListener("relocate", (e) => {
+        latest.current.stayAwake()
+        moved()
         saver.schedule(e.detail.cfi)
         latest.current.onLocation(e.detail.tocItem?.id)
         setBookFraction(e.detail.fraction ?? 0)
@@ -252,7 +481,27 @@ export function Reader({
       })
       view.addEventListener("load", (e) => {
         listen(e.detail.doc)
+        watchSelection(e.detail.doc, e.detail.index)
         applyLook(e.detail.doc, latest.current.look)
+      })
+      view.addEventListener("create-overlay", (e) => {
+        for (const highlight of latest.current.list ?? []) {
+          if (sectionOf(highlight.cfi) !== e.detail.index) continue
+          drawn.current.set(highlight.cfi, highlight)
+          if (view) draw(view, highlight.cfi)
+        }
+      })
+      view.addEventListener("draw-annotation", (e) => {
+        const highlight = latest.current.byCfi.get(e.detail.annotation.value)
+        if (!highlight) return
+        e.detail.draw(drawHighlight, {
+          color: highlightColor(highlight.color).page[latest.current.look.scheme],
+          note: highlight.note !== "",
+        })
+      })
+      view.addEventListener("show-annotation", (e) => {
+        clearTimeout(tap)
+        latest.current.onShowHighlight(e.detail.value, e.detail.range)
       })
       container.append(view)
 
@@ -260,6 +509,7 @@ export function Reader({
       if (cancelled || !view.renderer) return
       rendererRef.current = view.renderer
       view.renderer.addEventListener("scroll", syncSectionBar)
+      view.renderer.addEventListener("scroll", moved)
       // Before `init`, so the first page is laid out once, with the right flow and margins.
       const { appearance, bookZoom, sectionBar, inset } = latest.current
       const layout = readerLayout(measure(container), appearance, {
@@ -269,10 +519,12 @@ export function Reader({
       applyAppearance(view, { flow: appearance.flow, zoom: bookZoom }, layout)
 
       const title = view.book?.metadata?.title
+      setBookLanguage([view.book?.metadata?.language ?? []].flat()[0])
       latest.current.onOpen({
         title: typeof title === "string" ? title : (Object.values(title ?? {})[0] ?? ""),
         toc: view.book?.toc ?? [],
       })
+      setOpened(true)
       await view.init({ lastLocation: data.cfi, showTextStart: true })
       if (!cancelled) viewRef.current = view
     }
@@ -287,6 +539,7 @@ export function Reader({
     document.addEventListener("visibilitychange", onHidden)
     return () => {
       cancelled = true
+      clearTimeout(tap)
       saver.flush()
       unlisten(container)
       window.removeEventListener("keydown", onKey)
@@ -317,7 +570,124 @@ export function Reader({
   useEffect(() => {
     const view = containerRef.current?.querySelector("foliate-view")
     for (const { doc } of view?.renderer?.getContents() ?? []) applyLook(doc, look)
+    for (const [name, value] of Object.entries(highlightStyle(look.scheme))) {
+      view?.style.setProperty(name, value)
+    }
   }, [look])
+
+  // Keeps the drawing in step with the cache; sections loaded later draw in `create-overlay`.
+  useEffect(() => {
+    const view = containerRef.current?.querySelector("foliate-view")
+    if (!opened || !view || !list) return
+    const now = new Map(list.map((a) => [a.cfi, a]))
+    const all = drawnScheme.current !== look.scheme
+    drawnScheme.current = look.scheme
+    for (const cfi of [...drawn.current.keys()]) {
+      if (now.has(cfi)) continue
+      drawn.current.delete(cfi)
+      view.deleteAnnotation({ value: cfi }).catch(() => {})
+    }
+    for (const [cfi, highlight] of now) {
+      const before = drawn.current.get(cfi)
+      drawn.current.set(cfi, highlight)
+      const changed =
+        !before ||
+        before.color !== highlight.color ||
+        (before.note === "") !== (highlight.note === "")
+      if (all || changed) draw(view, cfi)
+    }
+  }, [opened, list, look.scheme])
+
+  // Before paint, so a new toolbar never shows in the corner. It only measures while one shows.
+  useLayoutEffect(() => void place())
+
+  // Only while reading: drawers, settings and the dictionary have text fields that need Android's
+  // Copy and Paste.
+  const menuShown = paused || defining
+  useEffect(() => {
+    if (!IS_ANDROID) return
+    setSelectionMenu(menuShown).catch((e: unknown) => {
+      log.warn("couldn't switch the selection menu", { error: String(e) })
+    })
+  }, [menuShown])
+  useEffect(
+    () => () => {
+      if (IS_ANDROID) setSelectionMenu(true).catch(() => {})
+    },
+    [],
+  )
+
+  const pickColor = (color: HighlightColor_Value) => {
+    if (!shown) return
+    lastColor.current = color
+    if (shown.kind === "edit") {
+      if (editing && editing.color !== color) update.mutate({ id: shown.id, color })
+      return
+    }
+    const { range, cfi, text, chapter } = shown
+    add.mutate(
+      { cfi, text, chapter, note: "", color },
+      {
+        onSuccess: () => {
+          deselect(range)
+          setTarget(null)
+        },
+      },
+    )
+  }
+
+  const editNote = () => {
+    if (!shown) return
+    if (shown.kind === "edit") {
+      deselect(shown.range)
+      setTarget(null)
+      onEditNote(shown.id)
+      return
+    }
+    const { range, cfi, text, chapter } = shown
+    add.mutate(
+      { cfi, text, chapter, note: "", color: lastColor.current },
+      {
+        onSuccess: (highlight) => {
+          deselect(range)
+          setTarget(null)
+          onEditNote(highlight.id)
+        },
+      },
+    )
+  }
+
+  const shownText = shown?.kind === "new" ? shown.text : (editing?.text ?? "")
+
+  const copy = () => {
+    if (!shown) return
+    copyText(shownText).then(
+      () => {
+        deselect(shown.range)
+        setTarget(null)
+      },
+      (e: unknown) => setActionError(e),
+    )
+  }
+
+  const defineIt = () => {
+    if (!shown) return
+    deselect(shown.range)
+    setTarget(null)
+    setDefine((d) => ({ term: normalizeTerm(shownText), session: d.session + 1 }))
+    setDefining(true)
+  }
+
+  const searchSelection = () => {
+    if (!shown) return
+    searchWeb(shownText).then(
+      () => {
+        deselect(shown.range)
+        setTarget(null)
+      },
+      (e: unknown) => setActionError(e),
+    )
+  }
 
   const go = (side: Direction) => viewRef.current && void turn(viewRef.current, side, unit)
   // Turning from the bar keeps it up, for turning again; the floating buttons are reading.
@@ -338,7 +708,7 @@ export function Reader({
   }
 
   return (
-    <div className="relative h-full" style={{ background: look.page }}>
+    <div ref={wrapperRef} className="relative h-full" style={{ background: look.page }}>
       <div
         ref={containerRef}
         className="size-full overflow-hidden"
@@ -349,6 +719,38 @@ export function Reader({
           // would make browsers paint it opaque.
           colorScheme: "light",
         }}
+      />
+      {shown && (
+        <HighlightToolbar
+          key={shown.kind === "edit" ? shown.id : shown.cfi}
+          ref={toolbarRef}
+          color={editing?.color}
+          hasNote={editing ? editing.note !== "" : false}
+          pending={add.isPending || update.isPending || remove.isPending}
+          error={add.error ?? update.error ?? remove.error ?? actionError}
+          onColor={pickColor}
+          onNote={editNote}
+          onCopy={copy}
+          onDefine={isDefinable(shownText) ? defineIt : undefined}
+          onSearchWeb={searchSelection}
+          onDelete={
+            editing
+              ? () => remove.mutate(editing.id, { onSuccess: () => setTarget(null) })
+              : undefined
+          }
+        />
+      )}
+      <DefinitionSheet
+        open={defining}
+        onClose={() => setDefining(false)}
+        term={define.term}
+        session={define.session}
+        language={bookLanguage}
+        onSearchWeb={(text) =>
+          void searchWeb(text).catch((e: unknown) => {
+            log.warn("couldn't search the web", { error: String(e) })
+          })
+        }
       />
       {book.isPending && (
         <LoaderCircle className="absolute inset-0 m-auto size-8 animate-spin text-muted-foreground" />

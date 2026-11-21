@@ -27,10 +27,11 @@ Plugins registered in `lib.rs`:
 - `tauri-plugin-store`: app data.
 - `tauri-plugin-fs`: Rust writes saved logs through it, so Android `content://` URIs work.
 - `tauri-plugin-clipboard-manager`: *Copy logs*, called from Rust.
+- `tauri-plugin-opener`: the frontend opens web pages (*Search web*, the dictionary's Wiktionary credit) in the default browser with `openUrl` (Android `ACTION_VIEW`, Linux xdg-open). Its npm package and crate share major/minor (`~2.7`).
 - `tauri-plugin-log` with `skip_logger()`: only its `log` command, for frontend logs.
 - `native::init()`: Shelf's own.
 
-`capabilities/default.json` grants `core:default`, `dialog:default`, `http:default` and `log:default`. The app's own commands in `invoke_handler` need no capability entry, and neither do plugins used only from Rust.
+`capabilities/default.json` grants `core:default`, `dialog:default`, `http:default`, `log:default` and `opener:default` (its default scope allows http(s) URLs). The app's own commands in `invoke_handler` need no capability entry, and neither do plugins used only from Rust.
 
 The npm package and the Rust crate of a plugin must be on the same major/minor version, or `cargo tauri dev`/`build` refuses to run. That's why `tauri-plugin-log` is pinned to `~2.9` on both sides: the npm package has no 2.10.
 
@@ -119,7 +120,8 @@ A missing list loads as empty, and so does an unreadable one, with a warning, ra
 | File | Change |
 |---|---|
 | `app/src/main/java/com/psomani16k/shelf/ShelfPlugin.kt` | Shelf's native plugin (below) |
-| `app/src/main/java/com/psomani16k/shelf/MainActivity.kt` | `enableEdgeToEdge()` before `super.onCreate` |
+| `app/src/main/java/com/psomani16k/shelf/MainActivity.kt` | `enableEdgeToEdge()` before `super.onCreate`; `onWindowStartingActionMode` hides the selection bar while the reader asks (below) |
+| `app/src/main/java/com/psomani16k/shelf/SelectionMenu.kt` | The `SelectionMenu.hidden` flag and `SilentActionMode` |
 | `app/src/main/AndroidManifest.xml` | `READ_EXTERNAL_STORAGE` (maxSdkVersion 32), `MANAGE_EXTERNAL_STORAGE`, `requestLegacyExternalStorage="true"` |
 | `app/build.gradle.kts` | Release signing from `keystore.properties` |
 
@@ -127,13 +129,15 @@ SDK levels: `minSdk 24`, `compileSdk`/`targetSdk 37`. Debug builds get the appli
 
 ### The `shelf` plugin
 
-`native.rs` registers the Kotlin class `ShelfPlugin` on Android (`register_android_plugin("com.psomani16k.shelf", "ShelfPlugin")`) and exposes four commands (see [api.md](api.md)), plus `device_name`, which `login` uses. Each Android call goes through `PluginHandle::run_mobile_plugin`, which blocks until Kotlin resolves (for a picker, until the user is done), so it runs in `spawn_blocking`. On other platforms they answer without native code: storage is always granted, insets are zero, `pick_folder` rejects (desktops use the dialog plugin's picker), and the device name is `Shelf on <hostname>` (`/proc/sys/kernel/hostname`). An unreadable name is sent as "" with a `warn` (the name itself is never logged).
+`native.rs` registers the Kotlin class `ShelfPlugin` on Android (`register_android_plugin("com.psomani16k.shelf", "ShelfPlugin")`) and exposes six commands (see [api.md](api.md)), plus `device_name`, which `login` uses. Each Android call goes through `PluginHandle::run_mobile_plugin`, which blocks until Kotlin resolves (for a picker, until the user is done), so it runs in `spawn_blocking`. On other platforms they answer without native code: storage is always granted, insets are zero, `set_selection_menu` does nothing, `set_keep_screen_on` holds a GTK idle inhibit on Linux (run on the main thread through `with_webview`, its cookie in a thread-local; the `gtk` crate is pinned to the version Tauri uses), `pick_folder` rejects (desktops use the dialog plugin's picker), and the device name is `Shelf on <hostname>` (`/proc/sys/kernel/hostname`). An unreadable name is sent as "" with a `warn` (the name itself is never logged).
 
 `ShelfPlugin.kt`:
 
 - **Storage.** A library is a plain folder, so the app needs to read arbitrary files. On Android 11+ (API 30+) that's *All files access* (`MANAGE_EXTERNAL_STORAGE`), granted only on a system settings page: `requestStorage` opens `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` and reports `Environment.isExternalStorageManager()` when the user returns. Below 30 it requests `READ_EXTERNAL_STORAGE` through Tauri's permission alias `storage`.
 - **Folder picker.** `pickFolder` launches `ACTION_OPEN_DOCUMENT_TREE` and maps the tree URI to a filesystem path: `primary:Books/Sci` → `/storage/emulated/0/Books/Sci`, `1234-ABCD:Books` → `/storage/1234-ABCD/Books`. Only the `com.android.externalstorage.documents` provider is supported (not Drive, Downloads shortcuts, etc.); others reject with a message. The tauri-plugin-dialog folder picker doesn't work on Android, which is why this exists.
 - **Insets.** Because the app draws edge to edge, the WebView sits under the status and navigation bars. `systemInsets` returns `systemBars() | displayCutout()` insets divided by display density, i.e. in CSS pixels. The frontend turns them into CSS variables (see [frontend.md](frontend.md)).
+- **Selection bar.** `setSelectionMenu { shown }` sets `SelectionMenu.hidden`, which the reader turns on while the book has the screen so the WebView's floating Copy/Share bar doesn't cover its own toolbar. While it's on, `MainActivity.onWindowStartingActionMode` answers a floating action mode with a `SilentActionMode` (after the WebView's `onCreateActionMode`), which shows nothing and whose `finish` tells the WebView it ended; the selection and its handles work as usual, and whatever the WebView later puts in its menu has nowhere to show. Wrapping the callback and calling `super` wouldn't work: when the activity returns `null`, `DecorView` builds the bar from its own copy of the callback.
+- **Screen on.** `setKeepScreenOn { on }` adds or clears `FLAG_KEEP_SCREEN_ON` on the activity's window, on the UI thread. Android ignores the flag while the app is in the background, so it needs no clearing there.
 - **Device name.** `deviceName` returns `Settings.Global.DEVICE_NAME` (API 25+), the name on the phone's *About* page ("OnePlus 11 5G"), else the maker and `Build.MODEL` (often a code like `CPH2449`). Sent with a remote library's login, for the server's session list.
 
 ### Building

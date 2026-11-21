@@ -7,6 +7,7 @@ import type {
   UserRequest,
   UserScopeSchema,
 } from "@/gen/apipb/auth_pb"
+import type { ListAnnotationsResponse } from "@/gen/apipb/annotation_pb"
 import type { ListBooksResponse, ListDirectoriesResponse } from "@/gen/apipb/list_pb"
 import type {
   BookCopySchema,
@@ -19,8 +20,17 @@ import type { GetProgressResponse } from "@/gen/apipb/progress_pb"
 import type { GetStateResponse } from "@/gen/apipb/state_pb"
 import type { ListThemesResponse } from "@/gen/apipb/theme_pb"
 import type { ImportUserDataResponse, UserData } from "@/gen/apipb/user_data_pb"
+import type { Annotation, HighlightColor_Value } from "@/gen/bookkeeperpb/annotation_pb"
 import type { Config, ConfigSchema } from "@/gen/configpb/config_pb"
 import type { ReaderThemeSpecSchema } from "@/gen/configpb/theme_pb"
+
+export type NewAnnotation = {
+  cfi: string
+  text: string
+  chapter: string
+  note: string
+  color: HighlightColor_Value
+}
 
 /**
  * Everything the UI needs from a library. The server implements it over HTTP, the app over
@@ -35,6 +45,18 @@ export type Backend = {
   getProgress: (id: string) => Promise<GetProgressResponse>
   /** `epubProgress` is an EPUB CFI. `keepalive` lets the request finish after the tab closes. */
   setProgress: (id: string, epubProgress: string, options?: { keepalive?: boolean }) => Promise<void>
+  /** The user's highlights in the book, oldest first. */
+  listAnnotations: (id: string) => Promise<ListAnnotationsResponse>
+  /** Resolves to the highlight as stored, with its new `id` and times. */
+  addAnnotation: (id: string, highlight: NewAnnotation) => Promise<Annotation>
+  /** Only the fields set change (`note: ""` clears it). Rejects with a 404 for an unknown id. */
+  updateAnnotation: (
+    id: string,
+    annotationId: string,
+    patch: { note?: string; color?: HighlightColor_Value },
+  ) => Promise<Annotation>
+  /** Resolves when it's gone, even if it already was. */
+  deleteAnnotation: (id: string, annotationId: string) => Promise<void>
   /** `lastBookId` is unset on first use, or when that book has left the library. */
   getState: () => Promise<GetStateResponse>
   setState: (lastBookId: string) => Promise<void>

@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { getToken, isSignedOut, setSignedOut, setToken } from "@/lib/session"
 import { Role_Value } from "@/gen/apipb/auth_pb"
+import { HighlightColor_Value } from "@/gen/bookkeeperpb/annotation_pb"
 import {
+  addAnnotation,
   ApiError,
   approveUserRequest,
   createDirectory,
+  deleteAnnotation,
   deleteItems,
   exportUserData,
   getCover,
@@ -23,6 +26,7 @@ import {
   setUserRole,
   setUserScope,
   signUp,
+  updateAnnotation,
 } from "./http"
 
 function mockFetch(status: number, body?: unknown) {
@@ -75,6 +79,54 @@ describe("http api", () => {
     await setProgress("abc", "epubcfi(/6/4)")
 
     expect(sentJson(fetch)).toEqual({ id: "abc", epub_progress: "epubcfi(/6/4)" })
+  })
+
+  it("sends highlights with colours by name", async () => {
+    const stored = {
+      id: "0123456789abcdef0123456789abcdef",
+      cfi: "epubcfi(/6/4!/4/2,/1:0,/1:5)",
+      text: "Hello",
+      color: "PINK",
+      created: "2026-11-20T09:30:00Z",
+      updated: "2026-11-20T09:30:00Z",
+    }
+    const fetch = mockFetch(200, stored)
+
+    const res = await addAnnotation("abc", {
+      cfi: stored.cfi,
+      text: "Hello",
+      chapter: "One",
+      note: "",
+      color: HighlightColor_Value.PINK,
+    })
+
+    expect(fetch.mock.calls[0][0]).toBe("/api/annotations/add")
+    expect(sentJson(fetch)).toEqual({
+      id: "abc",
+      cfi: stored.cfi,
+      text: "Hello",
+      chapter: "One",
+      color: "PINK",
+    })
+    expect(res.color).toBe(HighlightColor_Value.PINK)
+    expect(res.note).toBe("")
+  })
+
+  it("updates only the fields given, sending an empty note to clear it", async () => {
+    const fetch = mockFetch(200, { id: "x", cfi: "epubcfi(/6/4)" })
+
+    await updateAnnotation("abc", "x", { note: "" })
+
+    expect(fetch.mock.calls[0][0]).toBe("/api/annotations/update")
+    expect(sentJson(fetch)).toEqual({ id: "abc", annotation_id: "x", note: "" })
+  })
+
+  it("accepts an empty 204 from deleteAnnotation", async () => {
+    const fetch = mockFetch(204)
+
+    await deleteAnnotation("abc", "x")
+
+    expect(sentJson(fetch)).toEqual({ id: "abc", annotation_id: "x" })
   })
 
   it("maps state in both directions", async () => {
